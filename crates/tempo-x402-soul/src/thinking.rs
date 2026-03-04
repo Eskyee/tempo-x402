@@ -807,7 +807,7 @@ impl ThinkingLoop {
                 )],
             });
 
-            let code_budget = self.config.max_tool_calls.max(50);
+            let code_budget = self.config.max_tool_calls;
             let phase2_result = run_tool_loop_with_model(
                 llm,
                 &code_system_prompt,

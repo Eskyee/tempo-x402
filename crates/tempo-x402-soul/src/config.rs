@@ -139,7 +139,7 @@ impl SoulConfig {
         let max_tool_calls: u32 = std::env::var("SOUL_MAX_TOOL_CALLS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(25);
+            .unwrap_or(15);
 
         let tool_timeout_secs: u64 = std::env::var("SOUL_TOOL_TIMEOUT_SECS")
             .ok()

@@ -658,6 +658,9 @@ impl ThinkingLoop {
             .flatten()
             .and_then(|s| s.parse().ok());
 
+        // ── Fetch active goals ──
+        let active_goals = self.db.get_active_goals().unwrap_or_default();
+
         let think_context = prompts::ThinkContext {
             snapshot,
             recent_thoughts: &recent,
@@ -672,6 +675,7 @@ impl ThinkingLoop {
             },
             reward_breakdown: reward_breakdown.clone(),
             beliefs: beliefs.clone(),
+            goals: active_goals,
             last_cycle_at,
         };
 
@@ -1237,6 +1241,59 @@ impl ThinkingLoop {
             }
             ModelUpdate::Confirm { id } => self.db.confirm_belief(id),
             ModelUpdate::Invalidate { id, reason } => self.db.invalidate_belief(id, reason),
+            // ── Goal operations ──
+            ModelUpdate::CreateGoal {
+                description,
+                success_criteria,
+                priority,
+                parent_goal_id,
+            } => {
+                use crate::world_model::{Goal, GoalStatus};
+                let goal = Goal {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    description: description.clone(),
+                    status: GoalStatus::Active,
+                    priority: *priority,
+                    success_criteria: success_criteria.clone(),
+                    progress_notes: String::new(),
+                    parent_goal_id: parent_goal_id.clone(),
+                    retry_count: 0,
+                    created_at: now,
+                    updated_at: now,
+                    completed_at: None,
+                };
+                // Cap at 10 active goals to prevent goal sprawl
+                let active_count = self.db.get_active_goals().map(|g| g.len()).unwrap_or(0);
+                if active_count >= 10 {
+                    tracing::warn!("Goal cap reached (10 active) — refusing create_goal");
+                    return Ok(false);
+                }
+                self.db.insert_goal(&goal)?;
+                tracing::info!(goal_id = %goal.id, %description, "Goal created");
+                Ok(true)
+            }
+            ModelUpdate::UpdateGoal {
+                goal_id,
+                progress_notes,
+                status,
+            } => {
+                let status_str = status.as_deref();
+                let notes_str = progress_notes.as_deref();
+                self.db.update_goal(goal_id, status_str, notes_str, None)
+            }
+            ModelUpdate::CompleteGoal { goal_id, outcome } => {
+                let notes = if outcome.is_empty() {
+                    None
+                } else {
+                    Some(outcome.as_str())
+                };
+                self.db
+                    .update_goal(goal_id, Some("completed"), notes, Some(now))
+            }
+            ModelUpdate::AbandonGoal { goal_id, reason } => {
+                self.db
+                    .update_goal(goal_id, Some("abandoned"), Some(reason.as_str()), Some(now))
+            }
         }
     }
 }

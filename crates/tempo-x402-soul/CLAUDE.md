@@ -72,7 +72,12 @@ No dependency on gateway/identity/agent/node. Communicates via `NodeObserver` tr
 - Hebbian reinforcement: recalled thoughts get a +0.05 strength boost; strength decays per tier each cycle
 - Auto-promotion: sensory thoughts with salience >0.6 promoted to working tier after decay
 - Pattern counting: content fingerprints (first 60 chars) tracked in `pattern_counts` table for novelty detection
-- Schema migration: `PRAGMA user_version` based (v1: neuroplastic columns, v2: beliefs table), ALTER TABLE for backward compat
+- Schema migration: `PRAGMA user_version` based (v1: neuroplastic columns, v2: beliefs table, v3: goals table), ALTER TABLE for backward compat
+- **Goals**: persistent multi-cycle intentions — `goals` table (id, description, status, priority, success_criteria, progress_notes, parent_goal_id, retry_count)
+- Goal operations via same `update_beliefs` JSON protocol: create_goal, update_goal, complete_goal, abandon_goal
+- Active goals shown in prompt every cycle under "## Active Goals"
+- Goal cap: max 10 active goals (prevents goal sprawl)
+- Goals survive between cycles — the soul checks active goals each cycle and decides whether to [CODE] to advance them
 - Gated by `SOUL_NEUROPLASTIC` env var (default true) — harmless if false, just skips salience/decay/prediction
 - **Feedback loop**: Observe → [CODE] → Phase 2 (Code mode, write/edit/commit) → Phase 3 (Reflection: check_self, verify, record learnings)
 - **Fresh conversation per phase**: each phase gets its own conversation with a text summary of the previous phase's conclusion — prevents Phase 2/3 from re-sending all of Phase 1's tool outputs
@@ -125,7 +130,7 @@ No dependency on gateway/identity/agent/node. Communicates via `NodeObserver` tr
 - **Dynamic tool registry**: `tool_registry.rs` — meta-tools, dynamic tool execution, shell handlers
 - **Persistent memory**: `persistent_memory.rs` — read/seed/update memory file, 4KB cap
 - **Neuroplastic memory**: `neuroplastic.rs` — salience algorithm, tier assignment, prediction, decay rates
-- **Database schema**: `db.rs` — `thoughts` + `soul_state` + `mutations` + `tools` + `pattern_counts` + `beliefs` tables
+- **Database schema**: `db.rs` — `thoughts` + `soul_state` + `mutations` + `tools` + `pattern_counts` + `beliefs` + `goals` tables
 - **World model**: `world_model.rs` — belief types + formatters; `thinking.rs` — sync_auto_beliefs, apply_model_updates; `prompts.rs` — world model view builder
 - **Observer trait**: `observer.rs` — changing `NodeSnapshot` fields affects all implementors
 - **Used by**: `x402-node` stores `Arc<SoulDatabase>` in `NodeState`, exposes via `GET /soul/status`, implements `NodeObserver` in `soul_observer.rs`

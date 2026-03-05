@@ -268,6 +268,33 @@ impl ThinkingLoop {
             tracing::info!(count = nudges.len(), "Processing nudges");
         }
 
+        // ── Check for pending-approval plan first ──
+        if let Ok(Some(pending)) = self.db.get_pending_approval_plan() {
+            // Check if approval has timed out
+            let age_mins = (chrono::Utc::now().timestamp() - pending.created_at).max(0) as u64 / 60;
+            if age_mins >= self.config.plan_approval_timeout_mins {
+                tracing::info!(
+                    plan_id = %pending.id,
+                    age_mins,
+                    "Plan approval timed out — auto-approving"
+                );
+                let _ = self.db.approve_plan(&pending.id);
+                // Fall through to pick it up as active
+            } else {
+                tracing::debug!(
+                    plan_id = %pending.id,
+                    age_mins,
+                    "Plan awaiting approval — skipping execution"
+                );
+                self.increment_cycle_count()?;
+                return Ok(CycleResult {
+                    step_type: StepType::Observe,
+                    entered_code: false,
+                    summary: format!("plan {} awaiting approval ({age_mins}m)", pending.id),
+                });
+            }
+        }
+
         // ── Step 2: Get or create plan ──
         let mut plan = match self.db.get_active_plan()? {
             Some(plan) => plan,
@@ -278,6 +305,19 @@ impl ThinkingLoop {
                         // Mark nudges as processed after they've influenced plan creation
                         for nudge in &nudges {
                             let _ = self.db.mark_nudge_processed(&nudge.id);
+                        }
+                        // If plan requires approval, don't execute it yet
+                        if plan.status == PlanStatus::PendingApproval {
+                            tracing::info!(
+                                plan_id = %plan.id,
+                                "Plan created — awaiting approval"
+                            );
+                            self.increment_cycle_count()?;
+                            return Ok(CycleResult {
+                                step_type: StepType::Observe,
+                                entered_code: false,
+                                summary: format!("plan {} created, awaiting approval", plan.id),
+                            });
                         }
                         plan
                     }
@@ -596,12 +636,17 @@ impl ThinkingLoop {
             Ok(response) => {
                 let steps = self.parse_plan_steps(&response)?;
                 let now = chrono::Utc::now().timestamp();
+                let initial_status = if self.config.require_plan_approval {
+                    PlanStatus::PendingApproval
+                } else {
+                    PlanStatus::Active
+                };
                 let plan = Plan {
                     id: uuid::Uuid::new_v4().to_string(),
                     goal_id: goal.id.clone(),
                     steps,
                     current_step: 0,
-                    status: PlanStatus::Active,
+                    status: initial_status,
                     context: std::collections::HashMap::new(),
                     replan_count: 0,
                     created_at: now,
@@ -618,6 +663,7 @@ impl ThinkingLoop {
                 tracing::info!(
                     plan_id = %plan.id,
                     steps = plan.steps.len(),
+                    status = plan.status.as_str(),
                     "Plan created"
                 );
                 Ok(Some(plan))

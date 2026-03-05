@@ -29,7 +29,7 @@ pub mod world_model;
 
 pub use chat::{handle_chat, ChatReply};
 pub use config::SoulConfig;
-pub use db::{Nudge, SoulDatabase};
+pub use db::{ChatMessage, ChatSession, Nudge, SoulDatabase};
 pub use error::SoulError;
 pub use memory::{Thought, ThoughtType};
 pub use observer::{NodeObserver, NodeSnapshot};

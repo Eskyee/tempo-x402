@@ -20,6 +20,7 @@ use crate::tools::{self, ToolExecutor};
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
     Active,
+    PendingApproval,
     Completed,
     Failed,
     Abandoned,
@@ -29,6 +30,7 @@ impl PlanStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::PendingApproval => "pending_approval",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Abandoned => "abandoned",
@@ -38,6 +40,7 @@ impl PlanStatus {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "active" => Some(Self::Active),
+            "pending_approval" => Some(Self::PendingApproval),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
             "abandoned" => Some(Self::Abandoned),
@@ -472,6 +475,10 @@ mod tests {
     #[test]
     fn test_plan_status_parse() {
         assert_eq!(PlanStatus::parse("active"), Some(PlanStatus::Active));
+        assert_eq!(
+            PlanStatus::parse("pending_approval"),
+            Some(PlanStatus::PendingApproval)
+        );
         assert_eq!(PlanStatus::parse("completed"), Some(PlanStatus::Completed));
         assert_eq!(PlanStatus::parse("failed"), Some(PlanStatus::Failed));
         assert_eq!(PlanStatus::parse("abandoned"), Some(PlanStatus::Abandoned));

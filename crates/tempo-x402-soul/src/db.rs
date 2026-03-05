@@ -42,6 +42,29 @@ pub struct Nudge {
     pub active: bool,
 }
 
+/// A chat session for multi-turn conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSession {
+    pub id: String,
+    pub title: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub active: bool,
+}
+
+/// A message within a chat session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub session_id: String,
+    /// "user" or "assistant"
+    pub role: String,
+    pub content: String,
+    /// JSON array of tool execution summaries.
+    pub tool_executions: String,
+    pub created_at: i64,
+}
+
 /// A recorded code mutation attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mutation {
@@ -232,6 +255,32 @@ impl SoulDatabase {
                 );
                 CREATE INDEX IF NOT EXISTS idx_nudges_active ON nudges(active, priority DESC, created_at ASC);
                 PRAGMA user_version = 5;",
+            )?;
+        }
+
+        if version < 6 {
+            // v6: chat sessions + messages for multi-turn conversation
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_active ON chat_sessions(active, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    tool_executions TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at ASC);
+                PRAGMA user_version = 6;",
             )?;
         }
 
@@ -1210,6 +1259,189 @@ impl SoulDatabase {
         })?;
         let count: u64 = conn.query_row("SELECT COUNT(*) FROM goals", [], |row| row.get(0))?;
         Ok(count)
+    }
+
+    // ── Chat session operations ──
+
+    /// Create a new chat session. Returns the session ID.
+    pub fn create_session(&self, title: &str) -> Result<String, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO chat_sessions (id, title, created_at, updated_at, active) VALUES (?1, ?2, ?3, ?4, 1)",
+            params![id, title, now, now],
+        )?;
+        Ok(id)
+    }
+
+    /// Get or create the default (most recent active) session.
+    pub fn get_or_create_default_session(&self) -> Result<String, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        // Try to find the most recently updated active session
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM chat_sessions WHERE active = 1 ORDER BY updated_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+
+        // Create a new default session
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO chat_sessions (id, title, created_at, updated_at, active) VALUES (?1, 'Chat', ?2, ?3, 1)",
+            params![id, now, now],
+        )?;
+        Ok(id)
+    }
+
+    /// List recent chat sessions, newest first.
+    pub fn list_sessions(&self, limit: u32) -> Result<Vec<ChatSession>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, created_at, updated_at, active FROM chat_sessions \
+             WHERE active = 1 ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+        let sessions = stmt
+            .query_map(params![limit], |row| {
+                let active: i32 = row.get(4)?;
+                Ok(ChatSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    active: active != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(sessions)
+    }
+
+    /// Insert a chat message into a session.
+    pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<(), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content, tool_executions, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                msg.id,
+                msg.session_id,
+                msg.role,
+                msg.content,
+                msg.tool_executions,
+                msg.created_at,
+            ],
+        )?;
+        // Touch session updated_at
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+            params![now, msg.session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get messages for a session, ordered chronologically, with optional limit.
+    pub fn get_session_messages(
+        &self,
+        session_id: &str,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, role, content, tool_executions, created_at \
+             FROM chat_messages WHERE session_id = ?1 ORDER BY created_at ASC LIMIT ?2",
+        )?;
+        let messages = stmt
+            .query_map(params![session_id, limit], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    tool_executions: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
+    // ── Plan approval operations ──
+
+    /// Get the pending-approval plan (if any).
+    pub fn get_pending_approval_plan(&self) -> Result<Option<Plan>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let result = conn
+            .query_row(
+                "SELECT id, goal_id, steps, current_step, status, context, replan_count, created_at, updated_at \
+                 FROM plans WHERE status = 'pending_approval' ORDER BY created_at DESC LIMIT 1",
+                [],
+                Self::row_to_plan,
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    /// Approve a pending plan — set status to 'active'.
+    pub fn approve_plan(&self, plan_id: &str) -> Result<bool, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let now = chrono::Utc::now().timestamp();
+        let rows = conn.execute(
+            "UPDATE plans SET status = 'active', updated_at = ?1 WHERE id = ?2 AND status = 'pending_approval'",
+            params![now, plan_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Reject a pending plan — set status to 'abandoned'.
+    pub fn reject_plan(&self, plan_id: &str) -> Result<bool, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let now = chrono::Utc::now().timestamp();
+        let rows = conn.execute(
+            "UPDATE plans SET status = 'abandoned', updated_at = ?1 WHERE id = ?2 AND status = 'pending_approval'",
+            params![now, plan_id],
+        )?;
+        Ok(rows > 0)
     }
 
     /// Helper: map a row to a Plan.

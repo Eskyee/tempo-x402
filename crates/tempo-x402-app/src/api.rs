@@ -420,9 +420,15 @@ pub async fn call_endpoint(
     Ok((body, settle))
 }
 
-/// Send a chat message to the soul
-pub async fn send_soul_chat(message: &str) -> Result<serde_json::Value, String> {
-    let body = serde_json::json!({ "message": message });
+/// Send a chat message to the soul with optional session tracking.
+pub async fn send_soul_chat(
+    message: &str,
+    session_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::json!({ "message": message });
+    if let Some(sid) = session_id {
+        body["session_id"] = serde_json::json!(sid);
+    }
 
     let resp = Request::post(&format!("{}/soul/chat", GATEWAY_URL))
         .header("Content-Type", "application/json")
@@ -436,6 +442,67 @@ pub async fn send_soul_chat(message: &str) -> Result<serde_json::Value, String> 
         let err = resp.text().await.unwrap_or_default();
         return Err(format!("Chat failed (HTTP {}): {}", resp.status(), err));
     }
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// List recent chat sessions.
+pub async fn list_chat_sessions() -> Result<serde_json::Value, String> {
+    let resp = Request::get(&format!("{}/soul/chat/sessions", GATEWAY_URL))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Get the pending plan awaiting approval.
+pub async fn get_pending_plan() -> Result<serde_json::Value, String> {
+    let resp = Request::get(&format!("{}/soul/plan/pending", GATEWAY_URL))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Approve a pending plan.
+pub async fn approve_plan(plan_id: &str) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({ "plan_id": plan_id });
+
+    let resp = Request::post(&format!("{}/soul/plan/approve", GATEWAY_URL))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| format!("Failed to serialize: {}", e))?)
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Reject a pending plan with optional reason.
+pub async fn reject_plan(plan_id: &str, reason: Option<&str>) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::json!({ "plan_id": plan_id });
+    if let Some(r) = reason {
+        body["reason"] = serde_json::json!(r);
+    }
+
+    let resp = Request::post(&format!("{}/soul/plan/reject", GATEWAY_URL))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| format!("Failed to serialize: {}", e))?)
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
 
     resp.json::<serde_json::Value>()
         .await

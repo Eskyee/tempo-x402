@@ -1431,6 +1431,8 @@ fn ChatPage() -> impl IntoView {
     let (input, set_input) = create_signal(String::new());
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
+    let (session_id, set_session_id) = create_signal(None::<String>);
+    let (pending_plan, set_pending_plan) = create_signal(None::<serde_json::Value>);
     // Auto-scroll ref
     let messages_ref = create_node_ref::<html::Div>();
 
@@ -1439,6 +1441,22 @@ fn ChatPage() -> impl IntoView {
             el.set_scroll_top(el.scroll_height());
         }
     };
+
+    // Fetch pending plan on mount + every 10s
+    {
+        spawn_local(async move {
+            loop {
+                if let Ok(plan) = api::get_pending_plan().await {
+                    if plan.is_null() {
+                        set_pending_plan.set(None);
+                    } else {
+                        set_pending_plan.set(Some(plan));
+                    }
+                }
+                gloo_timers::future::TimeoutFuture::new(10_000).await;
+            }
+        });
+    }
 
     let now_ts = move || (js_sys::Date::now() / 1000.0) as i64;
 
@@ -1462,11 +1480,17 @@ fn ChatPage() -> impl IntoView {
         set_loading.set(true);
         set_error.set(None);
 
+        let sid = session_id.get();
         spawn_local(async move {
-            let result = api::send_soul_chat(&msg).await;
+            let result = api::send_soul_chat(&msg, sid.as_deref()).await;
 
             match result {
                 Ok(resp) => {
+                    // Track session_id from response
+                    if let Some(sid) = resp.get("session_id").and_then(|v| v.as_str()) {
+                        set_session_id.set(Some(sid.to_string()));
+                    }
+
                     let reply = resp
                         .get("reply")
                         .and_then(|v| v.as_str())
@@ -1508,6 +1532,7 @@ fn ChatPage() -> impl IntoView {
     let clear_chat = move |_| {
         set_messages.set(Vec::new());
         set_error.set(None);
+        set_session_id.set(None); // Start a new session
     };
 
     let on_click = move |_: web_sys::MouseEvent| {
@@ -1521,14 +1546,66 @@ fn ChatPage() -> impl IntoView {
         }
     };
 
+    let approve_handler = move |_: web_sys::MouseEvent| {
+        if let Some(plan) = pending_plan.get() {
+            if let Some(plan_id) = plan.get("id").and_then(|v| v.as_str()) {
+                let plan_id = plan_id.to_string();
+                spawn_local(async move {
+                    let _ = api::approve_plan(&plan_id).await;
+                    set_pending_plan.set(None);
+                });
+            }
+        }
+    };
+
+    let reject_handler = move |_: web_sys::MouseEvent| {
+        if let Some(plan) = pending_plan.get() {
+            if let Some(plan_id) = plan.get("id").and_then(|v| v.as_str()) {
+                let plan_id = plan_id.to_string();
+                spawn_local(async move {
+                    let _ = api::reject_plan(&plan_id, None).await;
+                    set_pending_plan.set(None);
+                });
+            }
+        }
+    };
+
     view! {
         <div class="chat-page">
             <div class="chat-header">
                 <h1>"Soul Chat"</h1>
                 <div class="chat-header-controls">
-                    <button class="chat-clear-btn" on:click=clear_chat>"Clear"</button>
+                    <button class="chat-clear-btn" on:click=clear_chat>"New Chat"</button>
                 </div>
             </div>
+
+            <Show when=move || pending_plan.get().is_some() fallback=|| ()>
+                <div class="plan-approval-bar">
+                    <div class="plan-approval-info">
+                        <span class="plan-approval-badge">"PLAN AWAITING APPROVAL"</span>
+                        <span class="plan-approval-desc">
+                            {move || pending_plan.get()
+                                .and_then(|p| p.get("goal_description")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()))
+                                .unwrap_or_else(|| "Unknown goal".to_string())
+                            }
+                        </span>
+                        <span class="plan-approval-steps">
+                            {move || pending_plan.get()
+                                .and_then(|p| p.get("total_steps")
+                                    .and_then(|v| v.as_u64()))
+                                .map(|n| format!("({n} steps)"))
+                                .unwrap_or_default()
+                            }
+                        </span>
+                    </div>
+                    <div class="plan-approval-actions">
+                        <button class="btn btn-approve" on:click=approve_handler>"Approve"</button>
+                        <button class="btn btn-reject" on:click=reject_handler>"Reject"</button>
+                    </div>
+                </div>
+            </Show>
 
             <div class="chat-messages" node_ref=messages_ref>
                 <For

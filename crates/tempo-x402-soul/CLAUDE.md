@@ -41,8 +41,8 @@ No dependency on gateway/identity/agent/node. Communicates via `NodeObserver` tr
 | `coding.rs` | Pre-commit validation pipeline (cargo check → test → commit) |
 | `mode.rs` | Agent modes (Observe, Chat, Code, Review) with per-mode tool sets |
 | `llm.rs` | Gemini API client with thought_signature support |
-| `chat.rs` | Interactive chat handler with mode detection |
-| `db.rs` | SQLite: thoughts, soul_state, mutations, tools, pattern_counts, beliefs, goals, plans, **nudges** tables |
+| `chat.rs` | Session-based interactive chat with plan context injection |
+| `db.rs` | SQLite: thoughts, soul_state, mutations, tools, pattern_counts, beliefs, goals, plans, nudges, **chat_sessions, chat_messages** tables |
 | `memory.rs` | Thought types (Observation, Reasoning, Decision, Prediction, etc.) |
 | `neuroplastic.rs` | Salience scoring, tiered memory decay, prediction error |
 | `persistent_memory.rs` | Persistent markdown memory file — read/seed/update, 4KB cap |
@@ -83,7 +83,7 @@ Each step can have `store_as` to accumulate results in plan context. LLM steps r
 ## Non-Obvious Patterns
 
 - Separate SQLite DB (`soul.db`) — does NOT share the gateway DB
-- DB schema: PRAGMA user_version based (v1: neuroplastic, v2: beliefs, v3: goals, v4: plans, **v5: nudges**)
+- DB schema: PRAGMA user_version based (v1: neuroplastic, v2: beliefs, v3: goals, v4: plans, v5: nudges, **v6: chat_sessions + chat_messages**)
 - Plans table: id, goal_id, steps (JSON), current_step, status, context (JSON), replan_count
 - Plan context accumulates step results (store_as keys) for use by later steps
 - Replan limit: 3 attempts before plan is marked Failed
@@ -97,9 +97,13 @@ Each step can have `store_as` to accumulate results in plan context. LLM steps r
 - Neuroplastic memory: salience scoring, tiered decay, prediction error
 - Nudge queue: external signals (user, system, stagnation) prioritized into goal/plan creation
 - Stagnation detection: per-goal retry limit (2), global idle limit (30 cycles without commit)
+- **Chat sessions**: multi-turn conversation history via `chat_sessions` + `chat_messages` tables (replaces stateless per-request chat)
+- **Plan approval gate**: `PendingApproval` status — plans pause for human approval when `SOUL_REQUIRE_PLAN_APPROVAL=true`, auto-approve after timeout
+- **Plan context injection**: active plan progress, pending approvals, and active goals injected into every chat conversation
+- **Plan control tools**: `approve_plan`, `reject_plan`, `request_plan` — available in Chat and Code modes, LLM handles intent naturally
 - First-boot seed: 2 concrete starter goals injected when DB has zero goals ever (avoids LLM hallucination from zero context)
 - Housekeeping: thought decay, promotion, belief decay (every 10 cycles), memory consolidation (every 40 cycles) — absorbed from deleted mind crate
-- **Used by**: `x402-node` stores `Arc<SoulDatabase>` in `NodeState`, exposes via `GET /soul/status` (includes plan info), `POST /soul/nudge`, `GET /soul/nudges`
+- **Used by**: `x402-node` stores `Arc<SoulDatabase>` in `NodeState`, exposes via `GET /soul/status` (includes plan info + pending plan), `POST /soul/nudge`, `GET /soul/nudges`, `GET /soul/chat/sessions`, `GET /soul/chat/sessions/{id}`, `POST /soul/plan/approve`, `POST /soul/plan/reject`, `GET /soul/plan/pending`
 
 ## Env Vars
 
@@ -117,6 +121,8 @@ Each step can have `store_as` to accumulate results in plan context. LLM steps r
 | `SOUL_DIRECT_PUSH` | `false` | Push directly to fork's main branch |
 | `SOUL_MEMORY_FILE` | `/data/soul_memory.md` | Path to persistent memory file |
 | `GATEWAY_URL` | — | Gateway URL for `check_self`/`register_endpoint` tools |
+| `SOUL_REQUIRE_PLAN_APPROVAL` | `false` | Pause plans for human approval before execution |
+| `SOUL_PLAN_APPROVAL_TIMEOUT` | `30` | Minutes before auto-approving a pending plan |
 | `SOUL_NEUROPLASTIC` | `true` | Enable neuroplastic memory |
 | `SOUL_PRUNE_THRESHOLD` | `0.01` | Strength threshold for thought pruning |
 
@@ -129,6 +135,8 @@ Each step can have `store_as` to accumulate results in plan context. LLM steps r
 - **Protected files**: `guard.rs` — hardcoded list, do NOT make configurable via env
 - **Git workflow**: `git.rs` — branch ops, auth, PR creation
 - **Pre-commit validation**: `coding.rs` — cargo check/test pipeline
-- **Database schema**: `db.rs` — plans table (v4), nudges table (v5), CRUD methods
+- **Database schema**: `db.rs` — plans table (v4), nudges table (v5), chat sessions/messages (v6), CRUD methods
+- **Chat sessions**: `chat.rs` — session-based conversation, plan context builder
+- **Plan approval**: `thinking.rs` — approval gate in plan_cycle; `plan.rs` — PendingApproval status; `tools.rs` — approve/reject/request tools
 - **World model**: `world_model.rs` — belief types + formatters
 - **Observer trait**: `observer.rs` — changing `NodeSnapshot` fields affects all implementors

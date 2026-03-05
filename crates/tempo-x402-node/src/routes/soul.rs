@@ -1,4 +1,4 @@
-//! Soul endpoints — status and interactive chat.
+//! Soul endpoints — status, interactive chat with sessions, plan approval.
 
 use actix_web::{web, HttpResponse};
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,9 @@ struct SoulStatus {
     /// Active plan info.
     #[serde(skip_serializing_if = "Option::is_none")]
     active_plan: Option<PlanInfo>,
+    /// Pending approval plan info.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_plan: Option<PlanInfo>,
     recent_thoughts: Vec<ThoughtEntry>,
     /// Active beliefs from the world model.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -37,6 +40,10 @@ struct PlanInfo {
     status: String,
     replan_count: u32,
     current_step_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -225,6 +232,29 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             status: p.status.as_str().to_string(),
             replan_count: p.replan_count,
             current_step_type,
+            goal_description: None,
+            steps: None,
+        }
+    });
+
+    // Fetch pending approval plan
+    let pending_plan = soul_db.get_pending_approval_plan().ok().flatten().map(|p| {
+        let goal_desc = soul_db
+            .get_goal(&p.goal_id)
+            .ok()
+            .flatten()
+            .map(|g| g.description);
+        let step_summaries: Vec<String> = p.steps.iter().map(|s| s.summary()).collect();
+        PlanInfo {
+            id: p.id,
+            goal_id: p.goal_id,
+            current_step: p.current_step,
+            total_steps: p.steps.len(),
+            status: p.status.as_str().to_string(),
+            replan_count: p.replan_count,
+            current_step_type: None,
+            goal_description: goal_desc,
+            steps: Some(step_summaries),
         }
     });
 
@@ -244,15 +274,20 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             goals_active,
         },
         active_plan,
+        pending_plan,
         recent_thoughts,
         beliefs,
         goals,
     })
 }
 
+// ── Chat endpoints ──
+
 #[derive(Deserialize)]
 struct ChatRequest {
     message: String,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 async fn soul_chat(state: web::Data<NodeState>, body: web::Json<ChatRequest>) -> HttpResponse {
@@ -300,16 +335,183 @@ async fn soul_chat(state: web::Data<NodeState>, body: web::Json<ChatRequest>) ->
         }
     };
 
-    match x402_soul::handle_chat(message, config, soul_db, observer).await {
+    match x402_soul::handle_chat(
+        message,
+        body.session_id.as_deref(),
+        config,
+        soul_db,
+        observer,
+    )
+    .await
+    {
         Ok(reply) => HttpResponse::Ok().json(serde_json::json!({
             "reply": reply.reply,
             "tool_executions": reply.tool_executions,
             "thought_ids": reply.thought_ids,
+            "session_id": reply.session_id,
         })),
         Err(e) => {
             tracing::warn!(error = %e, "Soul chat failed");
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": format!("chat failed: {e}")
+            }))
+        }
+    }
+}
+
+// ── Session endpoints ──
+
+async fn chat_sessions(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::Ok().json(serde_json::json!([]));
+        }
+    };
+
+    match soul_db.list_sessions(20) {
+        Ok(sessions) => HttpResponse::Ok().json(sessions),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list sessions");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("failed to list sessions: {e}")
+            }))
+        }
+    }
+}
+
+async fn session_messages(state: web::Data<NodeState>, path: web::Path<String>) -> HttpResponse {
+    let session_id = path.into_inner();
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "soul is not active"
+            }));
+        }
+    };
+
+    match soul_db.get_session_messages(&session_id, 50) {
+        Ok(messages) => HttpResponse::Ok().json(messages),
+        Err(e) => {
+            tracing::warn!(error = %e, session_id = %session_id, "Failed to get session messages");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("failed to get messages: {e}")
+            }))
+        }
+    }
+}
+
+// ── Plan approval endpoints ──
+
+#[derive(Deserialize)]
+struct PlanApproveRequest {
+    plan_id: String,
+}
+
+#[derive(Deserialize)]
+struct PlanRejectRequest {
+    plan_id: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn plan_approve(
+    state: web::Data<NodeState>,
+    body: web::Json<PlanApproveRequest>,
+) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "soul is not active"
+            }));
+        }
+    };
+
+    match soul_db.approve_plan(&body.plan_id) {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "approved",
+            "plan_id": body.plan_id,
+        })),
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "no pending plan with that ID"
+        })),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to approve plan");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("failed to approve plan: {e}")
+            }))
+        }
+    }
+}
+
+async fn plan_reject(
+    state: web::Data<NodeState>,
+    body: web::Json<PlanRejectRequest>,
+) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "soul is not active"
+            }));
+        }
+    };
+
+    match soul_db.reject_plan(&body.plan_id) {
+        Ok(true) => {
+            // Insert a nudge with the rejection reason
+            if let Some(reason) = &body.reason {
+                let _ = soul_db.insert_nudge("user", &format!("Plan rejected: {}", reason), 5);
+            }
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "rejected",
+                "plan_id": body.plan_id,
+            }))
+        }
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "no pending plan with that ID"
+        })),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to reject plan");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("failed to reject plan: {e}")
+            }))
+        }
+    }
+}
+
+async fn plan_pending(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::Ok().json(serde_json::json!(null));
+        }
+    };
+
+    match soul_db.get_pending_approval_plan() {
+        Ok(Some(plan)) => {
+            let goal_desc = soul_db
+                .get_goal(&plan.goal_id)
+                .ok()
+                .flatten()
+                .map(|g| g.description);
+            let step_summaries: Vec<String> = plan.steps.iter().map(|s| s.summary()).collect();
+            HttpResponse::Ok().json(serde_json::json!({
+                "id": plan.id,
+                "goal_id": plan.goal_id,
+                "goal_description": goal_desc,
+                "steps": step_summaries,
+                "total_steps": plan.steps.len(),
+                "created_at": plan.created_at,
+            }))
+        }
+        Ok(None) => HttpResponse::Ok().json(serde_json::json!(null)),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to get pending plan");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("failed to get pending plan: {e}")
             }))
         }
     }
@@ -379,6 +581,11 @@ async fn soul_nudges(state: web::Data<NodeState>) -> HttpResponse {
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/soul/status", web::get().to(soul_status))
         .route("/soul/chat", web::post().to(soul_chat))
+        .route("/soul/chat/sessions", web::get().to(chat_sessions))
+        .route("/soul/chat/sessions/{id}", web::get().to(session_messages))
+        .route("/soul/plan/approve", web::post().to(plan_approve))
+        .route("/soul/plan/reject", web::post().to(plan_reject))
+        .route("/soul/plan/pending", web::get().to(plan_pending))
         .route("/soul/nudge", web::post().to(soul_nudge))
         .route("/soul/nudges", web::get().to(soul_nudges));
 }

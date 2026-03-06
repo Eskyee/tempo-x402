@@ -168,37 +168,73 @@ pub fn goal_creation_prompt(
         sections.push(failed_lines.join("\n"));
     }
 
-    sections.push(
+    // Dynamic task based on actual state — react to the data, don't blindly repeat
+    let endpoint_count = snapshot.endpoint_count;
+    let total_payments = snapshot.total_payments;
+    let paid_endpoints = snapshot
+        .endpoints
+        .iter()
+        .filter(|ep| ep.payment_count > 0)
+        .count();
+
+    let situation_analysis = if endpoint_count > 10 && total_payments == 0 {
+        format!(
+            "## CRITICAL: You have {endpoint_count} endpoints and ZERO payments.\n\
+             Creating more endpoints is NOT the answer. Something fundamental is wrong.\n\
+             Possible next steps:\n\
+             - Discover peers (discover_peers) and try calling their endpoints to generate actual traffic\n\
+             - Delete garbage endpoints and focus on 2-3 high-quality ones\n\
+             - Clone yourself (check_self on /clone endpoint) to create a peer that can pay you\n\
+             - Investigate: are other agents even aware you exist? Can they reach you?\n\
+             - Think about what's actually missing from the network, not what's easy to build\n\n\
+             DO NOT create another script endpoint. Stop. Think about the system."
+        )
+    } else if endpoint_count > 5 && paid_endpoints == 0 {
+        format!(
+            "## WARNING: You have {endpoint_count} endpoints but none have received payments.\n\
+             Before creating more, investigate why existing ones aren't being used.\n\
+             Consider: do you have peers? Have you tried calling their services? \
+             Have they tried calling yours? Focus on the ECONOMY, not the catalog."
+        )
+    } else if endpoint_count > 0 && paid_endpoints > 0 {
+        format!(
+            "## {paid_endpoints}/{endpoint_count} endpoints have received payments. \
+             Focus on what's working. Improve or extend the ones that earn revenue."
+        )
+    } else {
+        String::new()
+    };
+
+    let mut task_section = String::from(
         "# Task\n\
          You have NO active goals. Create 1-2 goals.\n\n\
          If there are pending nudges, prioritize those. If there are recent errors, avoid repeating \
-         the same approach that caused them.\n\n\
-         ## What to Build\n\
-         Build services that EXPOSE YOUR OWN INTERNALS as paid endpoints. You are a complex system — \
-         each subsystem is a potential service. Think introspectively:\n\
-         - **Self-diagnostic services**: endpoint health analysis, payment flow traces, error pattern detection\n\
-         - **Intelligence services**: analyze your own beliefs/goals/thoughts, expose world model queries\n\
-         - **System monitoring**: resource usage, cycle performance, stagnation metrics\n\
-         - **Meta-services**: explain how x402 payment works, analyze transaction patterns, verify signatures\n\
-         - **Agent infrastructure**: discovery helpers, reputation queries, payment analytics\n\n\
-         DO NOT build generic text utilities (base64, uuid, timestamps, string manipulation). \
-         Those are commodity services with no differentiation. Build services that only YOU can provide \
-         because they reflect YOUR unique state, knowledge, and capabilities.\n\n\
-         The question is: what can an agent learn by paying to talk to you that it can't get elsewhere?\n\n\
-         ## Rules\n\
+         the same approach that caused them.\n\n",
+    );
+
+    if !situation_analysis.is_empty() {
+        task_section.push_str(&situation_analysis);
+        task_section.push_str("\n\n");
+    }
+
+    task_section.push_str(
+        "## Rules\n\
          - Create 1-2 goals MAX\n\
-         - ALWAYS use script endpoints (create_script_endpoint) — instant, no compilation\n\
+         - Script endpoints (create_script_endpoint) for new services\n\
          - Do NOT edit Rust source code unless explicitly asked by a nudge\n\
          - Do NOT create \"fix\" goals — if something failed, try something DIFFERENT\n\
-         - Each goal should produce a NEW, DIFFERENT endpoint\n\
-         - You can discover peer instances via `/instance/siblings` and call their paid endpoints\n\n\
+         - You can discover peer instances via `/instance/siblings` and call their paid endpoints\n\
+         - You can clone yourself via the `/clone` endpoint to create peers\n\n\
          Respond with a JSON array of goal operations:\n\
          ```json\n\
          [\n\
            {\"op\": \"create_goal\", \"description\": \"...\", \"success_criteria\": \"...\", \"priority\": 4}\n\
          ]\n\
          ```\n\
-         Priority: 1 (low) to 5 (critical). Be specific about what to build."
+         Priority: 1 (low) to 5 (critical). Be specific.",
+    );
+
+    sections.push(task_section);
             .to_string(),
     );
 

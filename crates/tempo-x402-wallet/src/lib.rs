@@ -180,6 +180,19 @@ impl WalletSigner {
         format!("{}", self.inner.address())
     }
 
+    /// Sign a message using EIP-191 personal_sign.
+    /// Returns the 65-byte signature as a hex string (0x-prefixed).
+    ///
+    /// WASM-compatible — no network dependencies.
+    pub fn sign_message(&self, message: &[u8]) -> Result<String, String> {
+        let hash = eip191_hash(message);
+        let sig = self
+            .inner
+            .sign_hash_sync(&hash)
+            .map_err(|e| format!("sign_message failed: {e}"))?;
+        Ok(encode_signature_hex(&sig))
+    }
+
     /// Sign a payment authorization and return a base64-encoded PaymentPayload.
     ///
     /// `requirements` should come from a 402 response's `accepts` array.
@@ -205,6 +218,33 @@ impl WalletSigner {
     ) -> Result<PaymentPayload, String> {
         build_payment_payload(self, requirements, now_secs)
     }
+}
+
+/// Compute EIP-191 hash: keccak256("\x19Ethereum Signed Message:\n" + len + message).
+fn eip191_hash(message: &[u8]) -> FixedBytes<32> {
+    let prefix = format!("\x19Ethereum Signed Message:\n{}", message.len());
+    let mut data = Vec::with_capacity(prefix.len() + message.len());
+    data.extend_from_slice(prefix.as_bytes());
+    data.extend_from_slice(message);
+    alloy::primitives::keccak256(&data)
+}
+
+/// Recover the signer address from an EIP-191 signed message.
+///
+/// `signature` must be exactly 65 bytes (r[32] + s[32] + v[1]).
+/// WASM-compatible — uses alloy's ecrecover (no network).
+pub fn recover_message_signer(message: &[u8], signature: &[u8]) -> Result<Address, String> {
+    if signature.len() != 65 {
+        return Err(format!(
+            "signature must be 65 bytes, got {}",
+            signature.len()
+        ));
+    }
+    let sig = alloy::primitives::Signature::try_from(signature)
+        .map_err(|e| format!("invalid signature: {e}"))?;
+    let hash = eip191_hash(message);
+    sig.recover_address_from_prehash(&hash)
+        .map_err(|e| format!("ecrecover failed: {e}"))
 }
 
 /// Build a signed PaymentPayload from wallet signer and payment requirements.
@@ -325,6 +365,37 @@ mod tests {
         assert_eq!(payload.payload.value, "1000");
         assert!(payload.payload.signature.starts_with("0x"));
         assert_eq!(payload.payload.signature.len(), 132); // 0x + 130 hex
+    }
+
+    #[test]
+    fn test_sign_message_roundtrip() {
+        let w = WalletSigner::random();
+        let message = b"hello world";
+
+        let sig_hex = w.sign_message(message).unwrap();
+        assert!(sig_hex.starts_with("0x"));
+        assert_eq!(sig_hex.len(), 132); // 0x + 130 hex = 65 bytes
+
+        // Decode hex to bytes
+        let sig_bytes = alloy::hex::decode(&sig_hex[2..]).unwrap();
+        let recovered = recover_message_signer(message, &sig_bytes).unwrap();
+        assert_eq!(recovered, w.address());
+    }
+
+    #[test]
+    fn test_recover_wrong_message() {
+        let w = WalletSigner::random();
+        let sig_hex = w.sign_message(b"correct message").unwrap();
+        let sig_bytes = alloy::hex::decode(&sig_hex[2..]).unwrap();
+
+        let recovered = recover_message_signer(b"wrong message", &sig_bytes).unwrap();
+        assert_ne!(recovered, w.address());
+    }
+
+    #[test]
+    fn test_recover_invalid_signature_length() {
+        let result = recover_message_signer(b"test", &[0u8; 64]);
+        assert!(result.is_err());
     }
 
     /// Cross-validate wallet constants against the core crate to prevent silent EIP-712 mismatches.

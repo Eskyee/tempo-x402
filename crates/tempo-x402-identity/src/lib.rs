@@ -29,6 +29,9 @@ pub struct InstanceIdentity {
     pub parent_address: Option<Address>,
     /// When this identity was created.
     pub created_at: DateTime<Utc>,
+    /// ERC-8004 agent token ID (if minted on-chain).
+    #[serde(default)]
+    pub agent_token_id: Option<String>,
 }
 
 /// On-disk format that includes the private key for persistence.
@@ -40,6 +43,9 @@ struct PersistedIdentity {
     parent_url: Option<String>,
     parent_address: Option<String>,
     created_at: String,
+    /// ERC-8004 agent token ID (if minted).
+    #[serde(default)]
+    agent_token_id: Option<String>,
 }
 
 impl From<&InstanceIdentity> for PersistedIdentity {
@@ -51,6 +57,7 @@ impl From<&InstanceIdentity> for PersistedIdentity {
             parent_url: id.parent_url.clone(),
             parent_address: id.parent_address.map(|a| format!("{:#x}", a)),
             created_at: id.created_at.to_rfc3339(),
+            agent_token_id: id.agent_token_id.clone(),
         }
     }
 }
@@ -81,6 +88,7 @@ impl TryFrom<PersistedIdentity> for InstanceIdentity {
             parent_url: p.parent_url,
             parent_address,
             created_at,
+            agent_token_id: p.agent_token_id,
         })
     }
 }
@@ -150,6 +158,7 @@ pub fn bootstrap(identity_path: &str) -> Result<InstanceIdentity, IdentityError>
             parent_url,
             parent_address,
             created_at: Utc::now(),
+            agent_token_id: None,
         };
 
         // Ensure parent directory exists
@@ -208,6 +217,22 @@ fn inject_env_vars(identity: &InstanceIdentity) {
         env::set_var("FACILITATOR_SHARED_SECRET", &secret);
         tracing::debug!("Injected FACILITATOR_SHARED_SECRET (auto-generated)");
     }
+}
+
+/// Update the persisted identity file with a new agent token ID.
+///
+/// Called after successful ERC-8004 minting to persist the token ID.
+pub fn save_agent_token_id(
+    identity_path: &str,
+    identity: &mut InstanceIdentity,
+    token_id: &str,
+) -> Result<(), IdentityError> {
+    identity.agent_token_id = Some(token_id.to_string());
+    let persisted = PersistedIdentity::from(&*identity);
+    let json = serde_json::to_string_pretty(&persisted)
+        .map_err(|e| IdentityError::ParseError(format!("serialize failed: {e}")))?;
+    std::fs::write(identity_path, json)?;
+    Ok(())
 }
 
 /// Request faucet funding via the Tempo `tempo_fundAddress` JSON-RPC method.

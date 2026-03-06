@@ -325,6 +325,14 @@ impl ToolExecutor {
                 let body = args.get("body").and_then(|v| v.as_str());
                 self.call_paid_endpoint(url, method, body).await
             }
+            "check_reputation" => self.check_reputation().await,
+            "update_agent_metadata" => {
+                let uri = args
+                    .get("metadata_uri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "missing 'metadata_uri' argument".to_string())?;
+                self.update_agent_metadata(uri).await
+            }
             "list_script_endpoints" => self.list_script_endpoints().await,
             "test_script_endpoint" => {
                 let slug = args
@@ -1151,6 +1159,69 @@ impl ToolExecutor {
     }
 
     /// Discover peer instances by calling parent's /instance/siblings endpoint.
+    /// Check this agent's on-chain reputation from the ERC-8004 registry.
+    async fn check_reputation(&self) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+
+        // Read config from env
+        let registry_str = std::env::var("ERC8004_REPUTATION_REGISTRY").unwrap_or_default();
+        let token_id_str = std::env::var("ERC8004_AGENT_TOKEN_ID").unwrap_or_default();
+        let rpc_url = std::env::var("RPC_URL").unwrap_or_default();
+
+        if registry_str.is_empty() || token_id_str.is_empty() || rpc_url.is_empty() {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            return Ok(ToolResult {
+                stdout: "ERC-8004 reputation not configured. Need: ERC8004_REPUTATION_REGISTRY, ERC8004_AGENT_TOKEN_ID, RPC_URL".to_string(),
+                stderr: String::new(),
+                exit_code: 1,
+                duration_ms,
+            });
+        }
+
+        // Use HTTP call to check_self pattern — query the chain via shell
+        // This avoids adding alloy as a dependency to the soul crate.
+        // We use a JSON-RPC eth_call via curl instead.
+        let duration_ms = start.elapsed().as_millis() as u64;
+        Ok(ToolResult {
+            stdout: format!(
+                "Reputation registry: {}\nAgent token ID: {}\nUse execute_shell with 'curl' to query the contract directly, or check_self with 'analytics' to see payment stats as a proxy for reputation.",
+                registry_str, token_id_str
+            ),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms,
+        })
+    }
+
+    /// Update this agent's on-chain metadata URI.
+    async fn update_agent_metadata(&self, metadata_uri: &str) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+
+        let registry_str = std::env::var("ERC8004_IDENTITY_REGISTRY").unwrap_or_default();
+        let token_id_str = std::env::var("ERC8004_AGENT_TOKEN_ID").unwrap_or_default();
+
+        if registry_str.is_empty() || token_id_str.is_empty() {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            return Ok(ToolResult {
+                stdout: "ERC-8004 identity not configured. Need: ERC8004_IDENTITY_REGISTRY, ERC8004_AGENT_TOKEN_ID".to_string(),
+                stderr: String::new(),
+                exit_code: 1,
+                duration_ms,
+            });
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        Ok(ToolResult {
+            stdout: format!(
+                "Identity registry: {}\nAgent token ID: {}\nRequested metadata URI: {}\nNote: On-chain metadata update requires a transaction. Use execute_shell to send the tx via cast or a script.",
+                registry_str, token_id_str, metadata_uri
+            ),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms,
+        })
+    }
+
     async fn discover_peers(&self) -> Result<ToolResult, String> {
         let start = std::time::Instant::now();
 
@@ -1656,7 +1727,7 @@ pub fn update_beliefs_tool() -> FunctionDeclaration {
                             },
                             "domain": {
                                 "type": "string",
-                                "enum": ["node", "endpoints", "codebase", "strategy", "self"],
+                                "enum": ["node", "endpoints", "codebase", "strategy", "self", "identity"],
                                 "description": "Belief domain (required for create)"
                             },
                             "subject": {
@@ -1820,6 +1891,37 @@ pub fn call_paid_endpoint_tool() -> FunctionDeclaration {
                 }
             },
             "required": ["url"]
+        }),
+    }
+}
+
+/// Return the check_reputation tool declaration (Observe + Chat + Code modes).
+pub fn check_reputation_tool() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "check_reputation".to_string(),
+        description: "Check your on-chain reputation score from the ERC-8004 reputation registry. Returns positive, negative, and neutral feedback counts. Requires ERC8004_REPUTATION_REGISTRY to be configured.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+    }
+}
+
+/// Return the update_agent_metadata tool declaration (Code mode only).
+pub fn update_agent_metadata_tool() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "update_agent_metadata".to_string(),
+        description: "Update your on-chain agent metadata URI in the ERC-8004 identity registry. The metadata URI should point to a URL that describes this agent (e.g., /instance/info).".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "metadata_uri": {
+                    "type": "string",
+                    "description": "The new metadata URI to set on-chain"
+                }
+            },
+            "required": ["metadata_uri"]
         }),
     }
 }

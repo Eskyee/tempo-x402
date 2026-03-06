@@ -17,6 +17,7 @@ pub enum BeliefDomain {
     Strategy,
     #[serde(rename = "self")]
     Self_,
+    Identity,
 }
 
 impl BeliefDomain {
@@ -27,6 +28,7 @@ impl BeliefDomain {
             Self::Codebase => "codebase",
             Self::Strategy => "strategy",
             Self::Self_ => "self",
+            Self::Identity => "identity",
         }
     }
 
@@ -37,6 +39,7 @@ impl BeliefDomain {
             "codebase" => Some(Self::Codebase),
             "strategy" => Some(Self::Strategy),
             "self" => Some(Self::Self_),
+            "identity" => Some(Self::Identity),
             _ => None,
         }
     }
@@ -49,6 +52,7 @@ impl BeliefDomain {
             BeliefDomain::Codebase,
             BeliefDomain::Strategy,
             BeliefDomain::Self_,
+            BeliefDomain::Identity,
         ]
     }
 }

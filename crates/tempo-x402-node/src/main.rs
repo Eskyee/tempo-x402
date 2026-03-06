@@ -8,6 +8,7 @@ use actix_web::{middleware::Logger, web, App, HttpServer};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(feature = "agent")]
 use x402_agent::{CloneConfig, CloneOrchestrator, RailwayClient};
 use x402_gateway::{
     config::GatewayConfig, db::Database, metrics::register_metrics, state::AppState as GatewayState,
@@ -15,6 +16,7 @@ use x402_gateway::{
 
 mod db;
 mod routes;
+#[cfg(feature = "soul")]
 mod soul_observer;
 mod state;
 
@@ -130,14 +132,6 @@ async fn main() -> std::io::Result<()> {
     register_metrics();
 
     // ── Clone orchestrator config ───────────────────────────────────────
-    let railway_token = std::env::var("RAILWAY_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let railway_project_id = std::env::var("RAILWAY_PROJECT_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let docker_image = std::env::var("DOCKER_IMAGE").ok().filter(|s| !s.is_empty());
-
     let clone_price = std::env::var("CLONE_PRICE").ok().filter(|s| !s.is_empty());
     let clone_price_amount = clone_price.as_ref().map(|p| {
         x402_gateway::config::parse_price_to_amount(p).expect("Failed to parse CLONE_PRICE")
@@ -250,60 +244,68 @@ async fn main() -> std::io::Result<()> {
     let gateway_state = GatewayState::new(config, gateway_db, facilitator_state.clone());
 
     // ── Clone orchestrator ──────────────────────────────────────────────
-    let agent: Option<Arc<CloneOrchestrator>> = match (
-        railway_token,
-        railway_project_id,
-        docker_image,
-    ) {
-        (Some(token), Some(project_id), Some(image)) => {
-            tracing::info!("Clone orchestrator: enabled (image: {})", image);
-            let railway = RailwayClient::new(token, project_id);
-            let clone_cpu: u32 = std::env::var("CLONE_CPU_MILLICORES")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(2000);
-            let clone_mem: u32 = std::env::var("CLONE_MEMORY_MB")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(2048);
+    #[cfg(feature = "agent")]
+    let agent: Option<Arc<CloneOrchestrator>> = {
+        let railway_token = std::env::var("RAILWAY_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let railway_project_id = std::env::var("RAILWAY_PROJECT_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let docker_image = std::env::var("DOCKER_IMAGE").ok().filter(|s| !s.is_empty());
 
-            // Build child env vars from parent's soul-related env vars
-            let mut child_env_vars = std::collections::HashMap::new();
-            // Children get a higher cycle multiplier (slower thinking, lower cost)
-            let child_multiplier =
-                std::env::var("CLONE_CYCLE_MULTIPLIER").unwrap_or_else(|_| "3.0".to_string());
-            child_env_vars.insert("SOUL_CYCLE_MULTIPLIER".into(), child_multiplier);
-            // Pass through essential soul config
-            if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-                child_env_vars.insert("GEMINI_API_KEY".into(), key);
-            }
-            child_env_vars.insert("SOUL_CODING_ENABLED".into(), "true".into());
-            child_env_vars.insert("SOUL_DB_PATH".into(), "/data/soul.db".into());
-            if let Ok(fork) = std::env::var("SOUL_FORK_REPO") {
-                child_env_vars.insert("SOUL_FORK_REPO".into(), fork);
-            }
-            if let Ok(upstream) = std::env::var("SOUL_UPSTREAM_REPO") {
-                child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), upstream);
-            }
+        match (railway_token, railway_project_id, docker_image) {
+            (Some(token), Some(project_id), Some(image)) => {
+                tracing::info!("Clone orchestrator: enabled (image: {})", image);
+                let railway = RailwayClient::new(token, project_id);
+                let clone_cpu: u32 = std::env::var("CLONE_CPU_MILLICORES")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(2000);
+                let clone_mem: u32 = std::env::var("CLONE_MEMORY_MB")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(2048);
 
-            let clone_config = CloneConfig {
-                docker_image: image,
-                rpc_url: rpc_url.clone(),
-                self_url: self_url.clone(),
-                max_children: clone_max_children,
-                clone_cpu_millicores: clone_cpu,
-                clone_memory_mb: clone_mem,
-                child_env_vars,
-            };
-            Some(Arc::new(CloneOrchestrator::new(railway, clone_config)))
-        }
-        _ => {
-            tracing::info!("Clone orchestrator: disabled (missing RAILWAY_TOKEN, RAILWAY_PROJECT_ID, or DOCKER_IMAGE)");
-            None
+                // Build child env vars from parent's soul-related env vars
+                let mut child_env_vars = std::collections::HashMap::new();
+                let child_multiplier =
+                    std::env::var("CLONE_CYCLE_MULTIPLIER").unwrap_or_else(|_| "3.0".to_string());
+                child_env_vars.insert("SOUL_CYCLE_MULTIPLIER".into(), child_multiplier);
+                if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+                    child_env_vars.insert("GEMINI_API_KEY".into(), key);
+                }
+                child_env_vars.insert("SOUL_CODING_ENABLED".into(), "true".into());
+                child_env_vars.insert("SOUL_DB_PATH".into(), "/data/soul.db".into());
+                if let Ok(fork) = std::env::var("SOUL_FORK_REPO") {
+                    child_env_vars.insert("SOUL_FORK_REPO".into(), fork);
+                }
+                if let Ok(upstream) = std::env::var("SOUL_UPSTREAM_REPO") {
+                    child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), upstream);
+                }
+
+                let clone_config = CloneConfig {
+                    docker_image: image,
+                    rpc_url: rpc_url.clone(),
+                    self_url: self_url.clone(),
+                    max_children: clone_max_children,
+                    clone_cpu_millicores: clone_cpu,
+                    clone_memory_mb: clone_mem,
+                    child_env_vars,
+                };
+                Some(Arc::new(CloneOrchestrator::new(railway, clone_config)))
+            }
+            _ => {
+                tracing::info!("Clone orchestrator: disabled (missing RAILWAY_TOKEN, RAILWAY_PROJECT_ID, or DOCKER_IMAGE)");
+                None
+            }
         }
     };
+    #[cfg(not(feature = "agent"))]
+    let agent: Option<()> = None;
 
     // ── Soul init (before NodeState so we can store the DB ref) ────────
+    #[cfg(feature = "soul")]
     let (soul_db, soul_dormant, soul, soul_generation, soul_config_for_state) =
         match x402_soul::SoulConfig::from_env() {
             Ok(soul_config) => {
@@ -332,11 +334,14 @@ async fn main() -> std::io::Result<()> {
                 (None, true, None, 0, None)
             }
         };
+    #[cfg(not(feature = "soul"))]
+    let (soul_db, soul_dormant, soul_generation): (Option<()>, bool, u32) = (None, true, 0);
 
     // ── Node state ──────────────────────────────────────────────────────
     let started_at = chrono::Utc::now();
 
     // Build observer early so we can share it between NodeState and soul spawn
+    #[cfg(feature = "soul")]
     let soul_observer: Option<std::sync::Arc<dyn x402_soul::NodeObserver>> =
         if soul.is_some() || soul_config_for_state.is_some() {
             Some(soul_observer::NodeObserverImpl::new(
@@ -349,6 +354,77 @@ async fn main() -> std::io::Result<()> {
         } else {
             None
         };
+    #[cfg(not(feature = "soul"))]
+    let soul_observer: Option<()> = None;
+
+    // ── ERC-8004 reputation channel ─────────────────────────────────────
+    #[cfg(feature = "erc8004")]
+    let reputation_tx = if x402_erc8004::reputation_enabled() {
+        let rep_registry = x402_erc8004::reputation_registry();
+        if rep_registry != alloy::primitives::Address::ZERO {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<state::SettlementEvent>(256);
+            let rep_rpc = rpc_url.clone();
+            let agent_token = identity.as_ref().and_then(|id| id.agent_token_id.clone());
+            let rep_private_key = identity.as_ref().map(|id| id.private_key.clone());
+            tokio::spawn(async move {
+                use x402_erc8004::types::AgentId;
+
+                let Some(pk) = rep_private_key else {
+                    tracing::info!("ERC-8004 reputation: no identity, skipping");
+                    while rx.recv().await.is_some() {}
+                    return;
+                };
+                let signer: alloy::signers::local::PrivateKeySigner = pk
+                    .strip_prefix("0x")
+                    .unwrap_or(&pk)
+                    .parse()
+                    .expect("invalid private key");
+                let wallet = alloy::network::EthereumWallet::from(signer);
+                let provider = alloy::providers::ProviderBuilder::new()
+                    .wallet(wallet)
+                    .connect_http(rep_rpc.parse().expect("invalid RPC URL"));
+
+                let Some(token_id_str) = agent_token else {
+                    tracing::info!("ERC-8004 reputation: no agent token ID, skipping");
+                    // Drain channel without submitting
+                    while rx.recv().await.is_some() {}
+                    return;
+                };
+
+                let agent_id = AgentId::new(
+                    token_id_str
+                        .parse::<alloy::primitives::U256>()
+                        .unwrap_or_default(),
+                );
+
+                tracing::info!(agent_id = %agent_id, "ERC-8004 reputation submitter started");
+
+                while let Some(event) = rx.recv().await {
+                    let metadata = event.tx_hash.as_deref().unwrap_or(&event.endpoint_slug);
+                    if let Err(e) = x402_erc8004::reputation::submit_feedback(
+                        &provider,
+                        rep_registry,
+                        &agent_id,
+                        true, // positive feedback for successful settlement
+                        metadata,
+                    )
+                    .await
+                    {
+                        tracing::debug!(
+                            endpoint = %event.endpoint_slug,
+                            error = %e,
+                            "Reputation submission failed (non-fatal)"
+                        );
+                    }
+                }
+            });
+            Some(tx)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let node_state = NodeState {
         gateway: gateway_state,
@@ -359,10 +435,19 @@ async fn main() -> std::io::Result<()> {
         clone_price,
         clone_price_amount,
         clone_max_children,
+        agent_token_id: identity.as_ref().and_then(|id| id.agent_token_id.clone()),
+        #[cfg(feature = "erc8004")]
+        reputation_tx,
         soul_db,
         soul_dormant,
+        #[cfg(feature = "soul")]
         soul_config: soul_config_for_state,
+        #[cfg(not(feature = "soul"))]
+        soul_config: None,
+        #[cfg(feature = "soul")]
         soul_observer: soul_observer.clone(),
+        #[cfg(not(feature = "soul"))]
+        soul_observer: None,
     };
 
     let node_data = web::Data::new(node_state.clone());
@@ -370,6 +455,7 @@ async fn main() -> std::io::Result<()> {
     let facilitator_data = facilitator_state.map(web::Data::from);
 
     // ── Soul spawn ────────────────────────────────────────────────────
+    #[cfg(feature = "soul")]
     if let Some(soul) = soul {
         if let Some(observer) = soul_observer {
             soul.spawn(observer);
@@ -392,6 +478,63 @@ async fn main() -> std::io::Result<()> {
             }
         });
 
+        // ERC-8004 auto-mint (if enabled and no token ID yet)
+        #[cfg(feature = "erc8004")]
+        if x402_erc8004::auto_mint_enabled() && id.agent_token_id.is_none() {
+            let identity_registry = x402_erc8004::identity_registry();
+            if identity_registry != alloy::primitives::Address::ZERO {
+                let rpc_clone = rpc_url.clone();
+                let owner = id.address;
+                let metadata_uri = format!("{}/instance/info", self_url);
+                let identity_path = std::env::var("IDENTITY_PATH")
+                    .unwrap_or_else(|_| "/data/identity.json".to_string());
+                let mut id_clone = id.clone();
+                let private_key = id.private_key.clone();
+                tokio::spawn(async move {
+                    // Wait for faucet to fund the wallet first
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
+                    tracing::info!("ERC-8004: attempting to mint agent identity NFT");
+                    let signer: alloy::signers::local::PrivateKeySigner = private_key
+                        .strip_prefix("0x")
+                        .unwrap_or(&private_key)
+                        .parse()
+                        .expect("invalid private key");
+                    let wallet = alloy::network::EthereumWallet::from(signer);
+                    let provider = alloy::providers::ProviderBuilder::new()
+                        .wallet(wallet)
+                        .connect_http(rpc_clone.parse().expect("invalid RPC URL"));
+                    match x402_erc8004::identity::mint(
+                        &provider,
+                        identity_registry,
+                        owner,
+                        &metadata_uri,
+                    )
+                    .await
+                    {
+                        Ok(agent_id) => {
+                            tracing::info!(
+                                token_id = %agent_id,
+                                "ERC-8004: agent identity minted"
+                            );
+                            if let Err(e) = x402_identity::save_agent_token_id(
+                                &identity_path,
+                                &mut id_clone,
+                                &agent_id.to_string(),
+                            ) {
+                                tracing::warn!("Failed to persist agent token ID: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("ERC-8004 mint failed (non-fatal): {e}");
+                        }
+                    }
+                });
+            } else {
+                tracing::debug!("ERC-8004: auto-mint enabled but no identity registry configured");
+            }
+        }
+
         // Parent registration (if PARENT_URL set)
         if let Some(ref parent_url) = id.parent_url {
             let parent = parent_url.clone();
@@ -407,6 +550,7 @@ async fn main() -> std::io::Result<()> {
     }
 
     // ── Background: health probe + version check + auto-redeploy ───────
+    #[cfg(feature = "agent")]
     if node_state.agent.is_some() {
         let version_check_state = node_state.clone();
         tokio::spawn(async move {
@@ -724,10 +868,18 @@ async fn main() -> std::io::Result<()> {
             .configure(x402_gateway::routes::gateway::configure)
             // Node routes (identity, clone, soul)
             .configure(crate::routes::instance::configure)
-            .configure(crate::routes::clone::configure)
-            .configure(crate::routes::soul::configure)
             // Script endpoints — soul-created dynamic handlers (no compilation needed)
             .configure(crate::routes::scripts::configure);
+
+        #[cfg(feature = "agent")]
+        {
+            app = app.configure(crate::routes::clone::configure);
+        }
+
+        #[cfg(feature = "soul")]
+        {
+            app = app.configure(crate::routes::soul::configure);
+        }
 
         // Mount facilitator HTTP routes if embedded
         if let Some(ref fac_data) = facilitator_data {

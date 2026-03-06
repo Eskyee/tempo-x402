@@ -55,6 +55,7 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
 
     HttpResponse::Ok().json(serde_json::json!({
         "identity": identity_info,
+        "agent_token_id": state.agent_token_id,
         "children": children,
         "children_count": children.len(),
         "clone_available": clone_available,

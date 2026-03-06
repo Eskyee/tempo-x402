@@ -106,6 +106,15 @@ pub async fn handle_script(
                 {
                     tracing::warn!(slug = %slug, error = %e, "Failed to record script payment");
                 }
+
+                // Send settlement event for reputation tracking
+                #[cfg(feature = "erc8004")]
+                if let Some(ref tx) = state.reputation_tx {
+                    let _ = tx.try_send(crate::state::SettlementEvent {
+                        endpoint_slug: format!("script-{slug}"),
+                        tx_hash: None,
+                    });
+                }
             }
         }
     }

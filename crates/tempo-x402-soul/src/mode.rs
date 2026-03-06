@@ -57,6 +57,7 @@ impl AgentMode {
                 v.push(tools::update_memory_tool());
                 v.push(tools::update_beliefs_tool());
                 v.push(tools::check_self_tool());
+                v.push(tools::check_reputation_tool());
                 v.push(tools::discover_peers_tool());
                 v
             }
@@ -74,6 +75,7 @@ impl AgentMode {
                 v.push(tools::update_memory_tool());
                 v.push(tools::update_beliefs_tool());
                 v.push(tools::check_self_tool());
+                v.push(tools::check_reputation_tool());
                 v.push(tools::approve_plan_tool());
                 v.push(tools::reject_plan_tool());
                 v.push(tools::request_plan_tool());
@@ -88,6 +90,8 @@ impl AgentMode {
                 v.push(tools::update_beliefs_tool());
                 v.push(tools::register_endpoint_tool());
                 v.push(tools::check_self_tool());
+                v.push(tools::check_reputation_tool());
+                v.push(tools::update_agent_metadata_tool());
                 v.push(tools::approve_plan_tool());
                 v.push(tools::reject_plan_tool());
                 v.push(tools::request_plan_tool());

@@ -670,10 +670,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/soul/plan/pending", web::get().to(plan_pending))
         .route("/soul/nudge", web::post().to(soul_nudge))
         .route("/soul/nudges", web::get().to(soul_nudges))
-        .route(
-            "/soul/goals/abandon-all",
-            web::post().to(abandon_all_goals),
-        )
+        .route("/soul/goals/abandon-all", web::post().to(abandon_all_goals))
         .route("/soul/goals/abandon", web::post().to(abandon_goal))
         .route("/soul/reset", web::post().to(soul_reset));
 }

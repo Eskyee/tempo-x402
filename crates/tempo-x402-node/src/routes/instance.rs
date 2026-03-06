@@ -138,11 +138,54 @@ pub async fn register(
     }
 }
 
+/// GET /instance/siblings — returns list of active sibling instances with their URLs and endpoints
+pub async fn siblings(state: web::Data<NodeState>) -> HttpResponse {
+    let children = rusqlite::Connection::open(&state.db_path)
+        .ok()
+        .and_then(|conn| db::query_children_active(&conn).ok())
+        .unwrap_or_default();
+
+    let mut siblings = Vec::new();
+    for child in &children {
+        if child.status != "running" {
+            continue;
+        }
+        let Some(url) = child.url.as_ref() else {
+            continue;
+        };
+
+        // Include known endpoint slugs for this child (from gateway DB)
+        let endpoints: Vec<String> = state
+            .gateway
+            .db
+            .list_endpoints(500, 0)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|ep| ep.target_url.starts_with(url.as_str()))
+            .map(|ep| ep.slug)
+            .collect();
+
+        siblings.push(serde_json::json!({
+            "instance_id": child.instance_id,
+            "url": url,
+            "address": child.address,
+            "status": child.status,
+            "endpoints": endpoints,
+        }));
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "siblings": siblings,
+        "count": siblings.len(),
+    }))
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/instance")
             .route("/info", web::get().to(info))
-            .route("/register", web::post().to(register)),
+            .route("/register", web::post().to(register))
+            .route("/siblings", web::get().to(siblings)),
     );
 }
 

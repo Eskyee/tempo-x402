@@ -158,8 +158,9 @@ pub fn goal_creation_prompt(
 
     // Show recently failed/abandoned goals so LLM doesn't repeat them
     if !recently_failed_goals.is_empty() {
-        let mut failed_lines =
-            vec!["# Recently Failed Goals (do NOT retry these — try something DIFFERENT)".to_string()];
+        let mut failed_lines = vec![
+            "# Recently Failed Goals (do NOT retry these — try something DIFFERENT)".to_string(),
+        ];
         for desc in recently_failed_goals.iter().take(5) {
             failed_lines.push(format!("- {desc}"));
         }
@@ -177,7 +178,10 @@ pub fn goal_creation_prompt(
          - ALWAYS use script endpoints (create_script_endpoint) — they work instantly with no compilation\n\
          - Do NOT create goals to edit Rust source code unless explicitly asked by a nudge\n\
          - Do NOT create \"fix\" goals — if something failed before, try a DIFFERENT approach entirely\n\
-         - Each goal should produce a NEW, DIFFERENT endpoint — not retry a failed one\n\n\
+         - Each goal should produce a NEW, DIFFERENT endpoint — not retry a failed one\n\
+         - You can clone yourself via the `/clone` endpoint — use check_self to see if cloning is available\n\
+         - You can discover peer instances via `/instance/siblings` and call their paid endpoints\n\
+         - Script endpoints are now behind x402 payment — other agents pay to call them\n\n\
          Respond with a JSON array of goal operations:\n\
          ```json\n\
          [\n\
@@ -244,6 +248,11 @@ pub fn planning_prompt(
          edit utils.rs have consistently failed with cargo check errors. Do NOT attempt Rust code \
          changes unless a nudge explicitly requests it.\n\n\
          USE SCRIPT ENDPOINTS. They are instant, always work, and support jq + python3 for complex logic.\n\n\
+         ## Inter-Agent Economy\n\
+         Your script endpoints are gated by x402 payment — other agents pay to call them.\n\
+         You can call other agents' paid endpoints using `call_paid_endpoint`.\n\
+         You can discover peer instances using `discover_peers`.\n\
+         Building useful endpoints = revenue from other agents calling them.\n\n\
          # Task\n\
          Create a step-by-step plan to achieve this goal. Each step is one of:\n\n\
          Mechanical (no LLM needed):\n\

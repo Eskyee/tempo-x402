@@ -18,6 +18,12 @@ pub struct CloneConfig {
     pub self_url: String,
     /// Maximum number of children this instance can spawn
     pub max_children: u32,
+    /// CPU limit for child instances in millicores (default: 2000 = 2 vCPU)
+    pub clone_cpu_millicores: u32,
+    /// Memory limit for child instances in MB (default: 2048 = 2GB)
+    pub clone_memory_mb: u32,
+    /// Extra env vars to inject into children (e.g., soul config)
+    pub child_env_vars: std::collections::HashMap<String, String>,
 }
 
 /// Result of a successful clone operation.
@@ -118,18 +124,24 @@ impl CloneOrchestrator {
         let env_id = self.railway.get_default_environment().await?;
 
         // 3. Set environment variables
-        let env_vars = serde_json::json!({
-            "AUTO_BOOTSTRAP": "true",
-            "INSTANCE_ID": instance_id,
-            "PARENT_URL": self.config.self_url,
-            "PARENT_ADDRESS": parent_address,
-            "IDENTITY_PATH": "/data/identity.json",
-            "DB_PATH": "/data/gateway.db",
-            "NONCE_DB_PATH": "/data/x402-nonces.db",
-            "RPC_URL": self.config.rpc_url,
-            "SPA_DIR": "/app/spa",
-            "PORT": "4023",
-        });
+        let mut env_map = serde_json::Map::new();
+        env_map.insert("AUTO_BOOTSTRAP".into(), "true".into());
+        env_map.insert("INSTANCE_ID".into(), instance_id.into());
+        env_map.insert("PARENT_URL".into(), self.config.self_url.clone().into());
+        env_map.insert("PARENT_ADDRESS".into(), parent_address.into());
+        env_map.insert("IDENTITY_PATH".into(), "/data/identity.json".into());
+        env_map.insert("DB_PATH".into(), "/data/gateway.db".into());
+        env_map.insert("NONCE_DB_PATH".into(), "/data/x402-nonces.db".into());
+        env_map.insert("RPC_URL".into(), self.config.rpc_url.clone().into());
+        env_map.insert("SPA_DIR".into(), "/app/spa".into());
+        env_map.insert("PORT".into(), "4023".into());
+
+        // Inject extra env vars (soul config, API keys, etc.)
+        for (key, value) in &self.config.child_env_vars {
+            env_map.insert(key.clone(), value.clone().into());
+        }
+
+        let env_vars = serde_json::Value::Object(env_map);
         self.railway
             .set_variables(service_id, &env_id, env_vars)
             .await?;
@@ -147,11 +159,28 @@ impl CloneOrchestrator {
             .await?;
         tracing::info!("Volume attached at /data");
 
-        // 6. Create domain
+        // 6. Set resource limits (conservative defaults for children)
+        if self.config.clone_cpu_millicores > 0 || self.config.clone_memory_mb > 0 {
+            self.railway
+                .update_service_resources(
+                    service_id,
+                    &env_id,
+                    self.config.clone_cpu_millicores,
+                    self.config.clone_memory_mb,
+                )
+                .await?;
+            tracing::info!(
+                cpu = self.config.clone_cpu_millicores,
+                memory_mb = self.config.clone_memory_mb,
+                "Resource limits configured"
+            );
+        }
+
+        // 7. Create domain
         let url = self.railway.create_domain(service_id, &env_id).await?;
         tracing::info!(url = %url, "Domain created");
 
-        // 7. Deploy
+        // 8. Deploy
         let deployment_id = self.railway.deploy_service(service_id, &env_id).await?;
         tracing::info!(deployment_id = %deployment_id, "Deployment triggered");
 
@@ -195,8 +224,12 @@ mod tests {
             rpc_url: "https://rpc.moderato.tempo.xyz".to_string(),
             self_url: "https://my-instance.up.railway.app".to_string(),
             max_children: 10,
+            clone_cpu_millicores: 2000,
+            clone_memory_mb: 2048,
+            child_env_vars: std::collections::HashMap::new(),
         };
         assert_eq!(config.max_children, 10);
+        assert_eq!(config.clone_cpu_millicores, 2000);
     }
 
     #[test]

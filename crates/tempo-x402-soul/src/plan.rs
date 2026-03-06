@@ -136,9 +136,7 @@ impl PlanStep {
     pub fn needs_llm(&self) -> bool {
         matches!(
             self,
-            PlanStep::GenerateCode { .. }
-                | PlanStep::EditCode { .. }
-                | PlanStep::Think { .. }
+            PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } | PlanStep::Think { .. }
         )
     }
 
@@ -560,7 +558,10 @@ impl<'a> PlanExecutor<'a> {
         let context_section = if context_parts.is_empty() {
             String::new()
         } else {
-            format!("\n\nContext from previous steps:\n{}", context_parts.join("\n"))
+            format!(
+                "\n\nContext from previous steps:\n{}",
+                context_parts.join("\n")
+            )
         };
 
         let prompt = format!(

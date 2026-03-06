@@ -67,6 +67,9 @@ pub struct SoulConfig {
     pub require_plan_approval: bool,
     /// Auto-approve pending plans after N minutes without interaction (env: SOUL_PLAN_APPROVAL_TIMEOUT, default: 30).
     pub plan_approval_timeout_mins: u64,
+    /// Cycle interval multiplier (env: SOUL_CYCLE_MULTIPLIER, default: 1.0).
+    /// Values >1.0 slow down think cycles proportionally (e.g., 3.0 = 3x slower = 1/3 API cost).
+    pub cycle_multiplier: f64,
 }
 
 const DEFAULT_PERSONALITY: &str = "\
@@ -215,6 +218,12 @@ impl SoulConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
 
+        let cycle_multiplier: f64 = std::env::var("SOUL_CYCLE_MULTIPLIER")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0)
+            .max(0.1); // floor at 0.1 to prevent zero/negative intervals
+
         Ok(Self {
             llm_api_key,
             llm_model_fast,
@@ -244,6 +253,7 @@ impl SoulConfig {
             max_plan_steps,
             require_plan_approval,
             plan_approval_timeout_mins,
+            cycle_multiplier,
         })
     }
 }

@@ -177,30 +177,36 @@ impl ToolExecutor {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| "missing 'message' argument".to_string())?;
                 // If files not provided, auto-detect all changed files via git
-                let file_strs: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array()) {
-                    files.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-                } else {
-                    // Auto-detect: git diff --name-only + git ls-files --others --exclude-standard
-                    let ws = self.workspace_root.to_string_lossy();
-                    let modified = tokio::process::Command::new("git")
-                        .args(["diff", "--name-only"])
-                        .current_dir(&*ws)
-                        .output()
-                        .await
-                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                        .unwrap_or_default();
-                    let untracked = tokio::process::Command::new("git")
-                        .args(["ls-files", "--others", "--exclude-standard"])
-                        .current_dir(&*ws)
-                        .output()
-                        .await
-                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                        .unwrap_or_default();
-                    modified.lines().chain(untracked.lines())
-                        .filter(|l| !l.is_empty())
-                        .map(String::from)
-                        .collect()
-                };
+                let file_strs: Vec<String> =
+                    if let Some(files) = args.get("files").and_then(|v| v.as_array()) {
+                        files
+                            .iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    } else {
+                        // Auto-detect: git diff --name-only + git ls-files --others --exclude-standard
+                        let ws = self.workspace_root.to_string_lossy();
+                        let modified = tokio::process::Command::new("git")
+                            .args(["diff", "--name-only"])
+                            .current_dir(&*ws)
+                            .output()
+                            .await
+                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                            .unwrap_or_default();
+                        let untracked = tokio::process::Command::new("git")
+                            .args(["ls-files", "--others", "--exclude-standard"])
+                            .current_dir(&*ws)
+                            .output()
+                            .await
+                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                            .unwrap_or_default();
+                        modified
+                            .lines()
+                            .chain(untracked.lines())
+                            .filter(|l| !l.is_empty())
+                            .map(String::from)
+                            .collect()
+                    };
                 if file_strs.is_empty() {
                     return Ok(ToolResult {
                         stdout: "nothing to commit — no changed files detected".to_string(),
@@ -308,6 +314,16 @@ impl ToolExecutor {
                     .ok_or_else(|| "missing 'script' argument".to_string())?;
                 let description = args.get("description").and_then(|v| v.as_str());
                 self.create_script_endpoint(slug, script, description).await
+            }
+            "discover_peers" => self.discover_peers().await,
+            "call_paid_endpoint" => {
+                let url = args
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "missing 'url' argument".to_string())?;
+                let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+                let body = args.get("body").and_then(|v| v.as_str());
+                self.call_paid_endpoint(url, method, body).await
             }
             "list_script_endpoints" => self.list_script_endpoints().await,
             "test_script_endpoint" => {
@@ -868,9 +884,11 @@ impl ToolExecutor {
                 let path = entry.path();
                 if path.extension().is_some_and(|ext| ext == "sh") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let desc = std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|c| c.lines().next().and_then(|l| l.strip_prefix("# ").map(String::from)));
+                        let desc = std::fs::read_to_string(&path).ok().and_then(|c| {
+                            c.lines()
+                                .next()
+                                .and_then(|l| l.strip_prefix("# ").map(String::from))
+                        });
                         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                         entries.push(format!(
                             "/x/{stem} — {} ({size} bytes)",
@@ -886,7 +904,11 @@ impl ToolExecutor {
             stdout: if entries.is_empty() {
                 "no script endpoints found".to_string()
             } else {
-                format!("{} script endpoints:\n{}", entries.len(), entries.join("\n"))
+                format!(
+                    "{} script endpoints:\n{}",
+                    entries.len(),
+                    entries.join("\n")
+                )
             },
             stderr: String::new(),
             exit_code: 0,
@@ -925,7 +947,10 @@ impl ToolExecutor {
                     stdout: if output.status.success() {
                         format!("test passed (exit 0):\n{stdout}")
                     } else {
-                        format!("test failed (exit {}):\nstdout: {stdout}\nstderr: {stderr}", output.status.code().unwrap_or(-1))
+                        format!(
+                            "test failed (exit {}):\nstdout: {stdout}\nstderr: {stderr}",
+                            output.status.code().unwrap_or(-1)
+                        )
                     },
                     stderr,
                     exit_code: output.status.code().unwrap_or(1),
@@ -1123,6 +1148,185 @@ impl ToolExecutor {
                 })
             }
         }
+    }
+
+    /// Discover peer instances by calling parent's /instance/siblings endpoint.
+    async fn discover_peers(&self) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+
+        // Get parent URL from env, or fall back to gateway URL for self-discovery
+        let parent_url = std::env::var("PARENT_URL")
+            .ok()
+            .or_else(|| self.gateway_url.clone())
+            .ok_or_else(|| {
+                "no PARENT_URL or gateway URL configured — cannot discover peers".to_string()
+            })?;
+
+        let url = format!("{}/instance/siblings", parent_url.trim_end_matches('/'));
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+        match client.get(&url).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                let duration_ms = start.elapsed().as_millis() as u64;
+
+                let body_truncated = if body.len() > MAX_OUTPUT_BYTES {
+                    format!(
+                        "{}\n... (truncated)",
+                        body.chars().take(MAX_OUTPUT_BYTES).collect::<String>()
+                    )
+                } else {
+                    body
+                };
+
+                Ok(ToolResult {
+                    stdout: body_truncated,
+                    stderr: String::new(),
+                    exit_code: status.as_u16() as i32,
+                    duration_ms,
+                })
+            }
+            Err(e) => {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                Ok(ToolResult {
+                    stdout: String::new(),
+                    stderr: format!("request failed: {e}"),
+                    exit_code: -1,
+                    duration_ms,
+                })
+            }
+        }
+    }
+
+    /// Call a paid endpoint on another instance using the x402 payment flow.
+    /// Pattern: GET → 402 → parse requirements → sign → retry with PAYMENT-SIGNATURE.
+    async fn call_paid_endpoint(
+        &self,
+        url: &str,
+        method: &str,
+        body: Option<&str>,
+    ) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+
+        let private_key = std::env::var("EVM_PRIVATE_KEY")
+            .map_err(|_| "EVM_PRIVATE_KEY not set — cannot sign payments".to_string())?;
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+        // Step 1: Make initial request — expect 402
+        let initial_resp = match method.to_uppercase().as_str() {
+            "POST" => {
+                client
+                    .post(url)
+                    .body(body.unwrap_or("").to_string())
+                    .send()
+                    .await
+            }
+            _ => client.get(url).send().await,
+        }
+        .map_err(|e| format!("initial request failed: {e}"))?;
+
+        // If not 402, return the response directly (endpoint may be free)
+        if initial_resp.status().as_u16() != 402 {
+            let status = initial_resp.status();
+            let resp_body = initial_resp.text().await.unwrap_or_default();
+            let duration_ms = start.elapsed().as_millis() as u64;
+            return Ok(ToolResult {
+                stdout: resp_body,
+                stderr: format!("endpoint returned {status} (not 402 — no payment needed)"),
+                exit_code: status.as_u16() as i32,
+                duration_ms,
+            });
+        }
+
+        // Step 2: Parse PaymentRequirements from 402 response
+        let resp_json: serde_json::Value = initial_resp
+            .json()
+            .await
+            .map_err(|e| format!("failed to parse 402 response: {e}"))?;
+
+        let accepts = resp_json
+            .get("accepts")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "402 response missing 'accepts' array".to_string())?;
+
+        let req_value = accepts
+            .first()
+            .ok_or_else(|| "402 response 'accepts' array is empty".to_string())?;
+
+        let requirements: x402_wallet::PaymentRequirements =
+            serde_json::from_value(req_value.clone())
+                .map_err(|e| format!("failed to parse PaymentRequirements: {e}"))?;
+
+        // Step 3: Sign payment using wallet signer (same pattern as register_endpoint)
+        let signer = x402_wallet::WalletSigner::new(&private_key)
+            .map_err(|e| format!("failed to create signer: {e}"))?;
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("system time error: {e}"))?
+            .as_secs();
+
+        let payment_b64 = signer
+            .sign_payment(&requirements, now_secs)
+            .map_err(|e| format!("failed to sign payment: {e}"))?;
+
+        // Step 4: Retry with payment signature
+        let paid_resp = match method.to_uppercase().as_str() {
+            "POST" => {
+                client
+                    .post(url)
+                    .header("PAYMENT-SIGNATURE", &payment_b64)
+                    .body(body.unwrap_or("").to_string())
+                    .send()
+                    .await
+            }
+            _ => {
+                client
+                    .get(url)
+                    .header("PAYMENT-SIGNATURE", &payment_b64)
+                    .send()
+                    .await
+            }
+        }
+        .map_err(|e| format!("paid request failed: {e}"))?;
+
+        let status = paid_resp.status();
+        let final_body = paid_resp.text().await.unwrap_or_default();
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let body_truncated = if final_body.len() > MAX_OUTPUT_BYTES {
+            format!(
+                "{}\n... (truncated)",
+                final_body
+                    .chars()
+                    .take(MAX_OUTPUT_BYTES)
+                    .collect::<String>()
+            )
+        } else {
+            final_body
+        };
+
+        Ok(ToolResult {
+            stdout: body_truncated,
+            stderr: if status.is_success() {
+                String::new()
+            } else {
+                format!("paid request returned status {status}")
+            },
+            exit_code: status.as_u16() as i32,
+            duration_ms,
+        })
     }
 
     /// Create an issue on the upstream repo.
@@ -1581,6 +1785,45 @@ pub fn request_plan_tool() -> FunctionDeclaration {
     }
 }
 
+/// Return the discover_peers tool declaration (Observe + Chat + Code modes).
+pub fn discover_peers_tool() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "discover_peers".to_string(),
+        description: "Discover peer instances (siblings) by calling the parent's /instance/siblings endpoint. Returns a list of running peer URLs and their available endpoints. Use this to find other agents you can interact with.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+    }
+}
+
+/// Return the call_paid_endpoint tool declaration (Chat + Code modes).
+pub fn call_paid_endpoint_tool() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "call_paid_endpoint".to_string(),
+        description: "Call another agent's paid endpoint using the x402 payment flow. Automatically handles 402 → sign payment → retry. Requires EVM_PRIVATE_KEY to sign payments.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Full URL of the paid endpoint (e.g., 'https://peer.up.railway.app/x/uuid')"
+                },
+                "method": {
+                    "type": "string",
+                    "description": "HTTP method: GET or POST (default: GET)"
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Request body for POST requests"
+                }
+            },
+            "required": ["url"]
+        }),
+    }
+}
+
 /// Return the list of function declarations for the LLM's tools parameter.
 pub fn available_tools() -> Vec<FunctionDeclaration> {
     vec![
@@ -1799,7 +2042,9 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
 
         tools.push(FunctionDeclaration {
             name: "list_script_endpoints".to_string(),
-            description: "List all script endpoints you've created. Shows slug, description, and size.".to_string(),
+            description:
+                "List all script endpoints you've created. Shows slug, description, and size."
+                    .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}

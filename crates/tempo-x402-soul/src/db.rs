@@ -26,8 +26,14 @@ pub struct PruneStats {
 
 impl PruneStats {
     pub fn total(&self) -> u32 {
-        self.thoughts + self.goals + self.plans + self.mutations
-            + self.nudges + self.beliefs + self.messages + self.sessions
+        self.thoughts
+            + self.goals
+            + self.plans
+            + self.mutations
+            + self.nudges
+            + self.beliefs
+            + self.messages
+            + self.sessions
     }
 }
 
@@ -1214,22 +1220,26 @@ impl SoulDatabase {
         let seven_days = one_day * 7;
 
         // 1. Cap total thoughts at 500 — delete oldest beyond cap
-        let thoughts_pruned: u32 = conn.execute(
-            "DELETE FROM thoughts WHERE id IN (
+        let thoughts_pruned: u32 = conn
+            .execute(
+                "DELETE FROM thoughts WHERE id IN (
                 SELECT id FROM thoughts ORDER BY created_at DESC LIMIT -1 OFFSET 500
             )",
-            [],
-        ).unwrap_or(0) as u32;
+                [],
+            )
+            .unwrap_or(0) as u32;
 
         // 2. Delete completed/abandoned goals older than 7 days (keep last 10 regardless of age)
-        let goals_pruned: u32 = conn.execute(
-            "DELETE FROM goals WHERE status IN ('completed', 'abandoned') AND created_at < ?1
+        let goals_pruned: u32 = conn
+            .execute(
+                "DELETE FROM goals WHERE status IN ('completed', 'abandoned') AND created_at < ?1
              AND id NOT IN (
                 SELECT id FROM goals WHERE status IN ('completed', 'abandoned')
                 ORDER BY updated_at DESC LIMIT 10
             )",
-            params![now - seven_days],
-        ).unwrap_or(0) as u32;
+                params![now - seven_days],
+            )
+            .unwrap_or(0) as u32;
 
         // 3. Delete completed/failed/abandoned plans older than 3 days (keep last 10)
         let plans_pruned: u32 = conn.execute(
@@ -1242,28 +1252,35 @@ impl SoulDatabase {
         ).unwrap_or(0) as u32;
 
         // 4. Cap mutations at 50 — delete oldest beyond cap
-        let mutations_pruned: u32 = conn.execute(
-            "DELETE FROM mutations WHERE id IN (
+        let mutations_pruned: u32 = conn
+            .execute(
+                "DELETE FROM mutations WHERE id IN (
                 SELECT id FROM mutations ORDER BY created_at DESC LIMIT -1 OFFSET 50
             )",
-            [],
-        ).unwrap_or(0) as u32;
+                [],
+            )
+            .unwrap_or(0) as u32;
 
         // 5. Delete processed nudges older than 24h
-        let nudges_pruned: u32 = conn.execute(
-            "DELETE FROM nudges WHERE processed = 1 AND created_at < ?1",
-            params![now - one_day],
-        ).unwrap_or(0) as u32;
+        let nudges_pruned: u32 = conn
+            .execute(
+                "DELETE FROM nudges WHERE processed = 1 AND created_at < ?1",
+                params![now - one_day],
+            )
+            .unwrap_or(0) as u32;
 
         // 6. Delete inactive beliefs (already deactivated by decay)
-        let beliefs_pruned: u32 = conn.execute(
-            "DELETE FROM beliefs WHERE active = 0 AND updated_at < ?1",
-            params![now - three_days],
-        ).unwrap_or(0) as u32;
+        let beliefs_pruned: u32 = conn
+            .execute(
+                "DELETE FROM beliefs WHERE active = 0 AND updated_at < ?1",
+                params![now - three_days],
+            )
+            .unwrap_or(0) as u32;
 
         // 7. Cap chat messages per session (keep last 100 per session)
-        let messages_pruned: u32 = conn.execute(
-            "DELETE FROM chat_messages WHERE id IN (
+        let messages_pruned: u32 = conn
+            .execute(
+                "DELETE FROM chat_messages WHERE id IN (
                 SELECT cm.id FROM chat_messages cm
                 INNER JOIN (
                     SELECT session_id, id,
@@ -1272,16 +1289,19 @@ impl SoulDatabase {
                 ) ranked ON cm.id = ranked.id
                 WHERE ranked.rn > 100
             )",
-            [],
-        ).unwrap_or(0) as u32;
+                [],
+            )
+            .unwrap_or(0) as u32;
 
         // 8. Delete old inactive chat sessions (keep last 20)
-        let sessions_pruned: u32 = conn.execute(
-            "DELETE FROM chat_sessions WHERE active = 0 AND id NOT IN (
+        let sessions_pruned: u32 = conn
+            .execute(
+                "DELETE FROM chat_sessions WHERE active = 0 AND id NOT IN (
                 SELECT id FROM chat_sessions ORDER BY updated_at DESC LIMIT 20
             )",
-            [],
-        ).unwrap_or(0) as u32;
+                [],
+            )
+            .unwrap_or(0) as u32;
 
         Ok(PruneStats {
             thoughts: thoughts_pruned,
@@ -1457,7 +1477,8 @@ impl SoulDatabase {
                 Ok(Goal {
                     id: row.get(0)?,
                     description: row.get(1)?,
-                    status: GoalStatus::parse(&row.get::<_, String>(2)?).unwrap_or(GoalStatus::Abandoned),
+                    status: GoalStatus::parse(&row.get::<_, String>(2)?)
+                        .unwrap_or(GoalStatus::Abandoned),
                     priority: row.get(3)?,
                     success_criteria: row.get(4)?,
                     progress_notes: row.get::<_, String>(5).unwrap_or_default(),

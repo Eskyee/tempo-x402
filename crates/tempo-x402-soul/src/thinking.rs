@@ -28,25 +28,30 @@ use crate::world_model::{Belief, BeliefDomain, Confidence, Goal, ModelUpdate};
 /// Simplified adaptive pacing for plan-driven execution.
 struct AdaptivePacer {
     prev_snapshot: Option<NodeSnapshot>,
+    /// Multiplier for all intervals (from SOUL_CYCLE_MULTIPLIER).
+    /// 1.0 = normal speed, 2.0 = half speed (double intervals), etc.
+    multiplier: f64,
 }
 
 impl AdaptivePacer {
-    fn new() -> Self {
+    fn new(multiplier: f64) -> Self {
         Self {
             prev_snapshot: None,
+            multiplier: multiplier.max(0.1),
         }
     }
 
     /// Determine next sleep interval based on what happened.
     fn next_interval(&mut self, snapshot: &NodeSnapshot, step_type: StepType) -> u64 {
         self.prev_snapshot = Some(snapshot.clone());
-        match step_type {
+        let base = match step_type {
             StepType::Mechanical => 30,     // fast, keep making progress
             StepType::Llm => 120,           // LLM step, moderate pause
             StepType::PlanCompleted => 300, // time to create next plan
             StepType::NoGoals => 600,       // idle
             StepType::Observe => 60,        // quick observation only
-        }
+        };
+        (base as f64 * self.multiplier) as u64
     }
 }
 
@@ -141,7 +146,7 @@ impl ThinkingLoop {
 
     /// Run the thinking loop.
     pub async fn run(&self) {
-        let mut pacer = AdaptivePacer::new();
+        let mut pacer = AdaptivePacer::new(self.config.cycle_multiplier);
 
         // Initialize git workspace if coding is enabled
         if self.config.coding_enabled {
@@ -1563,18 +1568,18 @@ impl ThinkingLoop {
 
                 // Dedup: skip if an active goal has similar description (Jaccard word similarity)
                 let desc_lower = description.to_lowercase();
-                let desc_words: std::collections::HashSet<String> =
-                    desc_lower.split_whitespace()
-                        .filter(|w| w.len() > 3) // skip short words like "the", "and", "for"
-                        .map(|w| w.to_string())
-                        .collect();
+                let desc_words: std::collections::HashSet<String> = desc_lower
+                    .split_whitespace()
+                    .filter(|w| w.len() > 3) // skip short words like "the", "and", "for"
+                    .map(|w| w.to_string())
+                    .collect();
                 let is_duplicate = active_goals.iter().any(|g| {
                     let existing_lower = g.description.to_lowercase();
-                    let existing_words: std::collections::HashSet<String> =
-                        existing_lower.split_whitespace()
-                            .filter(|w| w.len() > 3)
-                            .map(|w| w.to_string())
-                            .collect();
+                    let existing_words: std::collections::HashSet<String> = existing_lower
+                        .split_whitespace()
+                        .filter(|w| w.len() > 3)
+                        .map(|w| w.to_string())
+                        .collect();
                     if desc_words.is_empty() || existing_words.is_empty() {
                         return false;
                     }
@@ -1589,14 +1594,15 @@ impl ThinkingLoop {
                 }
 
                 // Also skip if recently abandoned goal has similar description
-                let recently_abandoned = self.db.get_recently_abandoned_goals(10).unwrap_or_default();
+                let recently_abandoned =
+                    self.db.get_recently_abandoned_goals(10).unwrap_or_default();
                 let is_retread = recently_abandoned.iter().any(|g| {
                     let existing_lower = g.description.to_lowercase();
-                    let existing_words: std::collections::HashSet<String> =
-                        existing_lower.split_whitespace()
-                            .filter(|w| w.len() > 3)
-                            .map(|w| w.to_string())
-                            .collect();
+                    let existing_words: std::collections::HashSet<String> = existing_lower
+                        .split_whitespace()
+                        .filter(|w| w.len() > 3)
+                        .map(|w| w.to_string())
+                        .collect();
                     if desc_words.is_empty() || existing_words.is_empty() {
                         return false;
                     }

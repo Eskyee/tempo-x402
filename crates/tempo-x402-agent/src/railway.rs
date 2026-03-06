@@ -399,6 +399,38 @@ impl RailwayClient {
         Ok(())
     }
 
+    /// Update compute resource limits for a service instance.
+    ///
+    /// Uses `serviceInstanceUpdate` to set CPU, memory, and other compute limits.
+    /// Railway expects CPU in millicores (e.g., 2000 = 2 vCPU) and memory in MB.
+    pub async fn update_service_resources(
+        &self,
+        service_id: &str,
+        environment_id: &str,
+        cpu_limit_millicores: u32,
+        memory_limit_mb: u32,
+    ) -> Result<(), RailwayError> {
+        let query = r#"
+            mutation ServiceInstanceUpdate($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
+                serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "serviceId": service_id,
+            "environmentId": environment_id,
+            "input": {
+                "resourceLimits": {
+                    "cpuMillicores": cpu_limit_millicores,
+                    "memoryMB": memory_limit_mb,
+                }
+            }
+        });
+
+        self.execute(query, variables).await?;
+        Ok(())
+    }
+
     /// Trigger a deployment for a service in an environment.
     ///
     /// Uses `serviceInstanceDeploy` which works for Docker image–based services.

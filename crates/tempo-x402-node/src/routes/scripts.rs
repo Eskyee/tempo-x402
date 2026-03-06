@@ -7,8 +7,12 @@
 //! instead of needing to write, compile, and redeploy Rust code.
 
 use actix_web::{web, HttpRequest, HttpResponse};
+use alloy::primitives::Address;
 use serde::Serialize;
 use std::path::PathBuf;
+use x402_gateway::middleware::{endpoint_requirements, require_payment};
+
+use crate::state::NodeState;
 
 /// Directory where endpoint scripts live (persistent volume).
 const SCRIPTS_DIR: &str = "/data/endpoints";
@@ -26,11 +30,16 @@ struct ScriptEndpoint {
     method: String,
 }
 
+/// Default price for script endpoints: $0.001 (1000 units at 6 decimals).
+const DEFAULT_SCRIPT_PRICE: &str = "$0.001";
+const DEFAULT_SCRIPT_AMOUNT: &str = "1000";
+
 /// `GET/POST /x/{slug}` — execute the script for this endpoint.
 pub async fn handle_script(
     req: HttpRequest,
     path: web::Path<String>,
     body: web::Bytes,
+    state: web::Data<NodeState>,
 ) -> HttpResponse {
     let slug = path.into_inner();
 
@@ -52,6 +61,55 @@ pub async fn handle_script(
         }));
     }
 
+    // ── x402 payment gate ────────────────────────────────────────────
+    // Look up pricing from the gateway DB (auto-registered on startup),
+    // fall back to default pricing if not found.
+    let (price_usd, price_amount, owner_address) =
+        match state.gateway.db.get_endpoint(&format!("script-{slug}")) {
+            Ok(Some(ep)) => (ep.price_usd, ep.price_amount, ep.owner_address),
+            _ => (
+                DEFAULT_SCRIPT_PRICE.to_string(),
+                DEFAULT_SCRIPT_AMOUNT.to_string(),
+                std::env::var("EVM_ADDRESS").unwrap_or_default(),
+            ),
+        };
+
+    if !owner_address.is_empty() {
+        if let Ok(owner) = owner_address.parse::<Address>() {
+            let requirements = endpoint_requirements(
+                owner,
+                &price_usd,
+                &price_amount,
+                Some(&format!("Script endpoint: /x/{slug}")),
+            );
+
+            let settle = match require_payment(
+                &req,
+                requirements,
+                &state.gateway.http_client,
+                &state.gateway.config.facilitator_url,
+                state.gateway.config.hmac_secret.as_deref(),
+                state.gateway.facilitator.as_deref(),
+            )
+            .await
+            {
+                Ok(s) => Some(s),
+                Err(http_response) => return http_response,
+            };
+
+            // Record payment stats
+            if settle.is_some() {
+                if let Err(e) = state
+                    .gateway
+                    .db
+                    .record_payment(&format!("script-{slug}"), &price_amount)
+                {
+                    tracing::warn!(slug = %slug, error = %e, "Failed to record script payment");
+                }
+            }
+        }
+    }
+
     // Build environment for the script
     let method = req.method().to_string();
     let query = req.query_string().to_string();
@@ -61,7 +119,10 @@ pub async fn handle_script(
     let mut headers_json = serde_json::Map::new();
     for (name, value) in req.headers() {
         if let Ok(val_str) = value.to_str() {
-            headers_json.insert(name.to_string(), serde_json::Value::String(val_str.to_string()));
+            headers_json.insert(
+                name.to_string(),
+                serde_json::Value::String(val_str.to_string()),
+            );
         }
     }
     let headers_str = serde_json::to_string(&headers_json).unwrap_or_default();
@@ -73,7 +134,10 @@ pub async fn handle_script(
         tokio::process::Command::new("bash")
             .arg(script_path.to_str().unwrap_or_default())
             .env_clear()
-            .env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+            .env(
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
             .env("HOME", "/tmp")
             .env("LANG", "C.UTF-8")
             .env("REQUEST_METHOD", &method)
@@ -156,13 +220,12 @@ pub async fn list_scripts() -> HttpResponse {
             if path.extension().is_some_and(|ext| ext == "sh") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     // Try to read first line as description (# comment)
-                    let description = std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|content| {
-                            content.lines().next().and_then(|line| {
-                                line.strip_prefix("# ").map(String::from)
-                            })
-                        });
+                    let description = std::fs::read_to_string(&path).ok().and_then(|content| {
+                        content
+                            .lines()
+                            .next()
+                            .and_then(|line| line.strip_prefix("# ").map(String::from))
+                    });
 
                     endpoints.push(ScriptEndpoint {
                         slug: stem.to_string(),
@@ -182,6 +245,7 @@ pub async fn list_scripts() -> HttpResponse {
 }
 
 /// Configure script endpoint routes.
+/// Note: handle_script expects `web::Data<NodeState>` for x402 payment checks.
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/x", web::get().to(list_scripts))
         .route("/x/{slug}", web::get().to(handle_script))

@@ -203,6 +203,47 @@ async fn main() -> std::io::Result<()> {
                 Err(_) => tracing::debug!(slug, "Endpoint already exists, skipping"),
             }
         }
+
+        // Auto-register existing script endpoints with default pricing
+        let scripts_dir = std::path::Path::new("/data/endpoints");
+        if scripts_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(scripts_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|ext| ext == "sh") {
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            let script_slug = format!("script-{stem}");
+                            let target = format!("{}/x/{stem}", self_url);
+                            // Read first line as description
+                            let desc = std::fs::read_to_string(&path)
+                                .ok()
+                                .and_then(|content| {
+                                    content
+                                        .lines()
+                                        .next()
+                                        .and_then(|line| line.strip_prefix("# ").map(String::from))
+                                })
+                                .unwrap_or_else(|| format!("Script endpoint: {stem}"));
+                            match gateway_db.create_endpoint(
+                                &script_slug,
+                                &owner,
+                                &target,
+                                "$0.001",
+                                "1000",
+                                Some(&desc),
+                            ) {
+                                Ok(_) => {
+                                    tracing::info!(slug = %script_slug, "Auto-registered script endpoint")
+                                }
+                                Err(_) => {
+                                    tracing::debug!(slug = %script_slug, "Script endpoint already registered")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── Gateway state ───────────────────────────────────────────────────
@@ -217,11 +258,42 @@ async fn main() -> std::io::Result<()> {
         (Some(token), Some(project_id), Some(image)) => {
             tracing::info!("Clone orchestrator: enabled (image: {})", image);
             let railway = RailwayClient::new(token, project_id);
+            let clone_cpu: u32 = std::env::var("CLONE_CPU_MILLICORES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2000);
+            let clone_mem: u32 = std::env::var("CLONE_MEMORY_MB")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2048);
+
+            // Build child env vars from parent's soul-related env vars
+            let mut child_env_vars = std::collections::HashMap::new();
+            // Children get a higher cycle multiplier (slower thinking, lower cost)
+            let child_multiplier =
+                std::env::var("CLONE_CYCLE_MULTIPLIER").unwrap_or_else(|_| "3.0".to_string());
+            child_env_vars.insert("SOUL_CYCLE_MULTIPLIER".into(), child_multiplier);
+            // Pass through essential soul config
+            if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+                child_env_vars.insert("GEMINI_API_KEY".into(), key);
+            }
+            child_env_vars.insert("SOUL_CODING_ENABLED".into(), "true".into());
+            child_env_vars.insert("SOUL_DB_PATH".into(), "/data/soul.db".into());
+            if let Ok(fork) = std::env::var("SOUL_FORK_REPO") {
+                child_env_vars.insert("SOUL_FORK_REPO".into(), fork);
+            }
+            if let Ok(upstream) = std::env::var("SOUL_UPSTREAM_REPO") {
+                child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), upstream);
+            }
+
             let clone_config = CloneConfig {
                 docker_image: image,
                 rpc_url: rpc_url.clone(),
                 self_url: self_url.clone(),
                 max_children: clone_max_children,
+                clone_cpu_millicores: clone_cpu,
+                clone_memory_mb: clone_mem,
+                child_env_vars,
             };
             Some(Arc::new(CloneOrchestrator::new(railway, clone_config)))
         }

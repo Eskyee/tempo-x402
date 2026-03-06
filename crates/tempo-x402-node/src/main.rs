@@ -478,61 +478,105 @@ async fn main() -> std::io::Result<()> {
             }
         });
 
-        // ERC-8004 auto-mint (if enabled and no token ID yet)
+        // ERC-8004 auto-deploy + auto-mint (if enabled and no token ID yet)
         #[cfg(feature = "erc8004")]
         if x402_erc8004::auto_mint_enabled() && id.agent_token_id.is_none() {
-            let identity_registry = x402_erc8004::identity_registry();
-            if identity_registry != alloy::primitives::Address::ZERO {
-                let rpc_clone = rpc_url.clone();
-                let owner = id.address;
-                let metadata_uri = format!("{}/instance/info", self_url);
-                let identity_path = std::env::var("IDENTITY_PATH")
-                    .unwrap_or_else(|_| "/data/identity.json".to_string());
-                let mut id_clone = id.clone();
-                let private_key = id.private_key.clone();
-                tokio::spawn(async move {
-                    // Wait for faucet to fund the wallet first
-                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            // Try loading previously deployed registries from disk
+            let registries_path = std::env::var("ERC8004_REGISTRIES_PATH")
+                .unwrap_or_else(|_| "/data/erc8004_registries.json".to_string());
+            x402_erc8004::load_persisted_registries(&registries_path);
 
-                    tracing::info!("ERC-8004: attempting to mint agent identity NFT");
-                    let signer: alloy::signers::local::PrivateKeySigner = private_key
-                        .strip_prefix("0x")
-                        .unwrap_or(&private_key)
-                        .parse()
-                        .expect("invalid private key");
-                    let wallet = alloy::network::EthereumWallet::from(signer);
-                    let provider = alloy::providers::ProviderBuilder::new()
-                        .wallet(wallet)
-                        .connect_http(rpc_clone.parse().expect("invalid RPC URL"));
-                    match x402_erc8004::identity::mint(
-                        &provider,
-                        identity_registry,
-                        owner,
-                        &metadata_uri,
-                    )
-                    .await
-                    {
-                        Ok(agent_id) => {
+            let rpc_clone = rpc_url.clone();
+            let owner = id.address;
+            let metadata_uri = format!("{}/instance/info", self_url);
+            let identity_path = std::env::var("IDENTITY_PATH")
+                .unwrap_or_else(|_| "/data/identity.json".to_string());
+            let mut id_clone = id.clone();
+            let private_key = id.private_key.clone();
+            let reg_path = registries_path.clone();
+            tokio::spawn(async move {
+                // Wait for faucet to fund the wallet first
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
+                let signer: alloy::signers::local::PrivateKeySigner = private_key
+                    .strip_prefix("0x")
+                    .unwrap_or(&private_key)
+                    .parse()
+                    .expect("invalid private key");
+                let wallet = alloy::network::EthereumWallet::from(signer);
+                let provider = alloy::providers::ProviderBuilder::new()
+                    .wallet(wallet)
+                    .connect_http(rpc_clone.parse().expect("invalid RPC URL"));
+
+                // If no identity registry is configured, self-deploy contracts
+                let mut identity_registry = x402_erc8004::identity_registry();
+                if identity_registry == alloy::primitives::Address::ZERO {
+                    tracing::info!(
+                        "ERC-8004: no registry addresses configured — self-deploying contracts"
+                    );
+                    match x402_erc8004::deploy::deploy_all(&provider).await {
+                        Ok(registries) => {
                             tracing::info!(
-                                token_id = %agent_id,
-                                "ERC-8004: agent identity minted"
+                                identity = %registries.identity,
+                                reputation = %registries.reputation,
+                                validation = %registries.validation,
+                                "ERC-8004: contracts deployed"
                             );
-                            if let Err(e) = x402_identity::save_agent_token_id(
-                                &identity_path,
-                                &mut id_clone,
-                                &agent_id.to_string(),
-                            ) {
-                                tracing::warn!("Failed to persist agent token ID: {e}");
+                            // Set env vars so the rest of startup picks them up
+                            std::env::set_var(
+                                "ERC8004_IDENTITY_REGISTRY",
+                                format!("{:#x}", registries.identity),
+                            );
+                            std::env::set_var(
+                                "ERC8004_REPUTATION_REGISTRY",
+                                format!("{:#x}", registries.reputation),
+                            );
+                            std::env::set_var(
+                                "ERC8004_VALIDATION_REGISTRY",
+                                format!("{:#x}", registries.validation),
+                            );
+                            identity_registry = registries.identity;
+                            // Persist to disk for next restart
+                            if let Err(e) =
+                                x402_erc8004::save_deployed_registries(&reg_path, &registries)
+                            {
+                                tracing::warn!("Failed to persist registry addresses: {e}");
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("ERC-8004 mint failed (non-fatal): {e}");
+                            tracing::warn!("ERC-8004 contract deployment failed (non-fatal): {e}");
+                            return;
                         }
                     }
-                });
-            } else {
-                tracing::debug!("ERC-8004: auto-mint enabled but no identity registry configured");
-            }
+                }
+
+                tracing::info!("ERC-8004: attempting to mint agent identity NFT");
+                match x402_erc8004::identity::mint(
+                    &provider,
+                    identity_registry,
+                    owner,
+                    &metadata_uri,
+                )
+                .await
+                {
+                    Ok(agent_id) => {
+                        tracing::info!(
+                            token_id = %agent_id,
+                            "ERC-8004: agent identity minted"
+                        );
+                        if let Err(e) = x402_identity::save_agent_token_id(
+                            &identity_path,
+                            &mut id_clone,
+                            &agent_id.to_string(),
+                        ) {
+                            tracing::warn!("Failed to persist agent token ID: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("ERC-8004 mint failed (non-fatal): {e}");
+                    }
+                }
+            });
         }
 
         // Parent registration (if PARENT_URL set)

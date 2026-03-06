@@ -17,6 +17,7 @@ One crate, three registry modules. Contracts share alloy, chain config, and depl
 - `validation.rs` — register_validator, remove_validator, execute_with_validation
 - `types.rs` — AgentId, ReputationScore, AgentMetadata
 - `recovery.rs` — Recovery proof construction + verification using x402-wallet
+- `deploy.rs` — Self-deployment of all 3 contracts from embedded compiled bytecode
 
 ## Non-Obvious Patterns
 
@@ -24,6 +25,8 @@ One crate, three registry modules. Contracts share alloy, chain config, and depl
 - Follows `tip20.rs` pattern: timeout-wrapped send + receipt, revert checks
 - Recovery proofs use EIP-191 sign_message from x402-wallet (WASM-safe crypto)
 - All chain calls are async + tokio timeout-guarded
+- Self-deploy: node deploys its own contracts when `ERC8004_AUTO_MINT=true` and no registry addresses configured
+- Deployed addresses persisted to `/data/erc8004_registries.json` (configurable via `ERC8004_REGISTRIES_PATH`)
 
 ## If You're Changing...
 

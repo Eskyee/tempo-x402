@@ -633,6 +633,33 @@ async fn abandon_goal(
     }
 }
 
+/// POST /soul/reset — clear historical dead weight (thoughts, failed plans, counters).
+/// Keeps active goals, beliefs, and active plans.
+async fn soul_reset(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}));
+        }
+    };
+
+    match soul_db.reset_history() {
+        Ok((thoughts, plans, nudges)) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "ok",
+            "deleted": {
+                "thoughts": thoughts,
+                "plans": plans,
+                "nudges": nudges,
+            },
+            "kept": "active goals, active beliefs, active plans"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("reset failed: {e}")
+        })),
+    }
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/soul/status", web::get().to(soul_status))
         .route("/soul/chat", web::post().to(soul_chat))
@@ -647,5 +674,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             "/soul/goals/abandon-all",
             web::post().to(abandon_all_goals),
         )
-        .route("/soul/goals/abandon", web::post().to(abandon_goal));
+        .route("/soul/goals/abandon", web::post().to(abandon_goal))
+        .route("/soul/reset", web::post().to(soul_reset));
 }

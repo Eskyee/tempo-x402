@@ -1168,6 +1168,57 @@ impl SoulDatabase {
         Ok(count)
     }
 
+    /// Reset historical data: clear old thoughts, failed/completed plans, processed nudges,
+    /// and reset cycle counters. Keeps: active goals, active beliefs, active plans.
+    /// Returns counts of what was deleted.
+    pub fn reset_history(&self) -> Result<(u64, u64, u64), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        // Delete all thoughts (they accumulate endlessly)
+        let thoughts_deleted: u64 = conn
+            .execute("DELETE FROM thoughts", [])
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(0);
+
+        // Delete completed, failed, and abandoned plans (keep active ones)
+        let plans_deleted: u64 = conn
+            .execute(
+                "DELETE FROM plans WHERE status IN ('completed', 'failed', 'abandoned')",
+                [],
+            )
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(0);
+
+        // Delete processed nudges
+        let nudges_deleted: u64 = conn
+            .execute("DELETE FROM nudges WHERE processed = 1", [])
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(0);
+
+        // Reset cycle counters
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO soul_state (key, value) VALUES ('total_think_cycles', '0')",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO soul_state (key, value) VALUES ('cycles_since_last_commit', '0')",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO soul_state (key, value) VALUES ('recent_errors', '[]')",
+            [],
+        );
+
+        Ok((thoughts_deleted, plans_deleted, nudges_deleted))
+    }
+
     // ── Nudge operations ──
 
     /// Insert a nudge. Returns the generated ID.

@@ -540,39 +540,74 @@ impl<'a> PlanExecutor<'a> {
         ))
     }
 
-    /// Execute a Think step — ask LLM a focused question.
+    /// Execute a Think step — ask LLM a question WITH tool access.
+    /// The LLM can read files, search, list directories, and run shell commands
+    /// to investigate before answering. This is how adaptive investigation works.
     async fn execute_think_step(
         &self,
         question: &str,
         plan_context: &HashMap<String, String>,
     ) -> StepResult {
-        // Include relevant context in the question
-        let full_question = if plan_context.is_empty() {
-            question.to_string()
+        let mut context_parts = Vec::new();
+        for (k, v) in plan_context {
+            let truncated = if v.len() > 1000 {
+                format!("{}...", &v[..1000])
+            } else {
+                v.clone()
+            };
+            context_parts.push(format!("{k}: {truncated}"));
+        }
+        let context_section = if context_parts.is_empty() {
+            String::new()
         } else {
-            let ctx: Vec<String> = plan_context
-                .iter()
-                .map(|(k, v)| {
-                    let truncated = if v.len() > 1000 {
-                        format!("{}...", &v[..1000])
-                    } else {
-                        v.clone()
-                    };
-                    format!("{k}: {truncated}")
-                })
-                .collect();
-            format!("{question}\n\nContext:\n{}", ctx.join("\n"))
+            format!("\n\nContext from previous steps:\n{}", context_parts.join("\n"))
         };
 
-        match self
-            .llm
-            .think(
-                "You are a software engineering assistant. Answer concisely and specifically.",
-                &full_question,
-            )
-            .await
+        let prompt = format!(
+            "# Question\n{question}{context_section}\n\n\
+             Investigate using the available tools (read_file, search_files, list_directory, \
+             execute_shell) to gather information, then provide a concise answer.\n\
+             Your final text response will be stored as the answer."
+        );
+
+        let system_prompt = "You are a software engineering investigator. \
+            Use tools to read files, search code, and run commands to answer the question. \
+            Be concise and specific in your final answer.";
+
+        // Give Think steps read-only tools + shell for investigation
+        let investigate_tools: Vec<_> = tools::available_tools_with_git(false)
+            .into_iter()
+            .filter(|t| {
+                matches!(
+                    t.name.as_str(),
+                    "read_file"
+                        | "list_directory"
+                        | "search_files"
+                        | "execute_shell"
+                        | "check_self"
+                )
+            })
+            .collect();
+
+        let mut conversation = vec![ConversationMessage {
+            role: "user".to_string(),
+            parts: vec![ConversationPart::Text(prompt)],
+        }];
+
+        let use_deep = self.config.direct_push && self.config.autonomous_coding;
+        match crate::thinking::run_tool_loop_with_model(
+            self.llm,
+            system_prompt,
+            &mut conversation,
+            &investigate_tools,
+            self.tool_executor,
+            self.db,
+            10, // investigation budget
+            use_deep,
+        )
+        .await
         {
-            Ok(answer) => StepResult::Success(answer),
+            Ok(result) => StepResult::Success(result.text),
             Err(e) => StepResult::Failed(format!("LLM think failed: {e}")),
         }
     }

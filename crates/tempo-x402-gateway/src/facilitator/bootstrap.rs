@@ -8,8 +8,8 @@ use std::sync::Arc;
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
 
-use crate::state::AppState;
-use crate::webhook;
+use super::state::AppState;
+use super::webhook;
 
 /// Configuration for bootstrapping an embedded facilitator.
 pub struct BootstrapConfig<'a> {

@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">tempo-x402</h1>
-  <p align="center">Security-hardened, ultra-fast pay-per-request APIs on the Tempo blockchain &mdash; one HTTP header, one on-chain transfer, zero custodial risk.</p>
+  <p align="center">Pay-per-request APIs on the Tempo blockchain &mdash; one HTTP header, one on-chain transfer, zero custodial risk. Self-deploying nodes with autonomous cognition.</p>
 </p>
 
 <p align="center">
@@ -64,15 +64,14 @@ Client                     Server                    Facilitator               C
 ### Install
 
 ```bash
-cargo add tempo-x402          # core types + traits
-cargo add tempo-x402-client   # client SDK (optional)
+cargo add tempo-x402   # core: types, traits, signing, client SDK, WASM wallet
 ```
 
 ### Make a paid request
 
 ```rust
 use alloy::signers::local::PrivateKeySigner;
-use x402_client::{TempoSchemeClient, X402Client};
+use x402::client::{TempoSchemeClient, X402Client};
 
 #[tokio::main]
 async fn main() {
@@ -89,17 +88,6 @@ async fn main() {
         println!("tx: {}", s.transaction.unwrap_or_default());
     }
 }
-```
-
-### Gate an endpoint (server-side)
-
-```rust
-use x402_server::config::PaymentConfigBuilder;
-
-let config = PaymentConfigBuilder::new(facilitator_url, recipient_address)
-    .route("GET", "/premium", "$0.01", "Premium content")
-    .route("POST", "/generate", "$0.05", "AI generation")
-    .build();
 ```
 
 ### Monetize any API via the gateway
@@ -124,34 +112,37 @@ Target APIs receive verification headers: `X-X402-Verified`, `X-X402-Payer`, `X-
 
 ```
 crates/
-├── tempo-x402/                # Core: types, EIP-712, TIP-20, nonce store, HMAC, traits
-├── tempo-x402-client/         # Client SDK + CLI for making paid requests
-├── tempo-x402-server/         # Resource server with payment middleware (actix-web)
-├── tempo-x402-facilitator/    # Payment verification + on-chain settlement (actix-web)
-├── tempo-x402-gateway/        # API proxy: register endpoints, pay-per-request routing
-├── tempo-x402-wallet/         # WASM-compatible wallet: key gen + EIP-712 signing
-├── tempo-x402-node/           # Self-deploying node: gateway + identity + clone orchestration
-├── tempo-x402-identity/       # Wallet generation, persistence, faucet, parent registration
-├── tempo-x402-agent/          # Railway API client + clone lifecycle management
-├── tempo-x402-soul/           # Agentic thinking loop with neuroplastic memory + agent-to-agent economy tools
-├── tempo-x402-mind/           # Lateralized dual-soul: left (analytical) + right (holistic) + callosum
-├── tempo-x402-app/            # Leptos WASM demo SPA (not published)
-└── tempo-x402-security-audit/ # 15 security invariant tests enforced on every build
+├── tempo-x402/                # Core: types, EIP-712, TIP-20, nonce store, HMAC, wallet, client SDK
+├── tempo-x402-gateway/        # API gateway + embedded facilitator + payment middleware
+├── tempo-x402-identity/       # Agent identity: wallet gen, persistence, faucet, ERC-8004 on-chain
+├── tempo-x402-soul/           # Autonomous cognition: plan-driven execution, neuroplastic memory
+├── tempo-x402-node/           # Self-deploying node: gateway + identity + clone orchestration + soul
+├── tempo-x402-app/            # Leptos WASM dashboard (not published)
+└── tempo-x402-security-audit/ # Security invariant tests enforced on every build (not published)
 ```
 
 | Crate | What it does | Install |
 |-------|-------------|---------|
-| [`tempo-x402`](https://docs.rs/tempo-x402) | Core library &mdash; types, EIP-712, TIP-20, nonce store, HMAC | `cargo add tempo-x402` |
-| [`tempo-x402-client`](https://docs.rs/tempo-x402-client) | Client SDK for making paid API requests | `cargo add tempo-x402-client` |
-| [`tempo-x402-server`](https://docs.rs/tempo-x402-server) | Resource server with payment middleware | `cargo add tempo-x402-server` |
-| [`tempo-x402-facilitator`](https://docs.rs/tempo-x402-facilitator) | Payment verification and on-chain settlement | `cargo add tempo-x402-facilitator` |
-| [`tempo-x402-gateway`](https://docs.rs/tempo-x402-gateway) | API gateway &mdash; proxy any HTTP API with payment rails | `cargo add tempo-x402-gateway` |
-| [`tempo-x402-wallet`](https://docs.rs/tempo-x402-wallet) | WASM-compatible wallet for browsers and edge runtimes | `cargo add tempo-x402-wallet` |
-| [`tempo-x402-node`](https://docs.rs/tempo-x402-node) | Self-deploying node with clone orchestration | `cargo add tempo-x402-node` |
-| [`tempo-x402-identity`](https://docs.rs/tempo-x402-identity) | Wallet generation, persistence, faucet funding | `cargo add tempo-x402-identity` |
-| [`tempo-x402-agent`](https://docs.rs/tempo-x402-agent) | Railway API client + clone spawning | `cargo add tempo-x402-agent` |
-| [`tempo-x402-soul`](https://docs.rs/tempo-x402-soul) | Agentic thinking loop with neuroplastic memory + prediction error learning | `cargo add tempo-x402-soul` |
-| [`tempo-x402-mind`](https://docs.rs/tempo-x402-mind) | Lateralized dual-soul architecture (left/right hemispheres + callosum) | `cargo add tempo-x402-mind` |
+| [`tempo-x402`](https://docs.rs/tempo-x402) | Core library &mdash; types, EIP-712, TIP-20, nonce store, HMAC, WASM wallet, client SDK | `cargo add tempo-x402` |
+| [`tempo-x402-gateway`](https://docs.rs/tempo-x402-gateway) | API gateway with embedded facilitator, proxy routing, endpoint registration | `cargo add tempo-x402-gateway` |
+| [`tempo-x402-identity`](https://docs.rs/tempo-x402-identity) | Agent identity &mdash; wallet generation, persistence, faucet, ERC-8004 on-chain identity | `cargo add tempo-x402-identity` |
+| [`tempo-x402-soul`](https://docs.rs/tempo-x402-soul) | Autonomous cognition &mdash; plan-driven execution, neuroplastic memory, coding agent | `cargo add tempo-x402-soul` |
+| [`tempo-x402-node`](https://docs.rs/tempo-x402-node) | Self-deploying node with clone orchestration and soul integration | `cargo add tempo-x402-node` |
+
+### Feature flags
+
+**`tempo-x402`** (core):
+- `full` (default) &mdash; all features including async runtime, SQLite, HTTP client
+- `wasm` &mdash; WASM-compatible subset: types, EIP-712 signing, wallet (no tokio/rusqlite)
+- `demo` &mdash; includes demo private key for testing
+
+**`tempo-x402-identity`**:
+- `erc8004` (default) &mdash; on-chain agent identity (ERC-8004 contracts, reputation, validation)
+
+**`tempo-x402-node`**:
+- `soul` (default) &mdash; autonomous thinking loop
+- `agent` (default) &mdash; Railway clone orchestration
+- `erc8004` &mdash; on-chain agent identity features
 
 ## Gateway API
 
@@ -169,10 +160,27 @@ The gateway lets you monetize any HTTP API without modifying its source code.
 | `ANY` | `/g/:slug/*` | Endpoint price | Proxy to target API |
 | `GET` | `/soul/status` | Free | Soul thinking loop status (node only) |
 | `POST` | `/soul/chat` | Free | Interactive chat with the soul (node only) |
-| `GET` | `/mind/status` | Free | Dual-soul status — both hemispheres (node only, `MIND_ENABLED`) |
-| `POST` | `/mind/chat` | Free | Chat routed to left hemisphere (node only, `MIND_ENABLED`) |
+| `POST` | `/soul/nudge` | Free | Send a nudge to the soul (node only) |
+| `GET` | `/soul/plan/pending` | Free | Check for plans awaiting approval (node only) |
 | `GET` | `/health` | Free | Health check |
 | `GET` | `/metrics` | Bearer token | Prometheus metrics |
+
+## Self-Deploying Nodes
+
+Nodes are autonomous agents that:
+- **Bootstrap identity** &mdash; generate wallet, fund via faucet, register with parent
+- **Run a gateway** &mdash; serve endpoints, process payments, proxy APIs
+- **Think autonomously** &mdash; plan-driven execution loop powered by Gemini, with neuroplastic memory
+- **Create services** &mdash; introspective endpoints that expose the node's own capabilities
+- **Clone themselves** &mdash; spawn copies on Railway infrastructure
+
+The soul's cognition includes:
+- **Plan-driven execution** &mdash; goals decompose into deterministic step sequences
+- **Neuroplastic memory** &mdash; salience scoring, tiered decay, prediction error learning
+- **World model** &mdash; structured beliefs about self, endpoints, codebase, strategy
+- **Coding agent** &mdash; read, write, edit files, run shell commands, git commit, push
+- **Script endpoints** &mdash; create instant bash-based HTTP endpoints (no compilation)
+- **ERC-8004 identity** &mdash; on-chain agent NFTs, reputation, validation
 
 ## Network
 
@@ -208,38 +216,34 @@ tip20::approve(&provider, token, facilitator_address, amount).await?;
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `EVM_ADDRESS` | server | Payment recipient address |
+| `EVM_ADDRESS` | gateway | Payment recipient address |
 | `EVM_PRIVATE_KEY` | client | Client wallet private key |
-| `FACILITATOR_URL` | server | Facilitator endpoint (default: `localhost:4022`) |
-| `FACILITATOR_PRIVATE_KEY` | facilitator, gateway, node | Facilitator wallet key |
+| `FACILITATOR_PRIVATE_KEY` | gateway, node | Facilitator wallet key |
 | `FACILITATOR_ADDRESS` | approve | Facilitator address for token approval |
-| `FACILITATOR_SHARED_SECRET` | server, facilitator | HMAC shared secret for request auth |
-| `RESOURCE_SERVER_URL` | client | Server endpoint (default: `localhost:4021`) |
+| `FACILITATOR_SHARED_SECRET` | gateway | HMAC shared secret for request auth |
 | `RPC_URL` | all | Tempo RPC endpoint |
-| `ALLOWED_ORIGINS` | server, facilitator | Comma-separated CORS origins |
-| `RATE_LIMIT_RPM` | server, facilitator | Rate limit per minute per IP |
-| `METRICS_TOKEN` | server, facilitator, gateway | Bearer token for `/metrics` endpoint |
-| `WEBHOOK_URLS` | facilitator, gateway | Comma-separated settlement webhook URLs |
+| `ALLOWED_ORIGINS` | gateway | Comma-separated CORS origins |
+| `RATE_LIMIT_RPM` | gateway | Rate limit per minute per IP |
+| `METRICS_TOKEN` | gateway | Bearer token for `/metrics` endpoint |
+| `WEBHOOK_URLS` | gateway | Comma-separated settlement webhook URLs |
 | `GEMINI_API_KEY` | node | Gemini API key for soul thinking (dormant without it) |
 | `SOUL_DB_PATH` | node | Soul database path (default: `./soul.db`) |
 | `SOUL_CODING_ENABLED` | node | Enable soul file write/edit/commit tools (default: `false`) |
-| `SOUL_DYNAMIC_TOOLS_ENABLED` | node | Enable dynamic tool registry (default: `false`) |
-| `SOUL_NEUROPLASTIC` | node | Enable neuroplastic memory: salience, decay, prediction (default: `true`) |
+| `SOUL_NEUROPLASTIC` | node | Enable neuroplastic memory (default: `true`) |
 | `HEALTH_PROBE_INTERVAL_SECS` | node | Health probe loop interval in seconds (default: `300`) |
 | `SOUL_MEMORY_FILE` | node | Path to persistent memory file (default: `/data/soul_memory.md`) |
 | `GATEWAY_URL` | node | Gateway URL for soul endpoint registration (default: `http://localhost:4023`) |
-| `MIND_ENABLED` | node | Enable dual-soul architecture (default: `false`) |
 
 ## Security
 
-This project enforces security invariants through automated testing. The `tempo-x402-security-audit` crate runs 15 tests on every build that scan all production source code for:
+The `tempo-x402-security-audit` crate runs invariant tests on every build that scan all production source code for:
 
 - No hardcoded private keys in production code
 - HMAC verification reaches constant-time comparison on all paths (via `subtle` crate)
 - All `reqwest` HTTP clients disable redirects (SSRF protection)
-- Webhook URLs require HTTPS with private IP blocking and DNS rebinding prevention
-- HTTP error responses never leak internal details (balances, allowances, stack traces)
-- SQLite nonce store is mandatory in production (no in-memory fallback)
+- Webhook URLs require HTTPS with private IP blocking
+- HTTP error responses never leak internal details
+- SQLite nonce store is mandatory in production
 - Parameterized SQL queries only (no string formatting)
 - HMAC shared secret is mandatory (not `Option`)
 - Private keys never appear in tracing/logging macros
@@ -257,9 +261,8 @@ Additional hardening:
 
 | Service | URL |
 |---------|-----|
-| Server | https://x402-server-production.up.railway.app |
-| Facilitator | https://x402-facilitator-production-ec87.up.railway.app |
 | Gateway | https://x402-gateway-production-5018.up.railway.app |
+| Soul Bot | https://soul-bot-production.up.railway.app |
 
 Health check: `GET /health` on any service.
 
@@ -272,7 +275,7 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```
 
-OpenAPI 3.1 specs are available in the `openapi/` directory for the facilitator, server, and gateway.
+OpenAPI 3.1 specs are available in the `openapi/` directory.
 
 ## License
 

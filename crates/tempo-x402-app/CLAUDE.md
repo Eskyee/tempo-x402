@@ -2,13 +2,13 @@
 
 Leptos WASM SPA. Not published. Each gateway/node instance serves its own bundled WASM frontend.
 
-Demo app with three wallet modes (MetaMask, demo key, encrypted embedded wallet). Makes paid requests to the gateway, shows settlement info.
+Node dashboard with three wallet modes (MetaMask, demo key, encrypted embedded wallet). Makes paid requests to the gateway, shows soul status/goals/plans, interactive chat.
 
 Crate type: `["cdylib", "rlib"]` — compiles to WASM, no binary.
 
 ## Depends On
 
-- `x402-wallet` (with `demo` feature — signing, key gen, constants)
+- `x402` (with `wasm` + `demo` features — wallet signing, key gen, constants)
 
 ## Non-Obvious Patterns
 

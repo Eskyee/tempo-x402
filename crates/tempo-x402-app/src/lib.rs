@@ -76,7 +76,7 @@ pub fn App() -> impl IntoView {
         <Html lang="en" />
         <Meta charset="utf-8" />
         <Meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Title text="x402 Demo - Pay-per-Request APIs" />
+        <Title text="x402 - Autonomous Pay-per-Request Node" />
         <Stylesheet href="/style.css" />
 
         <Router>
@@ -910,7 +910,7 @@ fn DashboardPage() -> impl IntoView {
     view! {
         <div class="page dashboard">
             <div class="dashboard-header">
-                <h1>"Network Dashboard"</h1>
+                <h1>"Node Dashboard"</h1>
                 <div class="live-badge">
                     <span class="live-dot"></span>
                     "Live"
@@ -1267,6 +1267,138 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                         } else {
                             None
                         }}
+
+                        // Active goals
+                        {
+                            let goals = data.get("goals")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            if !goals.is_empty() {
+                                Some(view! {
+                                    <div class="soul-goals">
+                                        <h3>"Active Goals"</h3>
+                                        {goals.iter().map(|g| {
+                                            let desc = g.get("description")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("?")
+                                                .to_string();
+                                            let status = g.get("status")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown")
+                                                .to_string();
+                                            let priority = g.get("priority")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let retry_count = g.get("retry_count")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let status_class = match status.as_str() {
+                                                "active" => "goal-status--active",
+                                                "completed" => "goal-status--completed",
+                                                "abandoned" => "goal-status--abandoned",
+                                                _ => "goal-status--unknown",
+                                            };
+                                            let truncated = if desc.len() > 100 {
+                                                format!("{}...", &desc[..100])
+                                            } else {
+                                                desc
+                                            };
+                                            view! {
+                                                <div class="soul-goal">
+                                                    <span class={format!("goal-status-badge {}", status_class)}>
+                                                        {status.clone()}
+                                                    </span>
+                                                    <span class="goal-priority">
+                                                        {"P".to_string() + &priority.to_string()}
+                                                    </span>
+                                                    <span class="goal-desc">{truncated}</span>
+                                                    {if retry_count > 0 {
+                                                        Some(view! {
+                                                            <span class="goal-retries">
+                                                                {format!("({} retries)", retry_count)}
+                                                            </span>
+                                                        })
+                                                    } else {
+                                                        None
+                                                    }}
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
+
+                        // Active plan progress
+                        {
+                            let plan = data.get("active_plan");
+                            if let Some(p) = plan {
+                                let plan_status = p.get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                let current_step = p.get("current_step")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let total_steps = p.get("total_steps")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let replan_count = p.get("replan_count")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let plan_class = match plan_status.as_str() {
+                                    "executing" => "plan-status--executing",
+                                    "pending_approval" => "plan-status--pending",
+                                    "completed" => "plan-status--completed",
+                                    "failed" => "plan-status--failed",
+                                    _ => "",
+                                };
+                                let progress_pct = if total_steps > 0 {
+                                    (current_step as f64 / total_steps as f64 * 100.0) as u64
+                                } else {
+                                    0
+                                };
+                                Some(view! {
+                                    <div class="soul-plan">
+                                        <h3>"Active Plan"</h3>
+                                        <div class="plan-info">
+                                            <span class={format!("plan-status-badge {}", plan_class)}>
+                                                {plan_status}
+                                            </span>
+                                            <span class="plan-progress-text">
+                                                {format!("Step {}/{}", current_step, total_steps)}
+                                            </span>
+                                            {if replan_count > 0 {
+                                                Some(view! {
+                                                    <span class="plan-replan">
+                                                        {format!("(replan #{})", replan_count)}
+                                                    </span>
+                                                })
+                                            } else {
+                                                None
+                                            }}
+                                        </div>
+                                        <div class="plan-progress-bar">
+                                            <div class="plan-progress-fill"
+                                                style=format!("width: {}%", progress_pct)>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }.into_view())
+                            } else if active && !dormant {
+                                Some(view! {
+                                    <div class="soul-plan">
+                                        <h3>"Active Plan"</h3>
+                                        <p class="soul-muted">"No active plan — waiting for next cycle"</p>
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
 
                         // Nudge form
                         {if active && !dormant {
@@ -1736,7 +1868,7 @@ fn Footer() -> impl IntoView {
                 <a href="https://github.com/compusophy/tempo-x402">"tempo-x402"</a>
                 " on Tempo Moderato"
             </p>
-            <p class="footer-version">"v1.1.0"</p>
+            <p class="footer-version">"v1.4.0"</p>
         </footer>
     }
 }

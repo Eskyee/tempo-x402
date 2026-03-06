@@ -221,8 +221,8 @@ impl SoulConfig {
         let cycle_multiplier: f64 = std::env::var("SOUL_CYCLE_MULTIPLIER")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(1.0)
-            .max(0.1); // floor at 0.1 to prevent zero/negative intervals
+            .unwrap_or(1.0_f64)
+            .max(0.1);
 
         Ok(Self {
             llm_api_key,

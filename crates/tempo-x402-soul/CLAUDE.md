@@ -56,7 +56,7 @@ No dependency on gateway/identity/agent/node. Communicates via `NodeObserver` tr
 4. **Get/Create Plan** — check DB for active plan; if none, call LLM to create one (nudges + diagnostics in context)
 5. **Execute Step** — run next step via PlanExecutor (mechanical or LLM-assisted)
 6. **Handle Result** — advance plan on success, replan on failure (3 retries max), complete plan when all steps done
-7. **Housekeeping** — increment cycle count, decay/promote thoughts (every 10 cycles), consolidate memory (every 40 cycles)
+7. **Housekeeping** — increment cycle count, decay/promote thoughts (every 10 cycles), lifecycle pruning (every 10 cycles), consolidate memory (every 40 cycles, deletes source thoughts)
 
 ### Pacing
 - Mechanical step → 30s (fast, keep progressing)
@@ -108,7 +108,11 @@ Each step can have `store_as` to accumulate results in plan context. LLM steps r
 - **Plan context injection**: active plan progress, pending approvals, and active goals injected into every chat conversation
 - **Plan control tools**: `approve_plan`, `reject_plan`, `request_plan` — available in Chat and Code modes, LLM handles intent naturally
 - First-boot seed: 2 concrete starter goals injected when DB has zero goals ever (avoids LLM hallucination from zero context)
-- Housekeeping: thought decay, promotion, belief decay (every 10 cycles), memory consolidation (every 40 cycles) — absorbed from deleted mind crate
+- Housekeeping: thought decay, promotion, belief decay, lifecycle pruning (every 10 cycles), memory consolidation with source deletion (every 40 cycles)
+- **Lifecycle pruning**: thoughts capped at 500, goals pruned after 7d (keep 10), plans after 3d (keep 10), mutations capped at 50, nudges after 24h, inactive beliefs after 3d, chat messages capped at 100/session
+- **Goal deduplication**: Jaccard word similarity (40% threshold) + retread detection (50% similarity with abandoned goals)
+- **Active goal cap**: 3 max — prevents goal sprawl
+- **Reflection guardrails**: goal UUID included in prompt, max 1 follow-up goal, no cascading "fix" goals
 - **Used by**: `x402-node` stores `Arc<SoulDatabase>` in `NodeState`, exposes via `GET /soul/status` (includes plan info + pending plan), `POST /soul/nudge`, `GET /soul/nudges`, `GET /soul/chat/sessions`, `GET /soul/chat/sessions/{id}`, `POST /soul/plan/approve`, `POST /soul/plan/reject`, `GET /soul/plan/pending`
 
 ## Env Vars

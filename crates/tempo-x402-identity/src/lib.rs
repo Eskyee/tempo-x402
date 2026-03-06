@@ -542,6 +542,7 @@ mod tests {
             parent_url: Some("https://parent.example.com".to_string()),
             parent_address: None,
             created_at: Utc::now(),
+            agent_token_id: None,
         };
 
         let persisted = PersistedIdentity::from(&identity);

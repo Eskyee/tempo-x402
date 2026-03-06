@@ -71,6 +71,7 @@ pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
 
 /// Prompt for creating goals when the soul has none.
 /// Focused: snapshot + beliefs → what should you build?
+#[allow(clippy::too_many_arguments)]
 pub fn goal_creation_prompt(
     snapshot: &NodeSnapshot,
     beliefs: &[Belief],

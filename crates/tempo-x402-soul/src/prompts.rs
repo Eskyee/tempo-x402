@@ -372,7 +372,8 @@ pub fn reflection_prompt(
 
     format!(
         "# Completed Goal\n\
-         {}\n\
+         ID: {}\n\
+         Description: {}\n\
          Success criteria: {}\n\
          Steps completed: {}{}\n\n\
          # Mutation Summary\n\
@@ -385,14 +386,16 @@ pub fn reflection_prompt(
          Respond with a JSON array of goal/belief updates:\n\
          ```json\n\
          [\n\
-           {{\"op\": \"complete_goal\", \"goal_id\": \"...\", \"outcome\": \"...\"}}\n\
+           {{\"op\": \"complete_goal\", \"goal_id\": \"{}\", \"outcome\": \"...\"}}\n\
          ]\n\
          ```\n\
-         Or if the goal isn't done yet, use update_goal with progress notes.\n\n\
+         Or if the goal isn't done yet, use update_goal with the same goal_id and progress notes.\n\n\
          RULES:\n\
+         - Use the EXACT goal_id shown above (the UUID) — do NOT make up goal IDs\n\
          - Do NOT create follow-up \"fix\" goals. If something broke, it will be retried differently.\n\
          - You may create AT MOST 1 new goal, and only if it's a genuinely NEW idea (not fixing the current one).\n\
          - Focus on marking the current goal complete or abandoned — do not cascade.",
+        goal.id,
         goal.description,
         goal.success_criteria,
         steps_completed,
@@ -402,6 +405,7 @@ pub fn reflection_prompt(
         } else {
             mutation_summary
         },
+        goal.id, // repeated for the example JSON
     )
 }
 

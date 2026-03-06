@@ -5,7 +5,7 @@
 use alloy::sol;
 
 sol! {
-    /// ERC-8004 Agent Identity Registry (ERC-721 based).
+    /// ERC-8004 Agent Identity Registry (ERC-721 Enumerable).
     #[sol(rpc)]
     interface IAgentIdentity {
         function mint(address owner, string metadataURI) external returns (uint256);
@@ -14,6 +14,10 @@ sol! {
         function recoverAgent(uint256 tokenId, address newOwner) external;
         function updateMetadata(uint256 tokenId, string uri) external;
         function getMetadataURI(uint256 tokenId) external view returns (string);
+        function totalSupply() external view returns (uint256);
+        function tokenByIndex(uint256 index) external view returns (uint256);
+        function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256);
+        function balanceOf(address owner) external view returns (uint256);
     }
 
     /// ERC-8004 Agent Reputation Registry.

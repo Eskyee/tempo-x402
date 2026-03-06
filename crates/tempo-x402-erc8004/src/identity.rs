@@ -177,3 +177,62 @@ pub async fn get_metadata_uri<P: Provider>(
         .map_err(|e| X402Error::ChainError(format!("getMetadataURI failed: {e}")))?;
     Ok(uri)
 }
+
+// ── ERC-721 Enumerable ──────────────────────────────────────────────
+
+/// Get the total number of minted agent tokens.
+pub async fn total_supply<P: Provider>(provider: &P, registry: Address) -> Result<U256, X402Error> {
+    let contract = IAgentIdentity::new(registry, provider);
+    let supply = contract
+        .totalSupply()
+        .call()
+        .await
+        .map_err(|e| X402Error::ChainError(format!("totalSupply failed: {e}")))?;
+    Ok(supply)
+}
+
+/// Get the token ID at a given global index.
+pub async fn token_by_index<P: Provider>(
+    provider: &P,
+    registry: Address,
+    index: U256,
+) -> Result<AgentId, X402Error> {
+    let contract = IAgentIdentity::new(registry, provider);
+    let token_id = contract
+        .tokenByIndex(index)
+        .call()
+        .await
+        .map_err(|e| X402Error::ChainError(format!("tokenByIndex failed: {e}")))?;
+    Ok(AgentId::new(token_id))
+}
+
+/// Get the token ID owned by an address at a given index.
+pub async fn token_of_owner_by_index<P: Provider>(
+    provider: &P,
+    registry: Address,
+    owner: Address,
+    index: U256,
+) -> Result<AgentId, X402Error> {
+    let contract = IAgentIdentity::new(registry, provider);
+    let token_id = contract
+        .tokenOfOwnerByIndex(owner, index)
+        .call()
+        .await
+        .map_err(|e| X402Error::ChainError(format!("tokenOfOwnerByIndex failed: {e}")))?;
+    Ok(AgentId::new(token_id))
+}
+
+/// Get the number of tokens owned by an address.
+pub async fn balance_of<P: Provider>(
+    provider: &P,
+    registry: Address,
+    owner: Address,
+) -> Result<U256, X402Error> {
+    let contract = IAgentIdentity::new(registry, provider);
+    let balance = contract
+        .balanceOf(owner)
+        .call()
+        .await
+        .map_err(|e| X402Error::ChainError(format!("balanceOf failed: {e}")))?;
+    Ok(balance)
+}

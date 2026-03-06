@@ -181,13 +181,60 @@ pub async fn siblings(state: web::Data<NodeState>) -> HttpResponse {
     }))
 }
 
+/// GET /instance/peers — decentralized peer discovery via on-chain ERC-8004 registry
+#[cfg(feature = "erc8004")]
+pub async fn peers(state: web::Data<NodeState>) -> HttpResponse {
+    let registry = x402_erc8004::identity_registry();
+    if registry == alloy::primitives::Address::ZERO {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "source": "none",
+            "error": "no identity registry configured",
+            "peers": [],
+            "count": 0,
+        }));
+    }
+
+    let rpc_url =
+        std::env::var("RPC_URL").unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
+    let self_address = state.identity.as_ref().map(|id| id.address);
+
+    let Ok(rpc_parsed) = rpc_url.parse() else {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "invalid RPC URL"
+        }));
+    };
+
+    let provider =
+        alloy::providers::RootProvider::<alloy::transports::http::Http<reqwest::Client>>::new_http(
+            rpc_parsed,
+        );
+
+    match x402_erc8004::discovery::discover_peers(&provider, registry, self_address, 100).await {
+        Ok(peers) => HttpResponse::Ok().json(serde_json::json!({
+            "source": "on-chain",
+            "registry": format!("{:#x}", registry),
+            "peers": peers,
+            "count": peers.len(),
+        })),
+        Err(e) => HttpResponse::Ok().json(serde_json::json!({
+            "source": "on-chain",
+            "error": format!("{e}"),
+            "peers": [],
+            "count": 0,
+        })),
+    }
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/instance")
-            .route("/info", web::get().to(info))
-            .route("/register", web::post().to(register))
-            .route("/siblings", web::get().to(siblings)),
-    );
+    let scope = web::scope("/instance")
+        .route("/info", web::get().to(info))
+        .route("/register", web::post().to(register))
+        .route("/siblings", web::get().to(siblings));
+
+    #[cfg(feature = "erc8004")]
+    let scope = scope.route("/peers", web::get().to(peers));
+
+    cfg.service(scope);
 }
 
 #[cfg(test)]

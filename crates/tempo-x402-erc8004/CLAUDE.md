@@ -18,6 +18,7 @@ One crate, three registry modules. Contracts share alloy, chain config, and depl
 - `types.rs` — AgentId, ReputationScore, AgentMetadata
 - `recovery.rs` — Recovery proof construction + verification using x402-wallet
 - `deploy.rs` — Self-deployment of all 3 contracts from embedded compiled bytecode
+- `discovery.rs` — Decentralized peer discovery: enumerate agents on-chain, resolve metadata URIs to live peers
 
 ## Non-Obvious Patterns
 

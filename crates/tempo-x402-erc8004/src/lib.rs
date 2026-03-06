@@ -12,6 +12,7 @@ use alloy::primitives::Address;
 
 pub mod contracts;
 pub mod deploy;
+pub mod discovery;
 pub mod identity;
 pub mod recovery;
 pub mod reputation;
@@ -19,6 +20,7 @@ pub mod types;
 pub mod validation;
 
 // Re-exports
+pub use discovery::PeerInfo;
 pub use types::{AgentId, AgentMetadata, ReputationScore};
 
 // ── Contract address configuration ──────────────────────────────────────

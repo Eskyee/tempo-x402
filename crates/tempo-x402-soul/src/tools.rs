@@ -1225,12 +1225,66 @@ impl ToolExecutor {
     async fn discover_peers(&self) -> Result<ToolResult, String> {
         let start = std::time::Instant::now();
 
-        // Get parent URL from env, or fall back to gateway URL for self-discovery
+        // Try on-chain discovery first (decentralized, via ERC-8004 identity registry)
+        let identity_registry = std::env::var("ERC8004_IDENTITY_REGISTRY")
+            .ok()
+            .and_then(|s| s.parse::<alloy::primitives::Address>().ok())
+            .filter(|a| *a != alloy::primitives::Address::ZERO);
+
+        if let Some(registry) = identity_registry {
+            let rpc_url = std::env::var("RPC_URL")
+                .unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
+            let self_address = std::env::var("EVM_ADDRESS")
+                .ok()
+                .and_then(|s| s.parse::<alloy::primitives::Address>().ok());
+
+            let provider = alloy::providers::RootProvider::<
+                alloy::transports::http::Http<reqwest::Client>,
+            >::new_http(
+                rpc_url.parse().map_err(|e| format!("bad RPC URL: {e}"))?
+            );
+
+            match x402_erc8004::discovery::discover_peers(&provider, registry, self_address, 50)
+                .await
+            {
+                Ok(peers) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    let output = serde_json::to_string_pretty(&serde_json::json!({
+                        "source": "on-chain",
+                        "registry": format!("{:#x}", registry),
+                        "peers": peers,
+                        "count": peers.len(),
+                    }))
+                    .unwrap_or_default();
+
+                    let output_truncated = if output.len() > MAX_OUTPUT_BYTES {
+                        format!(
+                            "{}\n... (truncated)",
+                            output.chars().take(MAX_OUTPUT_BYTES).collect::<String>()
+                        )
+                    } else {
+                        output
+                    };
+
+                    return Ok(ToolResult {
+                        stdout: output_truncated,
+                        stderr: String::new(),
+                        exit_code: 0,
+                        duration_ms,
+                    });
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "On-chain peer discovery failed, falling back to HTTP");
+                }
+            }
+        }
+
+        // Fallback: HTTP-based discovery via parent's /instance/siblings
         let parent_url = std::env::var("PARENT_URL")
             .ok()
             .or_else(|| self.gateway_url.clone())
             .ok_or_else(|| {
-                "no PARENT_URL or gateway URL configured — cannot discover peers".to_string()
+                "no PARENT_URL or gateway URL configured and no on-chain registry — cannot discover peers".to_string()
             })?;
 
         let url = format!("{}/instance/siblings", parent_url.trim_end_matches('/'));
@@ -1860,7 +1914,7 @@ pub fn request_plan_tool() -> FunctionDeclaration {
 pub fn discover_peers_tool() -> FunctionDeclaration {
     FunctionDeclaration {
         name: "discover_peers".to_string(),
-        description: "Discover peer instances (siblings) by calling the parent's /instance/siblings endpoint. Returns a list of running peer URLs and their available endpoints. Use this to find other agents you can interact with.".to_string(),
+        description: "Discover peer agents via the on-chain ERC-8004 identity registry. Enumerates all minted agent NFTs and resolves their metadata URIs to find live peers. Falls back to parent's /instance/siblings if no on-chain registry is configured. Returns peer URLs, addresses, and reachability status.".to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {},

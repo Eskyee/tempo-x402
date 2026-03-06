@@ -12,7 +12,7 @@ Crates: https://crates.io/crates/tempo-x402
 
 ```toml
 [dependencies]
-tempo-x402 = "1.3"
+tempo-x402 = "1.4"
 ```
 
 The crate is published as `tempo-x402` but the library name is `x402`:
@@ -380,4 +380,4 @@ OpenAPI 3.1 specifications are available in the `openapi/` directory:
 
 ## Version
 
-1.3.2
+1.4.0

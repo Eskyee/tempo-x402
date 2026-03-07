@@ -407,6 +407,11 @@ fn InstancePanel() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
 
+    // Clone action state
+    let (clone_loading, set_clone_loading) = create_signal(false);
+    let (clone_result, set_clone_result) =
+        create_signal(None::<Result<api::CloneResponse, String>>);
+
     spawn_local(async move {
         let base = api::gateway_base_url();
         let url = format!("{}/instance/info", base);
@@ -481,6 +486,8 @@ fn InstancePanel() -> impl IntoView {
                         .cloned()
                         .unwrap_or_default();
 
+                    let clone_price_btn = clone_price.clone();
+
                     view! {
                         <div class="instance-details">
                             <div class="instance-identity">
@@ -495,11 +502,82 @@ fn InstancePanel() -> impl IntoView {
                                 })}
                             </div>
 
-                            <Show when=move || clone_available fallback=|| ()>
-                                <div class="clone-section">
-                                    <p>"Clone this instance for " <strong>{clone_price.clone()}</strong></p>
-                                </div>
-                            </Show>
+                            <div class="clone-section">
+                                <button
+                                    class="btn clone-btn"
+                                    disabled=move || {
+                                        if !clone_available {
+                                            return true;
+                                        }
+                                        let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+                                        wallet.get().mode == WalletMode::Disconnected || clone_loading.get()
+                                    }
+                                    on:click=move |_| {
+                                        if !clone_available {
+                                            return;
+                                        }
+                                        let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+                                        let w = wallet.get();
+                                        set_clone_loading.set(true);
+                                        set_clone_result.set(None);
+                                        spawn_local(async move {
+                                            let result = api::clone_instance(&w).await;
+                                            set_clone_result.set(Some(result));
+                                            set_clone_loading.set(false);
+                                        });
+                                    }
+                                >
+                                    {let clone_price_label = clone_price_btn.clone(); move || if clone_loading.get() {
+                                        "Cloning...".to_string()
+                                    } else if clone_available {
+                                        format!("Clone ({})", clone_price_label)
+                                    } else {
+                                        "Clone unavailable".to_string()
+                                    }}
+                                </button>
+
+                                {move || {
+                                    if !clone_available {
+                                        Some(view! {
+                                            <p class="hint">"Cloning not configured on this instance"</p>
+                                        })
+                                    } else {
+                                        let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+                                        (wallet.get().mode == WalletMode::Disconnected).then(|| view! {
+                                            <p class="hint">"Connect wallet to clone"</p>
+                                        })
+                                    }
+                                }}
+
+                                {move || clone_result.get().map(|res| match res {
+                                    Ok(cr) => {
+                                        let url = cr.url.clone();
+                                        let branch = cr.branch.clone();
+                                        let tx = cr.transaction.clone();
+                                        let new_id = cr.instance_id.clone().unwrap_or_default();
+                                        view! {
+                                            <div class="clone-success">
+                                                <p>"Clone created: " <code>{new_id}</code></p>
+                                                {url.map(|u| view! {
+                                                    <p>"URL: " <a href=u.clone() target="_blank">{u}</a></p>
+                                                })}
+                                                {branch.map(|b| view! {
+                                                    <p>"Branch: " <code>{b}</code></p>
+                                                })}
+                                                {tx.map(|t| {
+                                                    let explorer = format!("https://explore.moderato.tempo.xyz/tx/{}", t);
+                                                    view! {
+                                                        <p>"Tx: " <a href=explorer target="_blank"><code>{t}</code></a></p>
+                                                    }
+                                                })}
+                                            </div>
+                                        }.into_view()
+                                    }
+                                    Err(e) => view! {
+                                        <p class="error-text">{e}</p>
+                                    }.into_view(),
+                                })}
+                            </div>
 
                             <Show when=move || { children_count > 0 } fallback=|| ()>
                                 <div class="children-list">
@@ -852,6 +930,11 @@ fn DashboardPage() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
     let (tick, set_tick) = create_signal(0u32);
 
+    // Clone action state
+    let (clone_loading, set_clone_loading) = create_signal(false);
+    let (clone_result, set_clone_result) =
+        create_signal(None::<Result<api::CloneResponse, String>>);
+
     // Fetch all dashboard data
     let fetch_data = move || {
         spawn_local(async move {
@@ -959,6 +1042,14 @@ fn DashboardPage() -> impl IntoView {
                         .unwrap_or_default();
                     let active_endpoints = analytics_endpoints.len();
 
+                    let clone_available = data.get("clone_available")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let clone_price = data.get("clone_price")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
+                        .to_string();
+
                     view! {
                         // Stats cards
                         <div class="stats-grid">
@@ -993,6 +1084,85 @@ fn DashboardPage() -> impl IntoView {
                                 <span class="stat-label">"Active Endpoints"</span>
                                 <span class="stat-value">{active_endpoints.to_string()}</span>
                             </div>
+                        </div>
+
+                        // Clone section
+                        <div class="clone-section">
+                            <h2>"Clone Instance"</h2>
+                            <button
+                                class="btn clone-btn"
+                                disabled=move || {
+                                    if !clone_available {
+                                        return true;
+                                    }
+                                    let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+                                    wallet.get().mode == WalletMode::Disconnected || clone_loading.get()
+                                }
+                                on:click=move |_| {
+                                    if !clone_available {
+                                        return;
+                                    }
+                                    let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+                                    let w = wallet.get();
+                                    set_clone_loading.set(true);
+                                    set_clone_result.set(None);
+                                    spawn_local(async move {
+                                        let result = api::clone_instance(&w).await;
+                                        set_clone_result.set(Some(result));
+                                        set_clone_loading.set(false);
+                                    });
+                                }
+                            >
+                                {let cp = clone_price.clone(); move || if clone_loading.get() {
+                                    "Cloning...".to_string()
+                                } else if clone_available {
+                                    format!("Clone ({})", cp)
+                                } else {
+                                    "Clone unavailable".to_string()
+                                }}
+                            </button>
+
+                            {move || {
+                                if !clone_available {
+                                    Some(view! {
+                                        <p class="hint">"Cloning not configured on this instance"</p>
+                                    })
+                                } else {
+                                    let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+                                    (wallet.get().mode == WalletMode::Disconnected).then(|| view! {
+                                        <p class="hint">"Connect wallet to clone"</p>
+                                    })
+                                }
+                            }}
+
+                            {move || clone_result.get().map(|res| match res {
+                                Ok(cr) => {
+                                    let url = cr.url.clone();
+                                    let branch = cr.branch.clone();
+                                    let tx = cr.transaction.clone();
+                                    let new_id = cr.instance_id.clone().unwrap_or_default();
+                                    view! {
+                                        <div class="clone-success">
+                                            <p>"Clone created: " <code>{new_id}</code></p>
+                                            {url.map(|u| view! {
+                                                <p>"URL: " <a href=u.clone() target="_blank">{u}</a></p>
+                                            })}
+                                            {branch.map(|b| view! {
+                                                <p>"Branch: " <code>{b}</code></p>
+                                            })}
+                                            {tx.map(|t| {
+                                                let explorer = format!("https://explore.moderato.tempo.xyz/tx/{}", t);
+                                                view! {
+                                                    <p>"Tx: " <a href=explorer target="_blank"><code>{t}</code></a></p>
+                                                }
+                                            })}
+                                        </div>
+                                    }.into_view()
+                                }
+                                Err(e) => view! {
+                                    <p class="error-text">{e}</p>
+                                }.into_view(),
+                            })}
                         </div>
 
                         // Soul panel

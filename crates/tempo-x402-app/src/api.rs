@@ -541,6 +541,87 @@ pub async fn send_nudge(message: &str, priority: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Response from the clone endpoint.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CloneResponse {
+    pub success: bool,
+    pub instance_id: Option<String>,
+    pub url: Option<String>,
+    pub branch: Option<String>,
+    pub status: Option<String>,
+    pub transaction: Option<String>,
+}
+
+/// Clone this node instance via the x402 402-payment flow.
+///
+/// 1. POST /clone (no payment) → 402
+/// 2. Parse payment requirements, sign with wallet
+/// 3. Retry POST /clone with PAYMENT-SIGNATURE header
+/// 4. Parse CloneResponse
+pub async fn clone_instance(wallet: &WalletState) -> Result<CloneResponse, String> {
+    let url = format!("{}/clone", GATEWAY_URL);
+
+    // Initial request — expect 402
+    let resp = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if resp.status() != 402 {
+        // If not 402, try to parse as success or return error
+        if resp.ok() {
+            return resp
+                .json::<CloneResponse>()
+                .await
+                .map_err(|e| format!("Failed to parse response: {}", e));
+        }
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!("Clone failed (HTTP {}): {}", resp.status(), err));
+    }
+
+    // Parse 402 payment requirements
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read 402 body: {}", e))?;
+    let payment_body: PaymentRequiredBody =
+        serde_json::from_str(&body_text).map_err(|e| format!("Failed to parse 402: {}", e))?;
+
+    if payment_body.accepts.is_empty() {
+        return Err("No payment schemes accepted".to_string());
+    }
+
+    let requirements = &payment_body.accepts[0];
+    let payment_header = sign_for_wallet(wallet, requirements).await?;
+
+    // Retry with payment signature
+    let paid_resp = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .header("PAYMENT-SIGNATURE", &payment_header)
+        .body("{}")
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Paid request failed: {}", e))?;
+
+    if !paid_resp.ok() {
+        let err = paid_resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Clone failed (HTTP {}): {}",
+            paid_resp.status(),
+            err
+        ));
+    }
+
+    paid_resp
+        .json::<CloneResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse clone response: {}", e))
+}
+
 /// Generate random nonce (32 bytes as hex string)
 fn random_nonce() -> String {
     let mut bytes = [0u8; 32];

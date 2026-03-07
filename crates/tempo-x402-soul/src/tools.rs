@@ -33,7 +33,6 @@ pub struct ToolExecutor {
     memory_file_path: String,
     gateway_url: Option<String>,
     railway_token: Option<String>,
-    railway_project_id: Option<String>,
     railway_service_id: Option<String>,
     railway_environment_id: Option<String>,
 }
@@ -66,9 +65,6 @@ impl ToolExecutor {
             memory_file_path: "/data/soul_memory.md".to_string(),
             gateway_url: None,
             railway_token: std::env::var("RAILWAY_TOKEN")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            railway_project_id: std::env::var("RAILWAY_PROJECT_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
             railway_service_id: std::env::var("RAILWAY_SERVICE_ID")
@@ -1192,6 +1188,7 @@ impl ToolExecutor {
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("HTTP client error: {e}"))?;
 

@@ -323,8 +323,8 @@ pub fn planning_prompt(
          USE SCRIPT ENDPOINTS. They are instant, always work, and support jq + python3 for complex logic.\n\n\
          ## Inter-Agent Economy\n\
          Your script endpoints are gated by x402 payment — other agents pay to call them.\n\
-         You can call other agents' paid endpoints using `call_peer` (easiest — discovers + calls in one step).\n\
-         Or use `discover_peers` + `call_paid_endpoint` separately for more control.\n\
+         You can call other agents' paid endpoints using `call_peer` (discovers + calls in one step).\n\
+         ALWAYS use `call_peer` for inter-agent calls. Do NOT use `call_paid_endpoint` — it requires a URL you don't have.\n\
          Building useful endpoints = revenue from other agents calling them.\n\n\
          # Task\n\
          Create a step-by-step plan to achieve this goal. Each step is one of:\n\n\
@@ -335,13 +335,13 @@ pub fn planning_prompt(
          - {{\"type\": \"run_shell\", \"command\": \"...\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"commit\", \"message\": \"...\"}}\n\
          - {{\"type\": \"check_self\", \"endpoint\": \"health\", \"store_as\": \"key\"}}\n\
-         - {{\"type\": \"call_paid_endpoint\", \"url\": \"https://peer.up.railway.app/g/script-name/\", \"method\": \"GET\", \"store_as\": \"key\"}}  (signs x402 payment automatically — use callable_url from discover_peers)\n\
+         - (DEPRECATED: call_paid_endpoint — use call_peer instead, it handles URL resolution automatically)\n\
          - {{\"type\": \"create_script_endpoint\", \"slug\": \"...\", \"script\": \"#!/bin/bash\\n...\", \"description\": \"...\"}}\n\
          - {{\"type\": \"test_script_endpoint\", \"slug\": \"...\", \"input\": \"test data\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\
          - {{\"type\": \"delete_endpoint\", \"slug\": \"script-name\"}}  (deactivate a registered endpoint)\n\
          - {{\"type\": \"discover_peers\", \"store_as\": \"peers\"}}  (fetches sibling/child instances and their endpoints)\n\
-         - {{\"type\": \"call_peer\", \"slug\": \"script-peer-discovery\", \"store_as\": \"result\"}}  (discovers peers, finds the endpoint, makes paid call — ONE step does it all)\n\n\
+         - {{\"type\": \"call_peer\", \"slug\": \"script-peer-discovery\", \"store_as\": \"result\"}}  (RECOMMENDED for inter-agent calls — discovers peers, resolves URL, signs payment — ONE step)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
@@ -356,8 +356,7 @@ pub fn planning_prompt(
          - Protected files (soul core, identity, Cargo.toml, Cargo.lock) cannot be modified\n\
          - Do NOT try to modify Dockerfile, railway.toml, or deployment configs — focus on Rust code\n\
          - Use only dependencies already available in the workspace\n\
-         - For call_paid_endpoint: URLs must be LITERAL (e.g., https://peer.up.railway.app/g/slug/). \
-           NEVER use template variables like {{target_url}}. Construct the URL from the peer info shown above.\n\n\
+         - For inter-agent calls, ALWAYS use call_peer with just the slug. NEVER construct URLs manually.\n\n\
          Respond with ONLY a JSON array of steps, no other text.",
         goal.description,
         goal.success_criteria,

@@ -343,6 +343,12 @@ impl<'a> PlanExecutor<'a> {
             PlanStep::CallPaidEndpoint {
                 url, method, body, ..
             } => {
+                // Reject localhost URLs — LLM should use CallPeer instead
+                if url.contains("localhost") || url.contains("127.0.0.1") {
+                    return StepResult::NeedsReplan(
+                        "call_paid_endpoint cannot use localhost URLs. Use call_peer with just the slug instead (e.g., {\"type\": \"call_peer\", \"slug\": \"script-name\"})".to_string()
+                    );
+                }
                 let mut args = serde_json::json!({ "url": url });
                 if let Some(m) = method {
                     args["method"] = serde_json::json!(m);

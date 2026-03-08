@@ -2,6 +2,7 @@
 
 #[cfg(feature = "agent")]
 use crate::clone::CloneOrchestrator;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use x402_gateway::state::AppState as GatewayState;
 use x402_identity::InstanceIdentity;
@@ -53,6 +54,8 @@ pub struct NodeState {
     pub soul_db: Option<()>,
     /// Whether the soul is dormant (no LLM API key)
     pub soul_dormant: bool,
+    /// Whether the soul thinking loop is alive (None if not spawned)
+    pub soul_alive: Option<Arc<AtomicBool>>,
     /// Soul config for chat handler (None if soul init failed)
     #[cfg(feature = "soul")]
     pub soul_config: Option<SoulConfig>,

@@ -6,7 +6,7 @@ use crate::state::AppState;
 /// Returns the git SHA for this build. Compile-time value from build.rs,
 /// with runtime fallback to RAILWAY_GIT_COMMIT_SHA (Railway injects this
 /// at runtime but not during Docker builds).
-fn build_sha() -> &'static str {
+pub fn build_sha() -> &'static str {
     static SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SHA.get_or_init(|| {
         let compile_time = env!("GIT_SHA");

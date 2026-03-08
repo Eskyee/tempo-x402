@@ -38,6 +38,7 @@ pub use thinking::ThinkingLoop;
 pub use tools::ToolExecutor;
 pub use world_model::{Goal, GoalStatus};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
@@ -55,12 +56,42 @@ impl Soul {
     }
 
     /// Spawn the thinking loop as a background tokio task.
-    /// Returns the JoinHandle so the caller can optionally await or abort it.
-    pub fn spawn(self, observer: Arc<dyn NodeObserver>) -> JoinHandle<()> {
-        let thinking_loop = ThinkingLoop::new(self.config, self.db, observer);
-        tokio::spawn(async move {
-            thinking_loop.run().await;
-        })
+    /// The `alive` flag is set to `true` while the soul is running, `false` during restart.
+    /// The loop automatically restarts after panics (with a 30s cooldown).
+    pub fn spawn(self, observer: Arc<dyn NodeObserver>, alive: Arc<AtomicBool>) -> JoinHandle<()> {
+        let alive_for_task = alive;
+        let config = self.config;
+        let db = self.db;
+
+        let handle = tokio::spawn(async move {
+            loop {
+                alive_for_task.store(true, Ordering::Relaxed);
+                let alive_for_loop = alive_for_task.clone();
+                let loop_instance = ThinkingLoop::new(config.clone(), db.clone(), observer.clone());
+
+                // Spawn the thinking loop in an inner task so panics become JoinErrors
+                let inner = tokio::spawn(async move {
+                    loop_instance.run(alive_for_loop).await;
+                });
+
+                match inner.await {
+                    Ok(()) => break, // clean exit (shouldn't happen — run() loops forever)
+                    Err(e) if e.is_panic() => {
+                        alive_for_task.store(false, Ordering::Relaxed);
+                        tracing::error!("Soul thinking loop panicked — restarting in 30s: {:?}", e);
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        // loop continues → fresh ThinkingLoop created
+                    }
+                    Err(e) => {
+                        alive_for_task.store(false, Ordering::Relaxed);
+                        tracing::error!("Soul thinking loop failed: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        handle
     }
 
     /// Get a reference to the soul database (for external queries).

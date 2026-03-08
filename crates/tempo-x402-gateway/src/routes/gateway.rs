@@ -133,8 +133,10 @@ async fn do_gateway_proxy(
 
     // Build target URL
     let base_url = match rest_path {
-        Some(path) => format!("{}/{}", endpoint.target_url.trim_end_matches('/'), path),
-        None => endpoint.target_url.clone(),
+        Some(path) if !path.is_empty() => {
+            format!("{}/{}", endpoint.target_url.trim_end_matches('/'), path)
+        }
+        _ => endpoint.target_url.clone(),
     };
 
     // Add query string if present (sanitized)

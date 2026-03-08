@@ -512,9 +512,9 @@ impl ToolExecutor {
             output.push_str(&format!("{:>6}\t{}\n", i + 1, line));
         }
 
-        // Truncate if still too large
+        // Truncate if still too large (char-safe to avoid panicking on multi-byte boundaries)
         if output.len() > MAX_OUTPUT_BYTES {
-            output.truncate(MAX_OUTPUT_BYTES);
+            output = output.chars().take(MAX_OUTPUT_BYTES).collect();
             output.push_str("\n... (truncated)");
         }
 
@@ -884,12 +884,19 @@ impl ToolExecutor {
             let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
         }
 
+        // Register with gateway DB so peers can discover it immediately
+        let gateway_slug = format!("script-{slug}");
+        let register_note = self
+            .register_script_in_gateway(&gateway_slug, description)
+            .await;
+
         let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             stdout: format!(
                 "Script endpoint created: /x/{slug}\n\
                  Script: {}\n\
                  Size: {} bytes\n\
+                 Gateway: {register_note}\n\
                  Test it: curl https://{{your-domain}}/x/{slug}",
                 script_path.display(),
                 full_script.len()
@@ -898,6 +905,41 @@ impl ToolExecutor {
             exit_code: 0,
             duration_ms,
         })
+    }
+
+    /// Register a script endpoint with the gateway's admin API so it appears in /endpoints.
+    async fn register_script_in_gateway(&self, slug: &str, description: Option<&str>) -> String {
+        let default_url = format!(
+            "http://localhost:{}",
+            std::env::var("PORT").unwrap_or_else(|_| "4023".to_string())
+        );
+        let gateway_url = self.gateway_url.clone().unwrap_or(default_url);
+        let url = format!("{}/admin/endpoints", gateway_url.trim_end_matches('/'));
+
+        let body = serde_json::json!({
+            "slug": slug,
+            "description": description.unwrap_or("Script endpoint"),
+        });
+
+        match reqwest::Client::new()
+            .post(&url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                format!("registered as {slug} (discoverable by peers)")
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                format!("registration returned {status} (will auto-register on restart)")
+            }
+            Err(e) => {
+                tracing::warn!(slug = %slug, error = %e, "Failed to register script in gateway");
+                format!("registration failed: {e} (will auto-register on restart)")
+            }
+        }
     }
 
     /// List all script endpoints in /data/endpoints/.
@@ -955,6 +997,8 @@ impl ToolExecutor {
     /// Test a script endpoint locally by running it with test input.
     async fn test_script_endpoint(&self, slug: &str, input: &str) -> Result<ToolResult, String> {
         let start = std::time::Instant::now();
+        // Strip "script-" prefix if present (create_script_endpoint strips it too)
+        let slug = slug.strip_prefix("script-").unwrap_or(slug);
         let script_path = PathBuf::from(format!("/data/endpoints/{slug}.sh"));
 
         if !script_path.exists() {

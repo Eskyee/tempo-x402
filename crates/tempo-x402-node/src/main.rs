@@ -30,6 +30,62 @@ mod state;
 
 use state::NodeState;
 
+/// Admin endpoint: POST /admin/endpoints — register a script endpoint without payment.
+/// Intended for soul/local tools only. No authentication required (local access).
+async fn admin_register_endpoint(
+    body: web::Json<serde_json::Value>,
+    state: web::Data<NodeState>,
+) -> actix_web::HttpResponse {
+    let slug = body["slug"].as_str().unwrap_or_default();
+    let description = body["description"].as_str().unwrap_or("Script endpoint");
+
+    if slug.is_empty() {
+        return actix_web::HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": "slug is required",
+        }));
+    }
+
+    // Build target URL from self_url (instance's own URL)
+    let self_url = std::env::var("RAILWAY_PUBLIC_DOMAIN")
+        .map(|d| format!("https://{d}"))
+        .unwrap_or_else(|_| {
+            let port = std::env::var("PORT").unwrap_or_else(|_| "4023".to_string());
+            format!("http://localhost:{port}")
+        });
+    // The script file on disk uses the slug without "script-" prefix
+    let stem = slug.strip_prefix("script-").unwrap_or(slug);
+    let target = format!("{self_url}/x/{stem}");
+    let owner = std::env::var("EVM_ADDRESS").unwrap_or_default();
+
+    match state.gateway.db.create_endpoint(
+        slug,
+        &owner,
+        &target,
+        "$0.001",
+        "1000",
+        Some(description),
+    ) {
+        Ok(_) => {
+            tracing::info!(slug = %slug, "Admin registered endpoint");
+            actix_web::HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "slug": slug,
+                "target_url": target,
+            }))
+        }
+        Err(e) => {
+            // Already exists is not an error — update description silently
+            tracing::debug!(slug = %slug, error = %e, "Endpoint registration skipped (likely exists)");
+            actix_web::HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "slug": slug,
+                "note": "already registered",
+            }))
+        }
+    }
+}
+
 /// Admin endpoint: DELETE /admin/endpoints/{slug} — deactivate an endpoint without payment.
 /// Intended for soul/local tools only. No authentication required (local access).
 async fn admin_delete_endpoint(
@@ -500,6 +556,10 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
+    // Soul liveness flag — shared between NodeState (for health checks) and the soul task.
+    // Created upfront so the Arc is shared before NodeState is cloned into web::Data.
+    let soul_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     let node_state = NodeState {
         gateway: gateway_state,
         identity: identity.clone(),
@@ -522,6 +582,7 @@ async fn main() -> std::io::Result<()> {
         soul_observer: soul_observer.clone(),
         #[cfg(not(feature = "soul"))]
         soul_observer: None,
+        soul_alive: Some(soul_alive.clone()),
     };
 
     let node_data = web::Data::new(node_state.clone());
@@ -546,7 +607,7 @@ async fn main() -> std::io::Result<()> {
                     });
                 }
 
-                soul.spawn(observer);
+                let _soul_handle = soul.spawn(observer, soul_alive.clone());
                 tracing::info!(
                     dormant = node_state.soul_dormant,
                     generation = soul_generation,
@@ -1076,8 +1137,8 @@ async fn main() -> std::io::Result<()> {
             .wrap(Logger::default())
             .wrap(cors)
             .wrap(Governor::new(&governor_conf))
-            // Gateway routes
-            .configure(x402_gateway::routes::health::configure)
+            // Node health (extends gateway health with soul liveness)
+            .configure(crate::routes::health::configure)
             .configure(x402_gateway::routes::register::configure)
             .configure(x402_gateway::routes::endpoints::configure)
             .configure(x402_gateway::routes::analytics::configure)
@@ -1088,6 +1149,7 @@ async fn main() -> std::io::Result<()> {
             // Script endpoints — soul-created dynamic handlers (no compilation needed)
             .configure(crate::routes::scripts::configure)
             // Admin endpoint — local-only endpoint management (no payment required)
+            .route("/admin/endpoints", web::post().to(admin_register_endpoint))
             .route(
                 "/admin/endpoints/{slug}",
                 web::delete().to(admin_delete_endpoint),

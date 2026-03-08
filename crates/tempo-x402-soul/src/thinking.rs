@@ -4,6 +4,7 @@
 //! Most steps are mechanical (no LLM). LLM is only called for planning,
 //! code generation, and reflection.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -145,7 +146,8 @@ impl ThinkingLoop {
     }
 
     /// Run the thinking loop.
-    pub async fn run(&self) {
+    /// The `alive` flag is set to `true` each cycle so external code can detect liveness.
+    pub async fn run(&self, alive: Arc<AtomicBool>) {
         let mut pacer = AdaptivePacer::new(self.config.cycle_multiplier);
 
         // Initialize git workspace if coding is enabled
@@ -188,6 +190,9 @@ impl ThinkingLoop {
         );
 
         loop {
+            // Heartbeat: signal that the soul loop is alive
+            alive.store(true, Ordering::Relaxed);
+
             let snapshot = match self.observer.observe() {
                 Ok(s) => s,
                 Err(e) => {

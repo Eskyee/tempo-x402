@@ -438,26 +438,47 @@ impl RailwayClient {
     pub async fn connect_repo(
         &self,
         service_id: &str,
+        environment_id: &str,
         repo: &str,
         branch: &str,
     ) -> Result<(), RailwayError> {
-        let query = r#"
+        // 1. Set the source repo (ServiceSourceInput only accepts repo + image, not branch)
+        let source_query = r#"
             mutation ServiceInstanceUpdate($serviceId: String!, $input: ServiceInstanceUpdateInput!) {
                 serviceInstanceUpdate(serviceId: $serviceId, input: $input)
             }
         "#;
 
-        let variables = serde_json::json!({
+        let source_vars = serde_json::json!({
             "serviceId": service_id,
             "input": {
                 "source": {
                     "repo": repo,
-                    "branch": branch,
                 }
             }
         });
 
-        self.execute(query, variables).await?;
+        self.execute(source_query, source_vars).await?;
+
+        // 2. Create a deployment trigger to set the branch
+        let trigger_query = r#"
+            mutation DeploymentTriggerCreate($input: DeploymentTriggerCreateInput!) {
+                deploymentTriggerCreate(input: $input) { id }
+            }
+        "#;
+
+        let trigger_vars = serde_json::json!({
+            "input": {
+                "serviceId": service_id,
+                "projectId": self.project_id,
+                "environmentId": environment_id,
+                "provider": "github",
+                "repository": repo,
+                "branch": branch,
+            }
+        });
+
+        self.execute(trigger_query, trigger_vars).await?;
         Ok(())
     }
 

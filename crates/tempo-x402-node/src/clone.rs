@@ -194,7 +194,9 @@ impl CloneOrchestrator {
 
         // 5. Set deployment source (Docker image OR repo+branch)
         if let (Some(ref repo), Some(ref branch)) = (&self.config.source_repo, &branch_name) {
-            self.railway.connect_repo(service_id, repo, branch).await?;
+            self.railway
+                .connect_repo(service_id, &env_id, repo, branch)
+                .await?;
             tracing::info!(repo = %repo, branch = %branch, "Source repo connected");
         } else if let Some(ref image) = self.config.docker_image {
             self.railway.set_docker_image(service_id, image).await?;

@@ -524,8 +524,24 @@ async fn main() -> std::io::Result<()> {
     if let Some(ref id) = identity {
         let rpc = rpc_url.clone();
         let addr = id.address;
-        // Faucet funding (best-effort)
+        // Faucet funding (only if balance is low)
         tokio::spawn(async move {
+            // Check balance first — skip faucet if already funded
+            let token = x402::constants::DEFAULT_TOKEN;
+            if let Ok(rpc_parsed) = rpc.parse::<reqwest::Url>() {
+                let provider = alloy::providers::ProviderBuilder::new().connect_http(rpc_parsed);
+                if let Ok(balance) = x402::tip20::balance_of(&provider, token, addr).await {
+                    // 10 pathUSD (10 * 10^6) threshold — skip if already funded
+                    if balance >= alloy::primitives::U256::from(10_000_000u64) {
+                        tracing::info!(
+                            address = %addr,
+                            balance = %balance,
+                            "Wallet already funded, skipping faucet"
+                        );
+                        return;
+                    }
+                }
+            }
             if let Err(e) = x402_identity::request_faucet_funds(&rpc, addr).await {
                 tracing::warn!("Faucet funding failed (non-fatal): {e}");
             }

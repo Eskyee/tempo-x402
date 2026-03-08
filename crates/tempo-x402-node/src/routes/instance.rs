@@ -1,35 +1,25 @@
 use actix_web::{web, HttpResponse};
-
 use crate::db;
 use crate::state::NodeState;
 
-/// Validate that a string looks like a UUID (8-4-4-4-12 hex).
 pub(crate) fn is_valid_uuid(s: &str) -> bool {
     let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 5 {
-        return false;
-    }
+    if parts.len() != 5 { return false; }
     let expected_lens = [8, 4, 4, 4, 12];
-    parts
-        .iter()
-        .zip(expected_lens.iter())
-        .all(|(part, &len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
+    parts.iter().zip(expected_lens.iter()).all(|(part, &len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-/// Validate that a string looks like an EVM address (0x + 40 hex chars).
+#[allow(dead_code)]
 fn is_valid_evm_address(s: &str) -> bool {
-    if s.is_empty() {
-        return true; // allow empty (not yet known)
-    }
+    if s.is_empty() { return true; }
     s.len() == 42 && s.starts_with("0x") && s[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Validate that a URL uses HTTPS scheme.
+#[allow(dead_code)]
 fn is_valid_https_url(s: &str) -> bool {
     s.starts_with("https://") && s.len() > 8
 }
 
-/// GET /instance/info — returns identity, children, version, uptime, clone availability
 pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
     let identity_info = state.identity.as_ref().map(|id| {
         serde_json::json!({
@@ -40,19 +30,9 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
             "created_at": id.created_at.to_rfc3339(),
         })
     });
-
-    // Open a read connection to query active (non-failed) children
-    let children = rusqlite::Connection::open(&state.db_path)
-        .ok()
-        .and_then(|conn| db::query_children_active(&conn).ok())
-        .unwrap_or_default();
-
+    let children = rusqlite::Connection::open(&state.db_path).ok().and_then(|conn| db::query_children_active(&conn).ok()).unwrap_or_default();
     let uptime_secs = (chrono::Utc::now() - state.started_at).num_seconds();
-
-    let clone_available = state.agent.is_some()
-        && state.clone_price.is_some()
-        && (children.len() as u32) < state.clone_max_children;
-
+    let clone_available = state.agent.is_some() && state.clone_price.is_some() && (children.len() as u32) < state.clone_max_children;
     HttpResponse::Ok().json(serde_json::json!({
         "identity": identity_info,
         "agent_token_id": state.agent_token_id,
@@ -66,209 +46,15 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
     }))
 }
 
-/// POST /instance/register — child callback, updates children table
-pub async fn register(
-    body: web::Json<serde_json::Value>,
-    state: web::Data<NodeState>,
-) -> HttpResponse {
-    let instance_id = match body.get("instance_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "error": "missing instance_id"
-            }));
-        }
-    };
-
-    // Validate instance_id is a UUID to prevent injection
-    if !is_valid_uuid(instance_id) {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "invalid instance_id format"
-        }));
-    }
-
-    let address = body.get("address").and_then(|v| v.as_str()).unwrap_or("");
-
-    // Validate address format if provided
-    if !is_valid_evm_address(address) {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "invalid address format"
-        }));
-    }
-
-    let url = body.get("url").and_then(|v| v.as_str());
-
-    // Validate URL is HTTPS if provided
-    if let Some(u) = url {
-        if !is_valid_https_url(u) {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "error": "url must use https"
-            }));
-        }
-    }
-
-    match db::update_child(
-        &state.gateway.db,
-        instance_id,
-        Some(address),
-        url,
-        Some("running"),
-    ) {
-        Ok(()) => {
-            tracing::info!(
-                instance_id = %instance_id,
-                "Child instance registered"
-            );
-            HttpResponse::Ok().json(serde_json::json!({
-                "success": true,
-                "message": "registered",
-            }))
-        }
-        Err(e) => {
-            tracing::warn!(
-                instance_id = %instance_id,
-                error = %e,
-                "Failed to update child record"
-            );
-            // Don't leak internal error details
-            HttpResponse::Ok().json(serde_json::json!({
-                "success": true,
-                "message": "acknowledged",
-            }))
-        }
-    }
-}
-
-/// GET /instance/siblings — returns list of active sibling instances with their URLs and endpoints
-pub async fn siblings(state: web::Data<NodeState>) -> HttpResponse {
-    let children = rusqlite::Connection::open(&state.db_path)
-        .ok()
-        .and_then(|conn| db::query_children_active(&conn).ok())
-        .unwrap_or_default();
-
-    let mut siblings = Vec::new();
-    for child in &children {
-        if child.status != "running" {
-            continue;
-        }
-        let Some(url) = child.url.as_ref() else {
-            continue;
-        };
-
-        // Include known endpoint slugs for this child (from gateway DB)
-        let endpoints: Vec<String> = state
-            .gateway
-            .db
-            .list_endpoints(500, 0)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|ep| ep.target_url.starts_with(url.as_str()))
-            .map(|ep| ep.slug)
-            .collect();
-
-        siblings.push(serde_json::json!({
-            "instance_id": child.instance_id,
-            "url": url,
-            "address": child.address,
-            "status": child.status,
-            "endpoints": endpoints,
-        }));
-    }
-
-    HttpResponse::Ok().json(serde_json::json!({
-        "siblings": siblings,
-        "count": siblings.len(),
-    }))
-}
-
-/// GET /instance/peers — decentralized peer discovery via on-chain ERC-8004 registry
-#[cfg(feature = "erc8004")]
-pub async fn peers(state: web::Data<NodeState>) -> HttpResponse {
-    let registry = x402_identity::identity_registry();
-    if registry == alloy::primitives::Address::ZERO {
-        return HttpResponse::Ok().json(serde_json::json!({
-            "source": "none",
-            "error": "no identity registry configured",
-            "peers": [],
-            "count": 0,
-        }));
-    }
-
-    let rpc_url =
-        std::env::var("RPC_URL").unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
-    let self_address = state.identity.as_ref().map(|id| id.address);
-
-    let Ok(rpc_parsed) = rpc_url.parse() else {
-        return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": "invalid RPC URL"
-        }));
-    };
-
-    let provider = alloy::providers::RootProvider::<alloy::network::Ethereum>::new_http(rpc_parsed);
-
-    match x402_identity::discovery::discover_peers(&provider, registry, self_address, 100).await {
-        Ok(peers) => HttpResponse::Ok().json(serde_json::json!({
-            "source": "on-chain",
-            "registry": format!("{:#x}", registry),
-            "peers": peers,
-            "count": peers.len(),
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "source": "on-chain",
-            "error": format!("{e}"),
-            "peers": [],
-            "count": 0,
-        })),
-    }
-}
-
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    let scope = web::scope("/instance")
-        .route("/info", web::get().to(info))
-        .route("/register", web::post().to(register))
-        .route("/siblings", web::get().to(siblings));
-
-    #[cfg(feature = "erc8004")]
-    let scope = scope.route("/peers", web::get().to(peers));
-
-    cfg.service(scope);
+    cfg.service(web::scope("/instance").route("/info", web::get().to(info)));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_valid_uuid() {
         assert!(is_valid_uuid("550e8400-e29b-41d4-a716-446655440000"));
-        assert!(is_valid_uuid("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
-        assert!(!is_valid_uuid("not-a-uuid"));
-        assert!(!is_valid_uuid("550e8400e29b41d4a716446655440000"));
-        assert!(!is_valid_uuid(""));
-        assert!(!is_valid_uuid("550e8400-e29b-41d4-a716-44665544000g"));
-    }
-
-    #[test]
-    fn test_valid_evm_address() {
-        assert!(is_valid_evm_address(
-            "0x1234567890abcdef1234567890abcdef12345678"
-        ));
-        assert!(is_valid_evm_address("")); // empty allowed
-        assert!(!is_valid_evm_address("0x123")); // too short
-        assert!(!is_valid_evm_address(
-            "1234567890abcdef1234567890abcdef12345678"
-        )); // no 0x
-        assert!(!is_valid_evm_address(
-            "0xGGGG567890abcdef1234567890abcdef12345678"
-        )); // invalid hex
-    }
-
-    #[test]
-    fn test_valid_https_url() {
-        assert!(is_valid_https_url("https://example.com"));
-        assert!(is_valid_https_url("https://x402-abc.up.railway.app"));
-        assert!(!is_valid_https_url("http://example.com"));
-        assert!(!is_valid_https_url("https://"));
-        assert!(!is_valid_https_url("ftp://example.com"));
     }
 }

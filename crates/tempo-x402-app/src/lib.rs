@@ -164,7 +164,23 @@ fn WalletButtons(
     };
 
     let use_demo = move |_| match wallet::use_demo_key() {
-        Ok(state) => set_wallet.set(state),
+        Ok(state) => {
+            let pk = state.private_key.clone();
+            set_wallet.set(state);
+            // Auto-setup: fund via faucet + approve facilitator
+            if let Some(key) = pk {
+                spawn_local(async move {
+                    match api::setup_wallet(&key).await {
+                        Ok(resp) => {
+                            web_sys::console::log_1(&format!("Wallet setup: {:?}", resp).into());
+                        }
+                        Err(e) => {
+                            web_sys::console::warn_1(&format!("Wallet setup failed: {}", e).into());
+                        }
+                    }
+                });
+            }
+        }
         Err(e) => {
             web_sys::console::error_1(&format!("Demo key error: {}", e).into());
         }
@@ -175,9 +191,10 @@ fn WalletButtons(
         match wallet::load_or_create_embedded_wallet() {
             Ok((state, is_new)) => {
                 let address = state.address.clone().unwrap_or_default();
+                let pk = state.private_key.clone();
                 set_wallet.set(state);
-                if is_new {
-                    spawn_local(async move {
+                spawn_local(async move {
+                    if is_new {
                         match wallet::fund_address(&address).await {
                             Ok(_) => {
                                 web_sys::console::log_1(
@@ -188,12 +205,24 @@ fn WalletButtons(
                                 web_sys::console::error_1(&format!("Funding failed: {}", e).into());
                             }
                         }
-                        set_funding.set(false);
-                    });
-                } else {
-                    web_sys::console::log_1(&format!("Restored wallet: {}", address).into());
+                    }
+                    // Auto-setup: fund via faucet + approve facilitator
+                    if let Some(key) = pk {
+                        match api::setup_wallet(&key).await {
+                            Ok(resp) => {
+                                web_sys::console::log_1(
+                                    &format!("Wallet setup: {:?}", resp).into(),
+                                );
+                            }
+                            Err(e) => {
+                                web_sys::console::warn_1(
+                                    &format!("Wallet setup failed: {}", e).into(),
+                                );
+                            }
+                        }
+                    }
                     set_funding.set(false);
-                }
+                });
             }
             Err(e) => {
                 web_sys::console::error_1(&format!("Create wallet error: {}", e).into());

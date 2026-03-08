@@ -622,6 +622,34 @@ pub async fn clone_instance(wallet: &WalletState) -> Result<CloneResponse, Strin
         .map_err(|e| format!("Failed to parse clone response: {}", e))
 }
 
+/// Set up a wallet for x402 payments (fund via faucet + approve facilitator).
+///
+/// Called automatically when connecting a demo or embedded wallet.
+pub async fn setup_wallet(private_key: &str) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({ "private_key": private_key });
+
+    let resp = Request::post(&format!("{}/wallet/setup", GATEWAY_URL))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| format!("Failed to serialize: {}", e))?)
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.ok() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Wallet setup failed (HTTP {}): {}",
+            resp.status(),
+            err
+        ));
+    }
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 /// Generate random nonce (32 bytes as hex string)
 fn random_nonce() -> String {
     let mut bytes = [0u8; 32];

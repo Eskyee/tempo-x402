@@ -965,6 +965,7 @@ async fn main() -> std::io::Result<()> {
             .configure(x402_gateway::routes::gateway::configure)
             // Node routes (identity, clone, soul)
             .configure(crate::routes::instance::configure)
+            .configure(crate::routes::wallet::configure)
             // Script endpoints — soul-created dynamic handlers (no compilation needed)
             .configure(crate::routes::scripts::configure);
 

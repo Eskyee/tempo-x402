@@ -59,6 +59,11 @@ impl<P> TempoSchemeFacilitator<P> {
         }
     }
 
+    /// Returns the on-chain address of this facilitator.
+    pub fn facilitator_address(&self) -> Address {
+        self.facilitator_address
+    }
+
     /// Create a new facilitator with a custom chain configuration.
     pub fn with_chain_config(
         provider: P,

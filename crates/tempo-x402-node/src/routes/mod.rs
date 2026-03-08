@@ -4,3 +4,4 @@ pub mod instance;
 pub mod scripts;
 #[cfg(feature = "soul")]
 pub mod soul;
+pub mod wallet;

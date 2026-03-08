@@ -1541,12 +1541,14 @@ impl ToolExecutor {
         }
 
         // Fallback: HTTP-based discovery via parent's /instance/siblings
+        let default_local = format!(
+            "http://localhost:{}",
+            std::env::var("PORT").unwrap_or_else(|_| "4023".to_string())
+        );
         let parent_url = std::env::var("PARENT_URL")
             .ok()
             .or_else(|| self.gateway_url.clone())
-            .ok_or_else(|| {
-                "no PARENT_URL or gateway URL configured and no on-chain registry — cannot discover peers".to_string()
-            })?;
+            .unwrap_or(default_local);
 
         let url = format!("{}/instance/siblings", parent_url.trim_end_matches('/'));
 

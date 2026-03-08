@@ -336,7 +336,8 @@ async fn main() -> std::io::Result<()> {
                                         .and_then(|line| line.strip_prefix("# ").map(String::from))
                                 })
                                 .unwrap_or_else(|| format!("Script endpoint: {stem}"));
-                            let (price_usd, price_amount) = routes::scripts::get_script_pricing(base);
+                            let (price_usd, price_amount) =
+                                routes::scripts::get_script_pricing(base);
                             match gateway_db.create_endpoint(
                                 &script_slug,
                                 &owner,
@@ -587,6 +588,17 @@ async fn main() -> std::io::Result<()> {
 
     // Soul liveness flag — shared between NodeState (for health checks) and the soul task.
     // Created upfront so the Arc is shared before NodeState is cloned into web::Data.
+    // Only Some() when soul will actually be spawned; None means "no soul to monitor".
+    let soul_will_spawn = {
+        #[cfg(feature = "soul")]
+        {
+            soul.is_some() && soul_thinking_enabled
+        }
+        #[cfg(not(feature = "soul"))]
+        {
+            false
+        }
+    };
     let soul_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let node_state = NodeState {
@@ -611,7 +623,11 @@ async fn main() -> std::io::Result<()> {
         soul_observer: soul_observer.clone(),
         #[cfg(not(feature = "soul"))]
         soul_observer: None,
-        soul_alive: Some(soul_alive.clone()),
+        soul_alive: if soul_will_spawn {
+            Some(soul_alive.clone())
+        } else {
+            None
+        },
     };
 
     let node_data = web::Data::new(node_state.clone());

@@ -324,7 +324,7 @@ pub fn planning_prompt(
          ## Inter-Agent Economy\n\
          Your script endpoints are gated by x402 payment — other agents pay to call them.\n\
          You can call other agents' paid endpoints using `call_paid_endpoint`.\n\
-         You can discover peer instances using `discover_peers`.\n\
+         Use `discover_peers` first — each endpoint has a `callable_url` you pass directly to `call_paid_endpoint`.\n\
          Building useful endpoints = revenue from other agents calling them.\n\n\
          # Task\n\
          Create a step-by-step plan to achieve this goal. Each step is one of:\n\n\
@@ -335,7 +335,7 @@ pub fn planning_prompt(
          - {{\"type\": \"run_shell\", \"command\": \"...\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"commit\", \"message\": \"...\"}}\n\
          - {{\"type\": \"check_self\", \"endpoint\": \"health\", \"store_as\": \"key\"}}\n\
-         - {{\"type\": \"call_paid_endpoint\", \"url\": \"http://localhost:8080/clone\", \"method\": \"POST\", \"body\": \"{{}}\", \"store_as\": \"key\"}}  (signs x402 payment automatically)\n\
+         - {{\"type\": \"call_paid_endpoint\", \"url\": \"https://peer.up.railway.app/g/script-name/\", \"method\": \"GET\", \"store_as\": \"key\"}}  (signs x402 payment automatically — use callable_url from discover_peers)\n\
          - {{\"type\": \"create_script_endpoint\", \"slug\": \"...\", \"script\": \"#!/bin/bash\\n...\", \"description\": \"...\"}}\n\
          - {{\"type\": \"test_script_endpoint\", \"slug\": \"...\", \"input\": \"test data\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\

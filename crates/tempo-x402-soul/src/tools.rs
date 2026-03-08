@@ -1543,12 +1543,32 @@ impl ToolExecutor {
                         .cloned()
                         .unwrap_or_default();
 
+                    // Build callable URLs so the LLM can pass them directly to call_paid_endpoint
+                    let callable_endpoints: Vec<serde_json::Value> = endpoints
+                        .iter()
+                        .map(|ep| {
+                            let slug = ep.get("slug").and_then(|s| s.as_str()).unwrap_or("");
+                            let mut ep_clone = ep.clone();
+                            if let Some(obj) = ep_clone.as_object_mut() {
+                                obj.insert(
+                                    "callable_url".to_string(),
+                                    serde_json::Value::String(format!(
+                                        "{}/g/{}/",
+                                        sib_url.trim_end_matches('/'),
+                                        slug
+                                    )),
+                                );
+                            }
+                            ep_clone
+                        })
+                        .collect();
+
                     enriched_peers.push(serde_json::json!({
                         "instance_id": inst_id,
                         "url": sib_url,
                         "address": address,
                         "version": version,
-                        "endpoints": endpoints,
+                        "endpoints": callable_endpoints,
                     }));
                 }
 
@@ -2224,7 +2244,7 @@ pub fn request_plan_tool() -> FunctionDeclaration {
 pub fn discover_peers_tool() -> FunctionDeclaration {
     FunctionDeclaration {
         name: "discover_peers".to_string(),
-        description: "Discover peer agents via the on-chain ERC-8004 identity registry. Enumerates all minted agent NFTs and resolves their metadata URIs to find live peers. Falls back to parent's /instance/siblings if no on-chain registry is configured. Returns peer URLs, addresses, and reachability status.".to_string(),
+        description: "Discover peer agents via the on-chain ERC-8004 identity registry or HTTP fallback. Returns peer URLs, addresses, version, and endpoint catalogs. Each endpoint includes a callable_url that can be passed directly to call_paid_endpoint.".to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {},
@@ -2237,13 +2257,13 @@ pub fn discover_peers_tool() -> FunctionDeclaration {
 pub fn call_paid_endpoint_tool() -> FunctionDeclaration {
     FunctionDeclaration {
         name: "call_paid_endpoint".to_string(),
-        description: "Call another agent's paid endpoint using the x402 payment flow. Automatically handles 402 → sign payment → retry. Requires EVM_PRIVATE_KEY to sign payments.".to_string(),
+        description: "Call another agent's paid endpoint using the x402 payment flow. Automatically handles 402 → sign EIP-712 payment → retry with signature. Auto-approves ERC-20 allowance on first payment to a new peer. Use the callable_url from discover_peers output.".to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "Full URL of the paid endpoint (e.g., 'https://peer.up.railway.app/x/uuid')"
+                    "description": "Full callable URL of the paid endpoint (e.g., 'https://peer.up.railway.app/g/script-peer-discovery/' — use callable_url from discover_peers)"
                 },
                 "method": {
                     "type": "string",

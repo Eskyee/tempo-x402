@@ -1,4 +1,5 @@
 use actix_web::{web, HttpResponse};
+use alloy::primitives::{Address, U256};
 
 use crate::db;
 use crate::state::NodeState;
@@ -53,6 +54,13 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
         && state.clone_price.is_some()
         && (children.len() as u32) < state.clone_max_children;
 
+    // Fetch node wallet balance (best-effort, non-blocking for the response)
+    let wallet_balance = if let Some(ref id) = state.identity {
+        fetch_pathusd_balance(id.address).await
+    } else {
+        None
+    };
+
     HttpResponse::Ok().json(serde_json::json!({
         "identity": identity_info,
         "agent_token_id": state.agent_token_id,
@@ -63,6 +71,7 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
         "clone_max_children": state.clone_max_children,
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": uptime_secs,
+        "wallet_balance": wallet_balance,
     }))
 }
 
@@ -220,6 +229,26 @@ pub async fn peers(state: web::Data<NodeState>) -> HttpResponse {
             "count": 0,
         })),
     }
+}
+
+/// Fetch pathUSD balance for an address (best-effort, returns None on any error).
+async fn fetch_pathusd_balance(address: Address) -> Option<serde_json::Value> {
+    let rpc_url =
+        std::env::var("RPC_URL").unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
+    let provider = alloy::providers::ProviderBuilder::new()
+        .connect_http(rpc_url.parse::<reqwest::Url>().ok()?);
+    let token = x402::constants::DEFAULT_TOKEN;
+    let balance = x402::tip20::balance_of(&provider, token, address)
+        .await
+        .ok()?;
+    // pathUSD has 6 decimals
+    let whole = balance / U256::from(1_000_000u64);
+    let frac = balance % U256::from(1_000_000u64);
+    Some(serde_json::json!({
+        "token": "pathUSD",
+        "raw": balance.to_string(),
+        "formatted": format!("{}.{:06}", whole, frac),
+    }))
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {

@@ -510,6 +510,11 @@ fn InstancePanel() -> impl IntoView {
                         .and_then(|v| v.as_str())
                         .map(String::from);
 
+                    let wallet_balance = data.get("wallet_balance")
+                        .and_then(|v| v.get("formatted"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| format!("{} pathUSD", s));
+
                     let children = data.get("children")
                         .and_then(|v| v.as_array())
                         .cloned()
@@ -521,6 +526,9 @@ fn InstancePanel() -> impl IntoView {
                         <div class="instance-details">
                             <div class="instance-identity">
                                 <p><strong>"Address: "</strong><code>{address}</code></p>
+                                {wallet_balance.map(|bal| view! {
+                                    <p><strong>"Balance: "</strong>{bal}</p>
+                                })}
                                 <p><strong>"Instance: "</strong><code>{instance_id}</code></p>
                                 <p><strong>"Version: "</strong>{version}</p>
                                 <p><strong>"Uptime: "</strong>{format!("{}s", uptime)}</p>

@@ -242,9 +242,15 @@ impl CloneOrchestrator {
         let url = self.railway.create_domain(service_id, &env_id).await?;
         tracing::info!(url = %url, "Domain created");
 
-        // 9. Deploy
-        let deployment_id = self.railway.deploy_service(service_id, &env_id).await?;
-        tracing::info!(deployment_id = %deployment_id, "Deployment triggered");
+        // 9. Deploy (skip for source-based — the deployment trigger already builds)
+        let deployment_id = if branch_name.is_none() {
+            let id = self.railway.deploy_service(service_id, &env_id).await?;
+            tracing::info!(deployment_id = %id, "Deployment triggered");
+            id
+        } else {
+            tracing::info!("Source-based clone — deployment trigger will build automatically");
+            "trigger-based".to_string()
+        };
 
         Ok(CloneResult {
             instance_id: instance_id.to_string(),

@@ -354,7 +354,9 @@ pub fn planning_prompt(
          - Prefer edit_code over generate_code for existing files\n\
          - Protected files (soul core, identity, Cargo.toml, Cargo.lock) cannot be modified\n\
          - Do NOT try to modify Dockerfile, railway.toml, or deployment configs — focus on Rust code\n\
-         - Use only dependencies already available in the workspace\n\n\
+         - Use only dependencies already available in the workspace\n\
+         - For call_paid_endpoint: URLs must be LITERAL (e.g., https://peer.up.railway.app/g/slug/). \
+           NEVER use template variables like {{target_url}}. Construct the URL from the peer info shown above.\n\n\
          Respond with ONLY a JSON array of steps, no other text.",
         goal.description,
         goal.success_criteria,

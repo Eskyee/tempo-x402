@@ -109,6 +109,34 @@ pub fn goal_creation_prompt(
         sections.push(ep_lines.join("\n"));
     }
 
+    // Network peers — show what sibling/child agents are available
+    if !snapshot.peers.is_empty() {
+        let mut peer_lines = vec!["# Network Peers".to_string()];
+        for peer in &snapshot.peers {
+            let ep_summary: Vec<String> = peer
+                .endpoints
+                .iter()
+                .map(|e| format!("{} (${})", e.slug, e.price))
+                .collect();
+            let ep_str = if ep_summary.is_empty() {
+                "no endpoints".to_string()
+            } else {
+                ep_summary.join(", ")
+            };
+            peer_lines.push(format!(
+                "- {} ({}) — {}{}",
+                peer.instance_id,
+                peer.url,
+                ep_str,
+                peer.version
+                    .as_ref()
+                    .map(|v| format!(" [v{v}]"))
+                    .unwrap_or_default()
+            ));
+        }
+        sections.push(peer_lines.join("\n"));
+    }
+
     // Include non-auto beliefs (LLM-created ones have real insight)
     let llm_beliefs: Vec<_> = beliefs
         .iter()

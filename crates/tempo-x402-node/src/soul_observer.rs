@@ -16,6 +16,8 @@ pub struct NodeObserverImpl {
     generation: u32,
     started_at: chrono::DateTime<chrono::Utc>,
     db_path: String,
+    /// Cached peers from last fetch (refreshed periodically).
+    peers_cache: std::sync::Mutex<(Vec<x402_soul::observer::PeerInfo>, std::time::Instant)>,
 }
 
 impl NodeObserverImpl {
@@ -32,8 +34,147 @@ impl NodeObserverImpl {
             generation,
             started_at,
             db_path,
+            peers_cache: std::sync::Mutex::new((Vec::new(), std::time::Instant::now())),
         })
     }
+}
+
+impl NodeObserverImpl {
+    /// Refresh the peers cache by querying parent's /instance/siblings and each peer's /instance/info.
+    /// Called periodically from the thinking loop context (async).
+    pub async fn refresh_peers(&self) {
+        use x402_soul::observer::PeerInfo;
+
+        let parent_url = std::env::var("PARENT_URL").ok();
+        let self_instance_id = self.identity.as_ref().map(|id| id.instance_id.as_str());
+
+        // Also include local children as peers (for parent nodes)
+        let mut peers = Vec::new();
+
+        // Local children (parent perspective)
+        if let Ok(conn) = rusqlite::Connection::open(&self.db_path) {
+            if let Ok(children) = crate::db::query_children_active(&conn) {
+                for child in children {
+                    if child.status != "running" {
+                        continue;
+                    }
+                    if let Some(url) = &child.url {
+                        let mut peer = PeerInfo {
+                            instance_id: child.instance_id.clone(),
+                            url: url.clone(),
+                            address: Some(child.address.clone()),
+                            version: None,
+                            endpoints: Vec::new(),
+                        };
+                        // Try to fetch /instance/info for richer data
+                        if let Ok(info) = Self::fetch_peer_info(url).await {
+                            peer.version = info.version;
+                            peer.endpoints = info.endpoints;
+                        }
+                        peers.push(peer);
+                    }
+                }
+            }
+        }
+
+        // Siblings (child perspective — ask parent)
+        if let Some(ref parent) = parent_url {
+            let siblings_url = format!("{}/instance/siblings", parent.trim_end_matches('/'));
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build();
+            if let Ok(client) = client {
+                if let Ok(resp) = client.get(&siblings_url).send().await {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(siblings) = json.get("siblings").and_then(|v| v.as_array()) {
+                            for sib in siblings {
+                                let inst_id = sib
+                                    .get("instance_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+                                // Skip self
+                                if self_instance_id == Some(inst_id) {
+                                    continue;
+                                }
+                                let url = match sib.get("url").and_then(|v| v.as_str()) {
+                                    Some(u) => u.to_string(),
+                                    None => continue,
+                                };
+                                let mut peer = PeerInfo {
+                                    instance_id: inst_id.to_string(),
+                                    url: url.clone(),
+                                    address: sib
+                                        .get("address")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
+                                    version: None,
+                                    endpoints: Vec::new(),
+                                };
+                                // Fetch peer's /instance/info for endpoints
+                                if let Ok(info) = Self::fetch_peer_info(&url).await {
+                                    peer.version = info.version;
+                                    peer.endpoints = info.endpoints;
+                                }
+                                peers.push(peer);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Ok(mut cache) = self.peers_cache.lock() {
+            *cache = (peers, std::time::Instant::now());
+        }
+    }
+
+    /// Fetch a peer's /instance/info and extract version + endpoints.
+    async fn fetch_peer_info(
+        peer_url: &str,
+    ) -> Result<PeerInfoResult, Box<dyn std::error::Error + Send + Sync>> {
+        use x402_soul::observer::PeerEndpoint;
+
+        let url = format!("{}/instance/info", peer_url.trim_end_matches('/'));
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()?;
+        let resp = client.get(&url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+
+        let version = json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let mut endpoints = Vec::new();
+        if let Some(eps) = json.get("endpoints").and_then(|v| v.as_array()) {
+            for ep in eps {
+                endpoints.push(PeerEndpoint {
+                    slug: ep
+                        .get("slug")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    price: ep
+                        .get("price")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .to_string(),
+                    description: ep
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                });
+            }
+        }
+
+        Ok(PeerInfoResult { version, endpoints })
+    }
+}
+
+/// Extracted peer info from /instance/info.
+struct PeerInfoResult {
+    version: Option<String>,
+    endpoints: Vec<x402_soul::observer::PeerEndpoint>,
 }
 
 impl NodeObserver for NodeObserverImpl {
@@ -95,6 +236,13 @@ impl NodeObserver for NodeObserverImpl {
             }
         };
 
+        // Use cached peers (refreshed async in thinking loop)
+        let peers = self
+            .peers_cache
+            .lock()
+            .map(|cache| cache.0.clone())
+            .unwrap_or_default();
+
         Ok(NodeSnapshot {
             uptime_secs,
             endpoint_count,
@@ -108,6 +256,7 @@ impl NodeObserver for NodeObserverImpl {
             instance_id: self.identity.as_ref().map(|id| id.instance_id.clone()),
             generation: self.generation,
             endpoints: endpoint_summaries,
+            peers,
         })
     }
 }

@@ -173,11 +173,13 @@ Nodes are autonomous agents that:
 - **Think autonomously** &mdash; plan-driven execution loop powered by Gemini, with neuroplastic memory
 - **Create services** &mdash; introspective endpoints that expose the node's own capabilities
 - **Clone themselves** &mdash; spawn copies on Railway infrastructure
+- **Communicate with peers** &mdash; discover siblings, inspect their endpoint catalogs, call paid services
 
 The soul's cognition includes:
 - **Plan-driven execution** &mdash; goals decompose into deterministic step sequences
 - **Neuroplastic memory** &mdash; salience scoring, tiered decay, prediction error learning
 - **World model** &mdash; structured beliefs about self, endpoints, codebase, strategy
+- **Agent-to-agent economy** &mdash; peer discovery, endpoint catalog exchange, paid cross-agent calls
 - **Coding agent** &mdash; read, write, edit files, run shell commands, git commit, push
 - **Script endpoints** &mdash; create instant bash-based HTTP endpoints (no compilation)
 - **ERC-8004 identity** &mdash; on-chain agent NFTs, reputation, validation

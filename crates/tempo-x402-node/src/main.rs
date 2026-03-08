@@ -391,7 +391,7 @@ async fn main() -> std::io::Result<()> {
 
     // Build observer early so we can share it between NodeState and soul spawn
     #[cfg(feature = "soul")]
-    let soul_observer: Option<std::sync::Arc<dyn x402_soul::NodeObserver>> =
+    let soul_observer_impl: Option<std::sync::Arc<soul_observer::NodeObserverImpl>> =
         if soul.is_some() || soul_config_for_state.is_some() {
             Some(soul_observer::NodeObserverImpl::new(
                 gateway_state.clone(),
@@ -403,6 +403,9 @@ async fn main() -> std::io::Result<()> {
         } else {
             None
         };
+    let soul_observer: Option<std::sync::Arc<dyn x402_soul::NodeObserver>> = soul_observer_impl
+        .clone()
+        .map(|o| o as std::sync::Arc<dyn x402_soul::NodeObserver>);
     #[cfg(not(feature = "soul"))]
     let soul_observer: Option<()> = None;
 
@@ -508,6 +511,19 @@ async fn main() -> std::io::Result<()> {
     if let Some(soul) = soul {
         if let Some(observer) = soul_observer {
             if soul_thinking_enabled {
+                // Spawn background peer discovery refresh (every 5 minutes)
+                if let Some(ref obs_impl) = soul_observer_impl {
+                    let obs_for_peers = obs_impl.clone();
+                    tokio::spawn(async move {
+                        // Initial delay — let the node finish starting up
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        loop {
+                            obs_for_peers.refresh_peers().await;
+                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        }
+                    });
+                }
+
                 soul.spawn(observer);
                 tracing::info!(
                     dormant = node_state.soul_dormant,

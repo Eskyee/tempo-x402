@@ -61,6 +61,22 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
         None
     };
 
+    // Include registered endpoints so peers can discover available services
+    let endpoints: Vec<serde_json::Value> = state
+        .gateway
+        .db
+        .list_endpoints(500, 0)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ep| {
+            serde_json::json!({
+                "slug": ep.slug,
+                "price": ep.price_usd,
+                "description": ep.description,
+            })
+        })
+        .collect();
+
     HttpResponse::Ok().json(serde_json::json!({
         "identity": identity_info,
         "agent_token_id": state.agent_token_id,
@@ -72,6 +88,7 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": uptime_secs,
         "wallet_balance": wallet_balance,
+        "endpoints": endpoints,
     }))
 }
 

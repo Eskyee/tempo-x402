@@ -1502,19 +1502,76 @@ impl ToolExecutor {
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                let duration_ms = start.elapsed().as_millis() as u64;
 
-                let body_truncated = if body.len() > MAX_OUTPUT_BYTES {
+                // Parse siblings and enrich each with /instance/info
+                let siblings_json: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or_default();
+                let siblings = siblings_json
+                    .get("siblings")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+
+                let mut enriched_peers = Vec::new();
+                for sib in &siblings {
+                    let inst_id = sib
+                        .get("instance_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let sib_url = match sib.get("url").and_then(|v| v.as_str()) {
+                        Some(u) => u,
+                        None => continue,
+                    };
+                    let address = sib.get("address").and_then(|v| v.as_str());
+
+                    // Fetch peer's /instance/info for endpoints + version
+                    let info_url = format!("{}/instance/info", sib_url.trim_end_matches('/'));
+                    let peer_info = client.get(&info_url).send().await.ok();
+                    let info_json: Option<serde_json::Value> = match peer_info {
+                        Some(r) => r.json().await.ok(),
+                        None => None,
+                    };
+
+                    let version = info_json
+                        .as_ref()
+                        .and_then(|j| j.get("version"))
+                        .and_then(|v| v.as_str());
+                    let endpoints = info_json
+                        .as_ref()
+                        .and_then(|j| j.get("endpoints"))
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+
+                    enriched_peers.push(serde_json::json!({
+                        "instance_id": inst_id,
+                        "url": sib_url,
+                        "address": address,
+                        "version": version,
+                        "endpoints": endpoints,
+                    }));
+                }
+
+                let output = serde_json::to_string_pretty(&serde_json::json!({
+                    "source": "http",
+                    "parent_url": parent_url,
+                    "peers": enriched_peers,
+                    "count": enriched_peers.len(),
+                }))
+                .unwrap_or_default();
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let output_truncated = if output.len() > MAX_OUTPUT_BYTES {
                     format!(
                         "{}\n... (truncated)",
-                        body.chars().take(MAX_OUTPUT_BYTES).collect::<String>()
+                        output.chars().take(MAX_OUTPUT_BYTES).collect::<String>()
                     )
                 } else {
-                    body
+                    output
                 };
 
                 Ok(ToolResult {
-                    stdout: body_truncated,
+                    stdout: output_truncated,
                     stderr: String::new(),
                     exit_code: status.as_u16() as i32,
                     duration_ms,

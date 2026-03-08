@@ -15,6 +15,24 @@ pub struct EndpointSummary {
     pub revenue: String,
 }
 
+/// Summary of a peer agent visible in the network.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PeerInfo {
+    pub instance_id: String,
+    pub url: String,
+    pub address: Option<String>,
+    pub version: Option<String>,
+    pub endpoints: Vec<PeerEndpoint>,
+}
+
+/// A peer's available paid endpoint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PeerEndpoint {
+    pub slug: String,
+    pub price: String,
+    pub description: Option<String>,
+}
+
 /// A snapshot of the node's current state, captured by the observer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeSnapshot {
@@ -37,6 +55,9 @@ pub struct NodeSnapshot {
     /// Per-endpoint details (slug, price, traffic).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub endpoints: Vec<EndpointSummary>,
+    /// Known network peers (populated from parent's siblings API).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<PeerInfo>,
 }
 
 /// Trait for observing node state. Implemented by the node crate.

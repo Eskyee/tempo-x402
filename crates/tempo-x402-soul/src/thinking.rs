@@ -892,13 +892,11 @@ impl ThinkingLoop {
                     5u32,
                 ),
                 (
-                    "Create a script endpoint using create_script_endpoint: \
-                     a 'payment-explain' endpoint that takes a transaction hash or payment scenario \
-                     in REQUEST_BODY and returns a step-by-step explanation of how x402 payment works \
-                     for that case — the EIP-712 signing, facilitator verification, on-chain settlement. \
-                     Use python3 to generate the explanation. Return JSON. \
-                     Then test it with test_script_endpoint.",
-                    "POST /x/payment-explain returns JSON with x402 flow explanation, test_script_endpoint succeeds",
+                    "Discover sibling agents using discover_peers and call one of their paid \
+                     endpoints using call_paid_endpoint to verify the agent-to-agent payment flow. \
+                     Check what endpoints they offer, pick one, and make a real paid request. \
+                     Record the result as a belief about inter-agent commerce.",
+                    "discover_peers returns at least one peer with endpoints, call_paid_endpoint succeeds on one of them",
                     4u32,
                 ),
             ];

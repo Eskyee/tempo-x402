@@ -207,27 +207,35 @@ impl CloneOrchestrator {
             ));
         }
 
-        // 6. Add volume
-        self.railway
-            .add_volume(service_id, &env_id, "/data")
-            .await?;
-        tracing::info!("Volume attached at /data");
+        // 6. Add volume (best-effort — clone works without persistent storage)
+        match self.railway.add_volume(service_id, &env_id, "/data").await {
+            Ok(_) => tracing::info!("Volume attached at /data"),
+            Err(e) => {
+                tracing::warn!(error = %e, "Volume attachment failed (best-effort, continuing)")
+            }
+        }
 
-        // 7. Set resource limits (conservative defaults for children)
+        // 7. Set resource limits (best-effort — Railway defaults are fine)
         if self.config.clone_cpu_millicores > 0 || self.config.clone_memory_mb > 0 {
-            self.railway
+            match self
+                .railway
                 .update_service_resources(
                     service_id,
                     &env_id,
                     self.config.clone_cpu_millicores,
                     self.config.clone_memory_mb,
                 )
-                .await?;
-            tracing::info!(
-                cpu = self.config.clone_cpu_millicores,
-                memory_mb = self.config.clone_memory_mb,
-                "Resource limits configured"
-            );
+                .await
+            {
+                Ok(_) => tracing::info!(
+                    cpu = self.config.clone_cpu_millicores,
+                    memory_mb = self.config.clone_memory_mb,
+                    "Resource limits configured"
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Resource limits failed (best-effort, continuing)")
+                }
+            }
         }
 
         // 8. Create domain

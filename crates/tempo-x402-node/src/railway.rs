@@ -401,8 +401,8 @@ impl RailwayClient {
 
     /// Update compute resource limits for a service instance.
     ///
-    /// Uses `serviceInstanceUpdate` to set CPU, memory, and other compute limits.
-    /// Railway expects CPU in millicores (e.g., 2000 = 2 vCPU) and memory in MB.
+    /// Uses `serviceInstanceLimitsUpdate` mutation.
+    /// Railway expects CPU as vCPUs (Float) and memory as GB (Float).
     pub async fn update_service_resources(
         &self,
         service_id: &str,
@@ -411,19 +411,20 @@ impl RailwayClient {
         memory_limit_mb: u32,
     ) -> Result<(), RailwayError> {
         let query = r#"
-            mutation ServiceInstanceUpdate($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
-                serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+            mutation ServiceInstanceLimitsUpdate($input: ServiceInstanceLimitsUpdateInput!) {
+                serviceInstanceLimitsUpdate(input: $input)
             }
         "#;
 
+        let vcpus = cpu_limit_millicores as f64 / 1000.0;
+        let memory_gb = memory_limit_mb as f64 / 1024.0;
+
         let variables = serde_json::json!({
-            "serviceId": service_id,
-            "environmentId": environment_id,
             "input": {
-                "resourceLimits": {
-                    "cpuMillicores": cpu_limit_millicores,
-                    "memoryMB": memory_limit_mb,
-                }
+                "serviceId": service_id,
+                "environmentId": environment_id,
+                "vCPUs": vcpus,
+                "memoryGB": memory_gb,
             }
         });
 

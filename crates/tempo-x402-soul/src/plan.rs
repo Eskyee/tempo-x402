@@ -139,6 +139,11 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Discover network peers (mechanical — no LLM needed).
+    DiscoverPeers {
+        #[serde(default)]
+        store_as: Option<String>,
+    },
 }
 
 impl PlanStep {
@@ -197,6 +202,7 @@ impl PlanStep {
             PlanStep::Think { question, .. } => {
                 format!("think: {}", &question[..question.len().min(40)])
             }
+            PlanStep::DiscoverPeers { .. } => "discover peers".to_string(),
         }
     }
 
@@ -212,7 +218,8 @@ impl PlanStep {
             | PlanStep::CreateScriptEndpoint { store_as, .. }
             | PlanStep::TestScriptEndpoint { store_as, .. }
             | PlanStep::CargoCheck { store_as, .. }
-            | PlanStep::Think { store_as, .. } => store_as.as_deref(),
+            | PlanStep::Think { store_as, .. }
+            | PlanStep::DiscoverPeers { store_as, .. } => store_as.as_deref(),
             PlanStep::Commit { .. } | PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } => {
                 None
             }
@@ -356,6 +363,10 @@ impl<'a> PlanExecutor<'a> {
             }
             PlanStep::Think { question, .. } => {
                 self.execute_think_step(question, plan_context).await
+            }
+            PlanStep::DiscoverPeers { .. } => {
+                self.execute_tool("discover_peers", &serde_json::json!({}))
+                    .await
             }
         }
     }

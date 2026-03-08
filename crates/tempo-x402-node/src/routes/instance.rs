@@ -174,7 +174,8 @@ pub async fn siblings(state: web::Data<NodeState>) -> HttpResponse {
 
     let mut siblings = Vec::new();
     for child in &children {
-        if child.status != "running" {
+        // Include children that are running or deploying (if they have a URL, they're likely reachable)
+        if child.status != "running" && child.status != "deploying" {
             continue;
         }
         let Some(url) = child.url.as_ref() else {

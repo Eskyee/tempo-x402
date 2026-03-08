@@ -143,7 +143,7 @@ pub enum IdentityError {
 /// 1. If `identity_path` exists, load and return the persisted identity.
 /// 2. Otherwise, generate a new random keypair, persist it, and return it.
 /// 3. Inject environment variables (`EVM_ADDRESS`, `FACILITATOR_PRIVATE_KEY`,
-///    `FACILITATOR_SHARED_SECRET`) so downstream config (e.g. `GatewayConfig::from_env()`)
+///    `EVM_PRIVATE_KEY`, `FACILITATOR_SHARED_SECRET`) so downstream config (e.g. `GatewayConfig::from_env()`)
 ///    picks them up automatically.
 pub fn bootstrap(identity_path: &str) -> Result<InstanceIdentity, IdentityError> {
     let path = Path::new(identity_path);
@@ -234,6 +234,13 @@ fn inject_env_vars(identity: &InstanceIdentity) {
     if env::var("FACILITATOR_PRIVATE_KEY").is_err() {
         env::set_var("FACILITATOR_PRIVATE_KEY", &identity.private_key);
         tracing::debug!("Injected FACILITATOR_PRIVATE_KEY");
+    }
+
+    // The node's wallet key is also used as the client signing key for x402 payments.
+    // Without this, `call_paid_endpoint` and `register_endpoint` tools fail.
+    if env::var("EVM_PRIVATE_KEY").is_err() {
+        env::set_var("EVM_PRIVATE_KEY", &identity.private_key);
+        tracing::debug!("Injected EVM_PRIVATE_KEY");
     }
 
     if env::var("FACILITATOR_SHARED_SECRET").is_err() {

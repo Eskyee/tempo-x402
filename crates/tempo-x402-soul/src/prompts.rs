@@ -338,7 +338,8 @@ pub fn planning_prompt(
          - {{\"type\": \"call_paid_endpoint\", \"url\": \"http://localhost:8080/clone\", \"method\": \"POST\", \"body\": \"{{}}\", \"store_as\": \"key\"}}  (signs x402 payment automatically)\n\
          - {{\"type\": \"create_script_endpoint\", \"slug\": \"...\", \"script\": \"#!/bin/bash\\n...\", \"description\": \"...\"}}\n\
          - {{\"type\": \"test_script_endpoint\", \"slug\": \"...\", \"input\": \"test data\", \"store_as\": \"key\"}}\n\
-         - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\n\
+         - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\
+         - {{\"type\": \"discover_peers\", \"store_as\": \"peers\"}}  (fetches sibling/child instances and their endpoints)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\

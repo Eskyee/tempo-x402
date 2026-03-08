@@ -74,11 +74,21 @@ pub fn extract_payment_header(req: &HttpRequest) -> Option<PaymentPayload> {
     let header_str = header.to_str().ok()?;
 
     // Base64 decode
-    let decoded =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, header_str).ok()?;
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, header_str)
+        .map_err(|e| {
+            tracing::warn!("PAYMENT-SIGNATURE base64 decode failed: {e}");
+            e
+        })
+        .ok()?;
 
     // Parse JSON
-    serde_json::from_slice(&decoded).ok()
+    serde_json::from_slice(&decoded)
+        .map_err(|e| {
+            let preview = String::from_utf8_lossy(&decoded[..decoded.len().min(200)]);
+            tracing::warn!("PAYMENT-SIGNATURE JSON parse failed: {e}, payload preview: {preview}");
+            e
+        })
+        .ok()
 }
 
 /// Extract the payer address from the PAYMENT-SIGNATURE header without settling.

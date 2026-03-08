@@ -1833,11 +1833,17 @@ impl ToolExecutor {
         };
 
         Ok(ToolResult {
-            stdout: body_truncated,
+            stdout: body_truncated.clone(),
             stderr: if status.is_success() {
                 String::new()
             } else {
-                format!("paid request returned status {status}")
+                // Include body in error for debugging
+                let body_preview = if body_truncated.len() > 300 {
+                    format!("{}...", &body_truncated[..300])
+                } else {
+                    body_truncated
+                };
+                format!("paid request returned status {status}: {body_preview}")
             },
             exit_code: status.as_u16() as i32,
             duration_ms,

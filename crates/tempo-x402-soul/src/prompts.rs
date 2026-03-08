@@ -323,8 +323,8 @@ pub fn planning_prompt(
          USE SCRIPT ENDPOINTS. They are instant, always work, and support jq + python3 for complex logic.\n\n\
          ## Inter-Agent Economy\n\
          Your script endpoints are gated by x402 payment — other agents pay to call them.\n\
-         You can call other agents' paid endpoints using `call_paid_endpoint`.\n\
-         Use `discover_peers` first — each endpoint has a `callable_url` you pass directly to `call_paid_endpoint`.\n\
+         You can call other agents' paid endpoints using `call_peer` (easiest — discovers + calls in one step).\n\
+         Or use `discover_peers` + `call_paid_endpoint` separately for more control.\n\
          Building useful endpoints = revenue from other agents calling them.\n\n\
          # Task\n\
          Create a step-by-step plan to achieve this goal. Each step is one of:\n\n\
@@ -340,7 +340,8 @@ pub fn planning_prompt(
          - {{\"type\": \"test_script_endpoint\", \"slug\": \"...\", \"input\": \"test data\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\
          - {{\"type\": \"delete_endpoint\", \"slug\": \"script-name\"}}  (deactivate a registered endpoint)\n\
-         - {{\"type\": \"discover_peers\", \"store_as\": \"peers\"}}  (fetches sibling/child instances and their endpoints)\n\n\
+         - {{\"type\": \"discover_peers\", \"store_as\": \"peers\"}}  (fetches sibling/child instances and their endpoints)\n\
+         - {{\"type\": \"call_peer\", \"slug\": \"script-peer-discovery\", \"store_as\": \"result\"}}  (discovers peers, finds the endpoint, makes paid call — ONE step does it all)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\

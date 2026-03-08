@@ -150,6 +150,20 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Call a peer's endpoint by slug — discovers peers, finds the endpoint, and makes a paid call.
+    /// Combines discover_peers + call_paid_endpoint into one mechanical step.
+    CallPeer {
+        /// The endpoint slug to call on the peer (e.g., "script-peer-discovery")
+        slug: String,
+        /// HTTP method (default: GET)
+        #[serde(default)]
+        method: Option<String>,
+        /// Request body for POST
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
 }
 
 impl PlanStep {
@@ -210,6 +224,10 @@ impl PlanStep {
             }
             PlanStep::DeleteEndpoint { slug, .. } => format!("delete endpoint {slug}"),
             PlanStep::DiscoverPeers { .. } => "discover peers".to_string(),
+            PlanStep::CallPeer { slug, method, .. } => {
+                let m = method.as_deref().unwrap_or("GET");
+                format!("{m} peer/{slug} (paid)")
+            }
         }
     }
 
@@ -227,7 +245,8 @@ impl PlanStep {
             | PlanStep::CargoCheck { store_as, .. }
             | PlanStep::Think { store_as, .. }
             | PlanStep::DeleteEndpoint { store_as, .. }
-            | PlanStep::DiscoverPeers { store_as, .. } => store_as.as_deref(),
+            | PlanStep::DiscoverPeers { store_as, .. }
+            | PlanStep::CallPeer { store_as, .. } => store_as.as_deref(),
             PlanStep::Commit { .. } | PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } => {
                 None
             }
@@ -379,6 +398,63 @@ impl<'a> PlanExecutor<'a> {
             PlanStep::DiscoverPeers { .. } => {
                 self.execute_tool("discover_peers", &serde_json::json!({}))
                     .await
+            }
+            PlanStep::CallPeer {
+                slug, method, body, ..
+            } => {
+                // Step 1: Discover peers to find the callable URL
+                let discover_result = self
+                    .execute_tool("discover_peers", &serde_json::json!({}))
+                    .await;
+                let peers_json = match &discover_result {
+                    StepResult::Success(output) => output.clone(),
+                    StepResult::Failure(err) => {
+                        return StepResult::Failure(format!("peer discovery failed: {err}"));
+                    }
+                };
+
+                // Step 2: Find the callable_url for the target slug
+                let peers: serde_json::Value =
+                    serde_json::from_str(&peers_json).unwrap_or_default();
+                let callable_url = peers
+                    .get("peers")
+                    .and_then(|p| p.as_array())
+                    .and_then(|arr| {
+                        for peer in arr {
+                            if let Some(endpoints) =
+                                peer.get("endpoints").and_then(|e| e.as_array())
+                            {
+                                for ep in endpoints {
+                                    if ep.get("slug").and_then(|s| s.as_str()) == Some(slug) {
+                                        return ep
+                                            .get("callable_url")
+                                            .and_then(|u| u.as_str())
+                                            .map(|s| s.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    });
+
+                let url = match callable_url {
+                    Some(u) => u,
+                    None => {
+                        return StepResult::Failure(format!(
+                            "endpoint '{slug}' not found on any peer. Available peers: {peers_json}"
+                        ));
+                    }
+                };
+
+                // Step 3: Call the endpoint with payment
+                let mut args = serde_json::json!({ "url": url });
+                if let Some(m) = method {
+                    args["method"] = serde_json::json!(m);
+                }
+                if let Some(b) = body {
+                    args["body"] = serde_json::json!(b);
+                }
+                self.execute_tool("call_paid_endpoint", &args).await
             }
         }
     }

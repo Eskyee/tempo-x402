@@ -1681,11 +1681,27 @@ impl ToolExecutor {
 
                     // Fetch peer's /instance/info for endpoints + version
                     let info_url = format!("{}/instance/info", sib_url.trim_end_matches('/'));
-                    let peer_info = client.get(&info_url).send().await.ok();
-                    let info_json: Option<serde_json::Value> = match peer_info {
-                        Some(r) => r.json().await.ok(),
-                        None => None,
+                    let peer_info = match client.get(&info_url).send().await {
+                        Ok(r) if r.status().is_success() => r.json().await.ok(),
+                        Ok(r) => {
+                            tracing::debug!(
+                                instance_id = %inst_id,
+                                status = %r.status(),
+                                "Peer /instance/info returned non-2xx — skipping"
+                            );
+                            // Skip unreachable peers instead of adding with empty endpoints
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                instance_id = %inst_id,
+                                error = %e,
+                                "Peer /instance/info unreachable — skipping"
+                            );
+                            continue;
+                        }
                     };
+                    let info_json: Option<serde_json::Value> = peer_info;
 
                     let version = info_json
                         .as_ref()

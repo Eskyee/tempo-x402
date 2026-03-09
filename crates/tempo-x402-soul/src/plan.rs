@@ -458,8 +458,35 @@ impl<'a> PlanExecutor<'a> {
                 let url = match callable_url {
                     Some(u) => u,
                     None => {
+                        // Build diagnostic info
+                        let peer_count = peers
+                            .get("peers")
+                            .and_then(|p| p.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        let available_slugs: Vec<String> = peers
+                            .get("peers")
+                            .and_then(|p| p.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .flat_map(|peer| {
+                                        peer.get("endpoints")
+                                            .and_then(|e| e.as_array())
+                                            .into_iter()
+                                            .flatten()
+                                            .filter_map(|ep| {
+                                                ep.get("slug")
+                                                    .and_then(|s| s.as_str())
+                                                    .map(String::from)
+                                            })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         return StepResult::Failed(format!(
-                            "endpoint '{slug}' not found on any peer. Available peers: {peers_json}"
+                            "endpoint '{slug}' not found. Peers found: {peer_count}. \
+                             Available slugs: [{}]",
+                            available_slugs.join(", ")
                         ));
                     }
                 };

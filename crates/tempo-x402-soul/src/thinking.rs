@@ -927,13 +927,21 @@ impl ThinkingLoop {
 
         // ── Demand seed: if endpoints exist with 0 payments, inject a demand goal ──
         // This bypasses the LLM to ensure demand generation happens deterministically.
+        // Back off if a demand goal was recently abandoned (prevents infinite retry loop).
         if snapshot.endpoint_count > 0 && snapshot.total_payments == 0 {
             let active_goals = self.db.get_active_goals().unwrap_or_default();
             let has_demand_goal = active_goals.iter().any(|g| {
                 let d = g.description.to_lowercase();
                 d.contains("call_peer") || d.contains("discover_peers") || d.contains("call peer")
             });
-            if !has_demand_goal {
+            // Check if a demand goal was recently abandoned (backoff to avoid tight loop)
+            let recently_abandoned = self.db.get_recently_abandoned_goals(5).unwrap_or_default();
+            let recently_failed_demand = recently_abandoned.iter().any(|g| {
+                let d = g.description.to_lowercase();
+                (d.contains("call_peer") || d.contains("discover_peers") || d.contains("demand"))
+                    && (chrono::Utc::now().timestamp() - g.updated_at) < 1800 // 30 min backoff
+            });
+            if !has_demand_goal && !recently_failed_demand {
                 let now = chrono::Utc::now().timestamp();
                 let goal = Goal {
                     id: uuid::Uuid::new_v4().to_string(),

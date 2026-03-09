@@ -1117,6 +1117,17 @@ async fn main() -> std::io::Result<()> {
                         continue;
                     }
 
+                    // Skip redeploy if already deploying (prevents duplicate queued deploys)
+                    if child.status == "deploying" {
+                        tracing::debug!(
+                            instance_id = %child.instance_id,
+                            child_build = %child_build,
+                            parent_build = %parent_build,
+                            "Child build mismatch but already deploying — skipping"
+                        );
+                        continue;
+                    }
+
                     tracing::info!(
                         instance_id = %child.instance_id,
                         child_version = %child_version,

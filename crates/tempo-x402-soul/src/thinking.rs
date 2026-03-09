@@ -969,6 +969,49 @@ impl ThinkingLoop {
                 );
                 return Ok(());
             }
+
+            // ── Prune seed: too many endpoints with 0 payments → prune during demand backoff ──
+            if recently_failed_demand && snapshot.endpoint_count > 10 {
+                let has_prune_goal = active_goals.iter().any(|g| {
+                    let d = g.description.to_lowercase();
+                    d.contains("delete_endpoint")
+                        || d.contains("prune")
+                        || d.contains("delete endpoint")
+                });
+                let recently_pruned = recently_abandoned.iter().any(|g| {
+                    let d = g.description.to_lowercase();
+                    (d.contains("prune") || d.contains("delete_endpoint"))
+                        && (chrono::Utc::now().timestamp() - g.updated_at) < 3600
+                });
+                if !has_prune_goal && !recently_pruned {
+                    let now = chrono::Utc::now().timestamp();
+                    let goal = Goal {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        description: format!(
+                            "Prune endpoints: you have {} endpoints and 0 payments. \
+                             Use delete_endpoint to remove low-value diagnostic scripts until \
+                             you have at most 5 high-quality endpoints. Keep: chat, info, clone, \
+                             soul. Delete: duplicate diagnostics, debug scripts, audit tools.",
+                            snapshot.endpoint_count
+                        ),
+                        status: crate::world_model::GoalStatus::Active,
+                        priority: 4,
+                        success_criteria: "endpoint count reduced to 5 or fewer".to_string(),
+                        progress_notes: String::new(),
+                        parent_goal_id: None,
+                        retry_count: 0,
+                        created_at: now,
+                        updated_at: now,
+                        completed_at: None,
+                    };
+                    let _ = self.db.insert_goal(&goal);
+                    tracing::info!(
+                        "Prune seed — injected endpoint pruning goal ({} endpoints, 0 payments)",
+                        snapshot.endpoint_count
+                    );
+                    return Ok(());
+                }
+            }
         }
 
         tracing::info!("No goals — asking LLM to create goals");

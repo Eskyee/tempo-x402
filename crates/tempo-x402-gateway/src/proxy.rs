@@ -50,6 +50,39 @@ const ALLOWED_RESPONSE_HEADERS: &[&str] = &[
 /// Maximum upstream response body size (10 MB).
 const MAX_RESPONSE_BODY_SIZE: usize = 10 * 1024 * 1024;
 
+/// Pre-flight reachability check: verify the target host is connectable
+/// before settling payment. Uses a short TCP connect timeout to avoid
+/// blocking the payment flow. Returns Ok(()) if reachable, Err if not.
+pub async fn check_target_reachable(target_url: &str) -> Result<(), GatewayError> {
+    let parsed = url::Url::parse(target_url)
+        .map_err(|e| GatewayError::ProxyError(format!("invalid target URL: {e}")))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| GatewayError::ProxyError("target URL has no host".to_string()))?;
+    let port = parsed.port_or_known_default().unwrap_or(443);
+
+    let addr = format!("{}:{}", host, port);
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::TcpStream::connect(&addr),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => {
+            tracing::warn!(target_url = %target_url, error = %e, "pre-flight: target unreachable");
+            Err(GatewayError::ProxyError(format!("target unreachable: {e}")))
+        }
+        Err(_) => {
+            tracing::warn!(target_url = %target_url, "pre-flight: target connect timed out");
+            Err(GatewayError::ProxyError(
+                "target unreachable: connection timed out".to_string(),
+            ))
+        }
+    }
+}
+
 /// Proxy an HTTP request to the target URL
 #[allow(clippy::too_many_arguments)]
 pub async fn proxy_request(
@@ -219,5 +252,17 @@ mod tests {
         assert!(ALLOWED_RESPONSE_HEADERS.contains(&"cache-control"));
         assert!(!ALLOWED_RESPONSE_HEADERS.contains(&"server"));
         assert!(!ALLOWED_RESPONSE_HEADERS.contains(&"x-powered-by"));
+    }
+
+    #[tokio::test]
+    async fn test_check_target_reachable_bad_url() {
+        assert!(check_target_reachable("not-a-url").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_check_target_reachable_unreachable_host() {
+        // RFC 5737 TEST-NET: guaranteed not routable, will timeout or refuse
+        let result = check_target_reachable("https://192.0.2.1:9999").await;
+        assert!(result.is_err());
     }
 }

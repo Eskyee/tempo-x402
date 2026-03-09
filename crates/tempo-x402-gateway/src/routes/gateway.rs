@@ -4,7 +4,7 @@ use alloy::primitives::Address;
 use crate::error::GatewayError;
 use crate::metrics::{ENDPOINT_PAYMENTS, ENDPOINT_REVENUE};
 use crate::middleware::{endpoint_requirements, require_payment};
-use crate::proxy::proxy_request;
+use crate::proxy::{check_target_reachable, proxy_request};
 use crate::state::AppState;
 
 /// Sanitize a query string to prevent CRLF injection and fragment smuggling.
@@ -107,6 +107,10 @@ async fn do_gateway_proxy(
         .owner_address
         .parse()
         .map_err(|_| GatewayError::Internal("invalid stored owner address".to_string()))?;
+
+    // Pre-flight: verify target is reachable BEFORE settling payment.
+    // This prevents clients from paying for endpoints whose targets are down.
+    check_target_reachable(&endpoint.target_url).await?;
 
     // Build payment requirements for this endpoint
     let requirements = endpoint_requirements(

@@ -925,6 +925,44 @@ impl ThinkingLoop {
             return Ok(());
         }
 
+        // ── Demand seed: if endpoints exist with 0 payments, inject a demand goal ──
+        // This bypasses the LLM to ensure demand generation happens deterministically.
+        if snapshot.endpoint_count > 0 && snapshot.total_payments == 0 {
+            let active_goals = self.db.get_active_goals().unwrap_or_default();
+            let has_demand_goal = active_goals.iter().any(|g| {
+                let d = g.description.to_lowercase();
+                d.contains("call_peer") || d.contains("discover_peers") || d.contains("call peer")
+            });
+            if !has_demand_goal {
+                let now = chrono::Utc::now().timestamp();
+                let goal = Goal {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    description: "Generate demand: use discover_peers to find sibling agents, \
+                         then use call_peer to call at least 3 different peer endpoints. \
+                         This creates real economic activity and makes you visible to the network. \
+                         Record what each peer offers and what responses you get."
+                        .to_string(),
+                    status: crate::world_model::GoalStatus::Active,
+                    priority: 5,
+                    success_criteria:
+                        "call_peer succeeds on at least 2 different peer endpoints with paid responses"
+                            .to_string(),
+                    progress_notes: String::new(),
+                    parent_goal_id: None,
+                    retry_count: 0,
+                    created_at: now,
+                    updated_at: now,
+                    completed_at: None,
+                };
+                let _ = self.db.insert_goal(&goal);
+                tracing::info!(
+                    "Demand seed — injected demand-generation goal (0 payments, {} endpoints)",
+                    snapshot.endpoint_count
+                );
+                return Ok(());
+            }
+        }
+
         tracing::info!("No goals — asking LLM to create goals");
 
         let beliefs = self.db.get_all_active_beliefs().unwrap_or_default();

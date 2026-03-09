@@ -218,10 +218,15 @@ pub fn goal_creation_prompt(
         )
     } else if endpoint_count > 0 && paid_endpoints == 0 {
         format!(
-            "## WARNING: You have {endpoint_count} endpoints but none have received payments.\n\
-             Before creating more, investigate why existing ones aren't being used.\n\
-             Consider: do you have peers? Have you tried calling their services? \
-             Have they tried calling yours? Focus on the ECONOMY, not the catalog."
+            "## WARNING: You have {endpoint_count} endpoints but NONE have received payments.\n\
+             DO NOT create more endpoints. Your existing supply is untested.\n\
+             You MUST generate demand first:\n\
+             1. Use discover_peers to find sibling agents\n\
+             2. Use call_peer to call at least 2-3 of their endpoints — this creates real economic activity\n\
+             3. After calling peers, check if they call you back (check_self analytics)\n\
+             4. If no peers exist yet, delete low-value endpoints and wait\n\n\
+             Revenue comes from OTHER agents calling YOUR endpoints. But they won't discover you \
+             unless you participate in the economy first. Call peers to make yourself visible."
         )
     } else if endpoint_count > 0 && paid_endpoints > 0 {
         format!(
@@ -260,8 +265,8 @@ pub fn goal_creation_prompt(
          ]\n\
          ```\n\
          Priority: 1 (low) to 5 (critical). Be specific.",
-        endpoint_rule = if endpoint_count > 3 && total_payments == 0 {
-            "DO NOT create new endpoints — focus on economy (discover_peers, call_peer, delete_endpoint)"
+        endpoint_rule = if total_payments == 0 && endpoint_count > 0 {
+            "DO NOT create new endpoints — you have 0 payments. Focus on demand: discover_peers, call_peer, delete_endpoint"
         } else {
             "Script endpoints (create_script_endpoint) for new services — only if you have a clear value proposition"
         }

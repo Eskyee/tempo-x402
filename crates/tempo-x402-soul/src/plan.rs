@@ -420,7 +420,12 @@ impl<'a> PlanExecutor<'a> {
                 };
 
                 // Step 2: Find the callable_url for the target slug
-                let peers: serde_json::Value = match serde_json::from_str(&peers_json) {
+                // Strip control characters (ANSI codes, etc.) that may leak from peer responses
+                let clean_json: String = peers_json
+                    .chars()
+                    .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
+                    .collect();
+                let peers: serde_json::Value = match serde_json::from_str(&clean_json) {
                     Ok(v) => v,
                     Err(e) => {
                         return StepResult::Failed(format!(

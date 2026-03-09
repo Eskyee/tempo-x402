@@ -554,3 +554,27 @@ fn pre_flight_check_before_payment() {
         }
     }
 }
+
+#[test]
+fn script_execution_uses_env_clear() {
+    // Script endpoints must use env_clear() to prevent leaking secrets
+    // (API keys, private keys, tokens) to user-defined bash scripts.
+    let files = production_source_files();
+
+    for (path, content) in &files {
+        if !path.contains("scripts.rs") {
+            continue;
+        }
+
+        let prod_content = production_lines(content);
+
+        if prod_content.contains("Command::new") && prod_content.contains(".sh") {
+            assert!(
+                prod_content.contains("env_clear"),
+                "Script execution in {} must use .env_clear() to prevent \
+                 leaking process environment variables to user scripts.",
+                path
+            );
+        }
+    }
+}

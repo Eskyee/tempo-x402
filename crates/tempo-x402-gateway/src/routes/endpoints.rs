@@ -293,11 +293,28 @@ pub async fn delete_endpoint(
 /// POST /endpoints/purge — bulk delete endpoints by slug list or prefix.
 ///
 /// Body: `{"slugs": ["a", "b"]}` or `{"prefix": "script-script-"}`
-/// No payment required — admin operation.
+/// Requires HMAC shared secret as Bearer token for authentication.
 async fn purge_endpoints(
+    req: HttpRequest,
     body: web::Json<serde_json::Value>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, GatewayError> {
+    // Require HMAC shared secret as Bearer token
+    if let Some(ref secret) = state.config.hmac_secret {
+        let authorized = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|token| token.as_bytes() == secret.as_slice());
+        if !authorized {
+            return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "unauthorized",
+                "message": "purge requires Bearer token (FACILITATOR_SHARED_SECRET)"
+            })));
+        }
+    }
+
     let mut purged = 0usize;
 
     if let Some(slugs) = body.get("slugs").and_then(|v| v.as_array()) {
@@ -311,6 +328,11 @@ async fn purge_endpoints(
     }
 
     if let Some(prefix) = body.get("prefix").and_then(|v| v.as_str()) {
+        if prefix.is_empty() {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "prefix must not be empty (would delete all endpoints)"
+            })));
+        }
         if let Ok(n) = state.db.purge_endpoints_by_prefix(prefix) {
             purged += n;
         }

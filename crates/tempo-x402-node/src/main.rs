@@ -46,6 +46,22 @@ async fn admin_register_endpoint(
         }));
     }
 
+    // Validate slug format (same rules as public registration)
+    if let Err(e) = x402_gateway::routes::register::validate_slug(slug) {
+        return actix_web::HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": format!("{e}"),
+        }));
+    }
+
+    // Validate description length
+    if description.len() > 4096 {
+        return actix_web::HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": "description must be at most 4096 characters",
+        }));
+    }
+
     // Build target URL from self_url (instance's own URL)
     let self_url = std::env::var("RAILWAY_PUBLIC_DOMAIN")
         .map(|d| format!("https://{d}"))

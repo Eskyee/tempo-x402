@@ -1137,7 +1137,10 @@ async fn main() -> std::io::Result<()> {
                         }
                     };
 
-                    match agent.redeploy_clone(service_id).await {
+                    match agent
+                        .update_and_redeploy_clone(service_id, &child.instance_id)
+                        .await
+                    {
                         Ok(_) => {
                             if let Err(e) = db::update_child_status(
                                 &version_check_state.gateway.db,

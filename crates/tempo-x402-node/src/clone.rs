@@ -261,14 +261,48 @@ impl CloneOrchestrator {
         })
     }
 
-    /// Redeploy an existing clone service by re-pulling the `:latest` image.
+    /// Update a clone's branch to main's HEAD and redeploy.
     ///
-    /// Fetches the default environment, then triggers `serviceInstanceDeploy`
-    /// which re-pulls the Docker image and restarts the service.
+    /// For source-based clones, fast-forwards the clone's branch to main's latest
+    /// commit before triggering a redeploy. For Docker clones, just redeploys.
     pub async fn redeploy_clone(&self, service_id: &str) -> Result<String, CloneError> {
         let env_id = self.railway.get_default_environment().await?;
         let result = self.railway.deploy_service(service_id, &env_id).await?;
         Ok(result)
+    }
+
+    /// Update a clone's GitHub branch to main's HEAD before redeploying.
+    /// Best-effort: if the branch update fails, the redeploy still triggers
+    /// (it'll just use the existing branch state).
+    pub async fn update_and_redeploy_clone(
+        &self,
+        service_id: &str,
+        instance_id: &str,
+    ) -> Result<String, CloneError> {
+        // Update branch to main if source-based
+        if let (Some(ref repo), Some(ref token)) =
+            (&self.config.source_repo, &self.config.github_token)
+        {
+            let branch = format!("clone/{}", &instance_id[..8]);
+            match update_github_branch_to_main(token, repo, &branch).await {
+                Ok(()) => {
+                    tracing::info!(
+                        instance_id = %instance_id,
+                        branch = %branch,
+                        "Updated clone branch to main"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        instance_id = %instance_id,
+                        error = %e,
+                        "Failed to update clone branch (will redeploy anyway)"
+                    );
+                }
+            }
+        }
+
+        self.redeploy_clone(service_id).await
     }
 
     /// Delete a Railway service. Delegates to the Railway client.
@@ -342,6 +376,77 @@ async fn create_github_branch(token: &str, repo: &str, branch: &str) -> Result<(
         let body = create_resp.text().await.unwrap_or_default();
         return Err(CloneError::Other(format!(
             "GitHub create branch failed (HTTP {status}): {body}"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Fast-forward a branch to main's HEAD via the GitHub REST API.
+/// Used by the health probe to update clone branches before redeploying.
+pub async fn update_github_branch_to_main(
+    token: &str,
+    repo: &str,
+    branch: &str,
+) -> Result<(), CloneError> {
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| CloneError::Other(format!("HTTP client error: {e}")))?;
+
+    // 1. Get main branch SHA
+    let ref_url = format!("https://api.github.com/repos/{repo}/git/ref/heads/main");
+    let ref_resp = http
+        .get(&ref_url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "x402-node")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .map_err(|e| CloneError::Other(format!("GitHub API error (get ref): {e}")))?;
+
+    if !ref_resp.status().is_success() {
+        let status = ref_resp.status();
+        let body = ref_resp.text().await.unwrap_or_default();
+        return Err(CloneError::Other(format!(
+            "GitHub GET ref failed (HTTP {status}): {}",
+            body.chars().take(200).collect::<String>()
+        )));
+    }
+
+    let ref_json: serde_json::Value = ref_resp
+        .json()
+        .await
+        .map_err(|e| CloneError::Other(format!("GitHub API parse error: {e}")))?;
+
+    let main_sha = ref_json["object"]["sha"]
+        .as_str()
+        .ok_or_else(|| CloneError::Other("missing SHA in GitHub ref response".to_string()))?;
+
+    // 2. Force-update the branch ref to point to main's SHA
+    let update_url = format!("https://api.github.com/repos/{repo}/git/refs/heads/{branch}");
+    let update_resp = http
+        .patch(&update_url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "x402-node")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&serde_json::json!({
+            "sha": main_sha,
+            "force": true,
+        }))
+        .send()
+        .await
+        .map_err(|e| CloneError::Other(format!("GitHub API error (update ref): {e}")))?;
+
+    if !update_resp.status().is_success() {
+        let status = update_resp.status();
+        let body = update_resp.text().await.unwrap_or_default();
+        return Err(CloneError::Other(format!(
+            "GitHub update branch failed (HTTP {status}): {}",
+            body.chars().take(200).collect::<String>()
         )));
     }
 

@@ -506,3 +506,51 @@ fn hmac_secret_is_mandatory() {
         );
     }
 }
+
+#[test]
+fn purge_endpoint_requires_auth() {
+    let files = production_source_files();
+
+    for (path, content) in &files {
+        if !path.contains("endpoints.rs") {
+            continue;
+        }
+
+        let prod_content = production_lines(content);
+
+        // The purge_endpoints function must check authorization before deleting
+        if prod_content.contains("fn purge_endpoints") {
+            assert!(
+                prod_content.contains("authorization")
+                    && prod_content.contains("hmac_secret"),
+                "purge_endpoints at {} must verify Bearer token (FACILITATOR_SHARED_SECRET) \
+                 before performing bulk deletion. Found purge_endpoints without authorization check.",
+                path
+            );
+        }
+    }
+}
+
+#[test]
+fn pre_flight_check_before_payment() {
+    let files = production_source_files();
+
+    for (path, content) in &files {
+        // Only check gateway route file
+        if !path.contains("gateway") || !path.contains("routes") || !path.ends_with("gateway.rs") {
+            continue;
+        }
+
+        let prod_content = production_lines(content);
+
+        // check_target_reachable must appear BEFORE require_payment
+        if prod_content.contains("require_payment") {
+            assert!(
+                prod_content.contains("check_target_reachable"),
+                "Gateway proxy at {} must call check_target_reachable() BEFORE require_payment() \
+                 to prevent clients from paying for unreachable targets.",
+                path
+            );
+        }
+    }
+}

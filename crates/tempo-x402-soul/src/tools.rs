@@ -861,6 +861,27 @@ impl ToolExecutor {
             return Err("slug too long (max 64 chars)".to_string());
         }
 
+        // Security: block scripts that try to read secrets from the host process
+        let script_lower = script.to_lowercase();
+        const BLOCKED_PATTERNS: &[&str] = &[
+            "/proc/1/environ",
+            "/proc/self/environ",
+            "/proc/1/cmdline",
+            "/proc/1/maps",
+            "evm_private_key",
+            "facilitator_private_key",
+            "railway_token",
+            "gemini_api_key",
+            "github_token",
+        ];
+        for pattern in BLOCKED_PATTERNS {
+            if script_lower.contains(pattern) {
+                return Err(format!(
+                    "script blocked: contains forbidden pattern '{pattern}' — scripts must not access host secrets"
+                ));
+            }
+        }
+
         let scripts_dir = PathBuf::from("/data/endpoints");
         std::fs::create_dir_all(&scripts_dir)
             .map_err(|e| format!("failed to create scripts directory: {e}"))?;

@@ -130,6 +130,20 @@ pub async fn handle_script(
         }
     }
 
+    // Security: block scripts that reference host process secrets
+    if let Ok(script_content) = std::fs::read_to_string(&script_path) {
+        let lower = script_content.to_lowercase();
+        if lower.contains("/proc/1/environ")
+            || lower.contains("/proc/self/environ")
+            || lower.contains("/proc/1/cmdline")
+        {
+            tracing::warn!(slug = %slug, "Blocked script: references host process environment");
+            return HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "script blocked: attempts to access host process environment"
+            }));
+        }
+    }
+
     // Build environment for the script
     let method = req.method().to_string();
     let query = req.query_string().to_string();

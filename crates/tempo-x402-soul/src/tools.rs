@@ -1657,7 +1657,7 @@ impl ToolExecutor {
                                 obj.insert(
                                     "callable_url".to_string(),
                                     serde_json::Value::String(format!(
-                                        "{}/g/{}/",
+                                        "{}/g/{}",
                                         sib_url.trim_end_matches('/'),
                                         slug
                                     )),

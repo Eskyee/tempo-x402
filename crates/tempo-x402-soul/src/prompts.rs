@@ -205,20 +205,18 @@ pub fn goal_creation_prompt(
         .filter(|ep| ep.payment_count > 0)
         .count();
 
-    let situation_analysis = if endpoint_count > 10 && total_payments == 0 {
+    let situation_analysis = if endpoint_count > 3 && total_payments == 0 {
         format!(
             "## CRITICAL: You have {endpoint_count} endpoints and ZERO payments.\n\
-             Creating more endpoints is NOT the answer. Something fundamental is wrong.\n\
-             Possible next steps:\n\
-             - Discover peers (discover_peers) and try calling their endpoints to generate actual traffic\n\
-             - Delete garbage endpoints and focus on 2-3 high-quality ones\n\
-             - Investigate: are other agents even aware you exist? Can they reach you?\n\
-             - Think about what's actually missing from the network, not what's easy to build\n\n\
-             DO NOT create another script endpoint. Stop. Think about the system.\n\n\
-             NOTE: Cloning requires x402 payment signing. Use `call_paid_endpoint` in a plan step \
-             (type: call_paid_endpoint) — do NOT try to clone via curl or shell commands."
+             STOP CREATING ENDPOINTS. You have enough. The problem is not supply — it's demand.\n\
+             You MUST do one of these instead:\n\
+             1. Discover peers (discover_peers) and call their endpoints — generate REAL traffic\n\
+             2. Delete low-value endpoints (delete_endpoint) until you have ≤5 high-quality ones\n\
+             3. Investigate reachability: can peers actually find and call your endpoints?\n\n\
+             DO NOT create any new script endpoints. This is a hard constraint.\n\
+             Focus on the ECONOMY: call peers, earn revenue, prune dead weight."
         )
-    } else if endpoint_count > 5 && paid_endpoints == 0 {
+    } else if endpoint_count > 0 && paid_endpoints == 0 {
         format!(
             "## WARNING: You have {endpoint_count} endpoints but none have received payments.\n\
              Before creating more, investigate why existing ones aren't being used.\n\
@@ -228,7 +226,8 @@ pub fn goal_creation_prompt(
     } else if endpoint_count > 0 && paid_endpoints > 0 {
         format!(
             "## {paid_endpoints}/{endpoint_count} endpoints have received payments. \
-             Focus on what's working. Improve or extend the ones that earn revenue."
+             Focus on what's working. Improve or extend the ones that earn revenue. \
+             Do NOT create new endpoints unless you have a clear reason."
         )
     } else {
         String::new()
@@ -246,22 +245,27 @@ pub fn goal_creation_prompt(
         task_section.push_str("\n\n");
     }
 
-    task_section.push_str(
+    task_section.push_str(&format!(
         "## Rules\n\
          - Create 1-2 goals MAX\n\
-         - Script endpoints (create_script_endpoint) for new services\n\
+         - {endpoint_rule}\n\
          - Do NOT edit Rust source code unless explicitly asked by a nudge\n\
          - Do NOT create \"fix\" goals — if something failed, try something DIFFERENT\n\
          - You can discover peer instances via `/instance/siblings` and call their paid endpoints\n\
-         - You can clone yourself using `call_paid_endpoint` with the `/clone` endpoint (do NOT use curl — cloning requires x402 payment signing)\n\n\
+         - You can clone yourself using `call_peer` with the `/clone` endpoint (do NOT use curl — cloning requires x402 payment signing)\n\n\
          Respond with a JSON array of goal operations:\n\
          ```json\n\
          [\n\
-           {\"op\": \"create_goal\", \"description\": \"...\", \"success_criteria\": \"...\", \"priority\": 4}\n\
+           {{\"op\": \"create_goal\", \"description\": \"...\", \"success_criteria\": \"...\", \"priority\": 4}}\n\
          ]\n\
          ```\n\
          Priority: 1 (low) to 5 (critical). Be specific.",
-    );
+        endpoint_rule = if endpoint_count > 3 && total_payments == 0 {
+            "DO NOT create new endpoints — focus on economy (discover_peers, call_peer, delete_endpoint)"
+        } else {
+            "Script endpoints (create_script_endpoint) for new services — only if you have a clear value proposition"
+        }
+    ));
 
     sections.push(task_section);
 
@@ -324,7 +328,7 @@ pub fn planning_prompt(
          ## Inter-Agent Economy\n\
          Your script endpoints are gated by x402 payment — other agents pay to call them.\n\
          You can call other agents' paid endpoints using `call_peer` (discovers + calls in one step).\n\
-         ALWAYS use `call_peer` for inter-agent calls. Do NOT use `call_paid_endpoint` — it requires a URL you don't have.\n\
+         ALWAYS use `call_peer` for inter-agent calls (discovers + resolves URL + signs payment in one step).\n\
          Building useful endpoints = revenue from other agents calling them.\n\n\
          # Task\n\
          Create a step-by-step plan to achieve this goal. Each step is one of:\n\n\
@@ -335,7 +339,7 @@ pub fn planning_prompt(
          - {{\"type\": \"run_shell\", \"command\": \"...\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"commit\", \"message\": \"...\"}}\n\
          - {{\"type\": \"check_self\", \"endpoint\": \"health\", \"store_as\": \"key\"}}\n\
-         - (DEPRECATED: call_paid_endpoint — use call_peer instead, it handles URL resolution automatically)\n\
+         - (DEPRECATED: call_peer — use call_peer instead, it handles URL resolution automatically)\n\
          - {{\"type\": \"create_script_endpoint\", \"slug\": \"...\", \"script\": \"#!/bin/bash\\n...\", \"description\": \"...\"}}\n\
          - {{\"type\": \"test_script_endpoint\", \"slug\": \"...\", \"input\": \"test data\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\

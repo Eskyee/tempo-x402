@@ -898,10 +898,10 @@ impl ThinkingLoop {
                 ),
                 (
                     "Discover sibling agents using discover_peers and call one of their paid \
-                     endpoints using call_paid_endpoint to verify the agent-to-agent payment flow. \
+                     endpoints using call_peer to verify the agent-to-agent payment flow. \
                      Check what endpoints they offer, pick one, and make a real paid request. \
                      Record the result as a belief about inter-agent commerce.",
-                    "discover_peers returns at least one peer with endpoints, call_paid_endpoint succeeds on one of them",
+                    "discover_peers returns at least one peer with endpoints, call_peer succeeds on one of them",
                     4u32,
                 ),
             ];

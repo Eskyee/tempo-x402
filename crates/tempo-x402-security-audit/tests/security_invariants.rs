@@ -144,9 +144,22 @@ fn http_clients_disable_redirects() {
     let files = production_source_files();
     let builder_re = Regex::new(r"reqwest::Client::builder\(\)").unwrap();
     let redirect_re = Regex::new(r"redirect\s*\(\s*.*Policy::none\(\)").unwrap();
+    // Also catch reqwest::Client::new() — which allows redirects by default (SSRF risk)
+    let new_re = Regex::new(r"reqwest::Client::new\(\)").unwrap();
 
     for (path, content) in &files {
         let prod_content = production_lines(content);
+
+        // Reject reqwest::Client::new() — must use builder with redirect policy
+        for mat in new_re.find_iter(&prod_content) {
+            let line_num = prod_content[..mat.start()].lines().count() + 1;
+            panic!(
+                "reqwest::Client::new() found at {}:{}. \
+                 Use reqwest::Client::builder().redirect(Policy::none()).build() instead. \
+                 Client::new() allows redirects by default, enabling SSRF via redirect.",
+                path, line_num
+            );
+        }
 
         // Find all reqwest Client builder invocations
         for mat in builder_re.find_iter(&prod_content) {
@@ -549,6 +562,41 @@ fn pre_flight_check_before_payment() {
                 prod_content.contains("check_target_reachable"),
                 "Gateway proxy at {} must call check_target_reachable() BEFORE require_payment() \
                  to prevent clients from paying for unreachable targets.",
+                path
+            );
+        }
+    }
+}
+
+#[test]
+fn github_tools_validate_parameters() {
+    // GitHub tools must validate owner/repo/name parameters to prevent URL injection.
+    let files = production_source_files();
+
+    for (path, content) in &files {
+        if !path.contains("tools.rs") {
+            continue;
+        }
+
+        let prod_content = production_lines(content);
+
+        // fork_github_repo must validate owner and repo before building URL
+        if prod_content.contains("fn fork_github_repo") {
+            assert!(
+                prod_content.contains("owner")
+                    && prod_content.contains("is_alphanumeric")
+                    && prod_content.contains("repos/{owner}/{repo}"),
+                "fork_github_repo at {} must validate owner/repo parameters \
+                 before interpolating into URL to prevent path traversal / injection.",
+                path
+            );
+        }
+
+        // create_github_repo must validate name
+        if prod_content.contains("fn create_github_repo") {
+            assert!(
+                prod_content.contains("is_alphanumeric"),
+                "create_github_repo at {} must validate repo name parameter.",
                 path
             );
         }

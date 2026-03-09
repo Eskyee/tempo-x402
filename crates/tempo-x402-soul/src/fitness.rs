@@ -191,7 +191,9 @@ fn compute_coordination(db: &SoulDatabase) -> f64 {
     if peer_calls < 1.0 {
         return 0.3; // hasn't tried yet — low but not zero
     }
-    peer_successes / peer_calls
+    // Sanity: successes can't exceed attempts (prevent manipulation)
+    let clamped = peer_successes.min(peer_calls);
+    clamped / peer_calls
 }
 
 /// Introspection fitness: do beliefs match reality?
@@ -273,7 +275,13 @@ fn compute_trend(db: &SoulDatabase, current_total: f64) -> f64 {
         return 0.0;
     }
 
-    numerator / denominator
+    let slope = numerator / denominator;
+    // Guard against NaN/Inf propagation
+    if slope.is_finite() {
+        slope
+    } else {
+        0.0
+    }
 }
 
 /// Sigmoid scaling: maps [0, ∞) to [0, 1), with midpoint at `midpoint`.

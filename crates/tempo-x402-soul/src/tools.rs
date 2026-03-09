@@ -1616,7 +1616,11 @@ impl ToolExecutor {
             );
         }
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
         let mut body = serde_json::json!({
             "name": name,
             "private": private,
@@ -1673,7 +1677,27 @@ impl ToolExecutor {
         let token = std::env::var("GITHUB_TOKEN")
             .map_err(|_| "GITHUB_TOKEN not set — cannot fork repos".to_string())?;
 
-        let client = reqwest::Client::new();
+        // Validate owner and repo to prevent URL injection
+        if !owner
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err("owner must be alphanumeric with hyphens or underscores only".to_string());
+        }
+        if !repo
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return Err(
+                "repo must be alphanumeric with hyphens, underscores, or dots only".to_string(),
+            );
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
         let url = format!("https://api.github.com/repos/{owner}/{repo}/forks");
 
         let resp = client

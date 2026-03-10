@@ -1188,6 +1188,18 @@ impl ThinkingLoop {
         self.append_recent_error(error);
         let _ = self.db.increment_goal_retry(&plan.goal_id);
 
+        // Short-circuit: some errors are unsolvable — replanning won't help
+        let unsolvable = error.contains("Peers found: 0")
+            || error.contains("unable to auto-detect email address");
+        if unsolvable {
+            tracing::warn!(
+                plan_id = %plan.id,
+                error = %error,
+                "Unsolvable error — skipping replan, failing plan immediately"
+            );
+            plan.replan_count = 3; // force max so the block below handles it
+        }
+
         if plan.replan_count >= 3 {
             tracing::warn!(plan_id = %plan.id, "Max replans reached — failing plan");
             plan.status = PlanStatus::Failed;

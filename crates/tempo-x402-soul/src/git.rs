@@ -89,6 +89,16 @@ impl GitContext {
     /// Initialize the workspace as a git repo if it isn't one already.
     /// If fork_repo is set, clones it (shallow). Otherwise initializes empty.
     pub async fn init_workspace(&self) -> Result<GitResult, String> {
+        // Always set global git identity so shell commands creating new repos work too
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "--global", "user.email", "soul@x402.tempo.xyz"])
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "--global", "user.name", "x402-soul"])
+            .output()
+            .await;
+
         // Check if already a git repo
         if is_git_repo(&self.workspace_root).await {
             return Ok(GitResult {

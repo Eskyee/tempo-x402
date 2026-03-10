@@ -217,12 +217,19 @@ pub fn goal_creation_prompt(
         .filter(|ep| ep.payment_count > 0)
         .count();
 
+    let has_peers = !snapshot.peers.is_empty();
+    let peer_advice = if has_peers {
+        "discover_peers + call_peer — engage with sibling agents"
+    } else {
+        "You have NO peers in the network yet — do NOT create goals that require call_peer or discover_peers"
+    };
+
     let situation_analysis = if endpoint_count > 5 && total_payments == 0 {
         format!(
             "## CRITICAL: You have {endpoint_count} endpoints and ZERO payments.\n\
              STOP creating more endpoints — you clearly have enough. Focus on:\n\
              1. **Research**: Read your own source code, create new repos for experiments\n\
-             2. **Coordinate**: discover_peers + call_peer — engage with sibling agents\n\
+             2. **Coordinate**: {peer_advice}\n\
              3. **Prune**: delete_endpoint — remove redundant/similar scripts\n\
              4. **Expand**: Create GitHub repos, fork interesting projects, do real AI research\n\
              5. **Improve**: Write real Rust code to make yourself better\n\n\
@@ -233,14 +240,19 @@ pub fn goal_creation_prompt(
             "## WARNING: You have {endpoint_count} endpoints but NONE have received payments.\n\
              Before creating more endpoints, try:\n\
              1. Create a GitHub repo for a new research project\n\
-             2. Use discover_peers + call_peer to engage with the network\n\
+             2. {peer_advice}\n\
              3. Write real Rust code improvements and commit them\n\
              4. Fork an interesting project and study/improve it"
         )
     } else if endpoint_count > 0 && paid_endpoints > 0 {
         format!(
             "## {paid_endpoints}/{endpoint_count} endpoints have received payments. Good.\n\
-             Expand: create repos, fork projects, research, coordinate with peers, build new capabilities."
+             Expand: create repos, fork projects, research, {}, build new capabilities.",
+            if has_peers {
+                "coordinate with peers"
+            } else {
+                "clone yourself to grow the network"
+            }
         )
     } else {
         String::new()
@@ -258,16 +270,37 @@ pub fn goal_creation_prompt(
         task_section.push_str("\n\n");
     }
 
+    let peer_rule = if has_peers {
+        "You can discover peer instances via `/instance/siblings` and call their paid endpoints.\n\
+         You can clone yourself using `call_peer` with the `/clone` endpoint (do NOT use curl — cloning requires x402 payment signing)"
+    } else {
+        "You have NO peers in the network — do NOT create goals that rely on discover_peers or call_peer (they will fail).\n\
+         To grow the network, clone yourself via the `/clone` endpoint when you have funds"
+    };
+
+    let good_goals = if has_peers {
+        "create a GitHub repo for research, fork an interesting project, fix a bug, research your own codebase, coordinate with peers, create a genuinely novel endpoint"
+    } else {
+        "create a GitHub repo for research, fork an interesting project, fix a bug, research your own codebase, create a genuinely novel endpoint"
+    };
+
+    let endpoint_rule = if total_payments == 0 && endpoint_count > 5 {
+        "You have too many unpaid endpoints. Do NOT create more. Prune redundant ones, then focus on: create_github_repo, fork_github_repo, research"
+    } else if endpoint_count >= 10 {
+        "You have the max 10 endpoints. Do NOT create more. Focus on: create_github_repo, fork_github_repo, research, code improvements"
+    } else {
+        "Endpoints are fine but each must be UNIQUE — never duplicate similar functionality. Also consider: create_github_repo, fork_github_repo for new projects"
+    };
+
     task_section.push_str(&format!(
         "## Rules\n\
          - Create 1-2 goals MAX\n\
          - {endpoint_rule}\n\
-         - Your primary work is expanding capabilities — code improvements, new repos, research, peer coordination\n\
-         - Good goals: create a GitHub repo for research, fork an interesting project, fix a bug, improve peer discovery, research your own codebase, create a genuinely novel endpoint\n\
-         - Bad goals: create an endpoint similar to one that already exists, retry the same failed call, trivial variations of existing work\n\
+         - Your primary work is expanding capabilities — code improvements, new repos, research\n\
+         - Good goals: {good_goals}\n\
+         - Bad goals: create an endpoint similar to one that already exists, retry the same failed call, trivial variations of existing work, goals requiring peers when none exist\n\
          - Do NOT create \"fix\" goals — if something failed, try something DIFFERENT\n\
-         - You can discover peer instances via `/instance/siblings` and call their paid endpoints\n\
-         - You can clone yourself using `call_peer` with the `/clone` endpoint (do NOT use curl — cloning requires x402 payment signing)\n\
+         - {peer_rule}\n\
          - Your FITNESS SCORE measures how well you're evolving. Improve your weakest component:\n\
            - economic: earn payments (quality endpoints, not spam)\n\
            - execution: succeed at plans (don't fail repeatedly)\n\
@@ -281,14 +314,7 @@ pub fn goal_creation_prompt(
            {{\"op\": \"create_goal\", \"description\": \"...\", \"success_criteria\": \"...\", \"priority\": 4}}\n\
          ]\n\
          ```\n\
-         Priority: 1 (low) to 5 (critical). Be specific.",
-        endpoint_rule = if total_payments == 0 && endpoint_count > 5 {
-            "You have too many unpaid endpoints. Do NOT create more. Prune redundant ones, then focus on: create_github_repo, fork_github_repo, research, call_peer"
-        } else if endpoint_count >= 10 {
-            "You have the max 10 endpoints. Do NOT create more. Focus on: create_github_repo, fork_github_repo, research, code improvements, peer coordination"
-        } else {
-            "Endpoints are fine but each must be UNIQUE — never duplicate similar functionality. Also consider: create_github_repo, fork_github_repo for new projects"
-        }
+         Priority: 1 (low) to 5 (critical). Be specific."
     ));
 
     sections.push(task_section);

@@ -159,6 +159,8 @@ impl SoulDatabase {
     pub fn new(path: &str) -> Result<Self, SoulError> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Limit WAL file growth — checkpoint after 1000 pages (~4MB)
+        conn.execute_batch("PRAGMA wal_autocheckpoint=1000;")?;
         conn.execute_batch(SCHEMA)?;
         Self::run_migrations(&conn)?;
         Ok(Self {
@@ -1203,6 +1205,17 @@ impl SoulDatabase {
             |row| row.get(0),
         )?;
         Ok(count)
+    }
+
+    /// Force a WAL checkpoint to reclaim disk space.
+    pub fn wal_checkpoint(&self) -> Result<(), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
     }
 
     /// Lifecycle pruning: keep the database bounded. Called every 10 cycles from housekeeping.

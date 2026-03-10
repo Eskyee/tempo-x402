@@ -77,6 +77,8 @@ impl Database {
 
         // Enable WAL mode for better concurrent read/write performance
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Limit WAL file growth — checkpoint after 1000 pages (~4MB)
+        conn.execute_batch("PRAGMA wal_autocheckpoint=1000;")?;
 
         conn.execute(
             r#"

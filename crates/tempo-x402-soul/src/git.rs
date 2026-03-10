@@ -99,6 +99,14 @@ impl GitContext {
             .output()
             .await;
 
+        // Clean up cargo build artifacts to prevent volume bloat
+        // (cargo check/test in workspace can generate 2-4 GB in target/)
+        let target_dir = format!("{}/target", self.workspace_root);
+        if tokio::fs::metadata(&target_dir).await.is_ok() {
+            tracing::info!("Cleaning workspace target/ to free disk space");
+            let _ = tokio::fs::remove_dir_all(&target_dir).await;
+        }
+
         // Check if already a git repo
         if is_git_repo(&self.workspace_root).await {
             return Ok(GitResult {

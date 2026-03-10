@@ -101,6 +101,14 @@ pub async fn validated_commit(
         Err(e) => format!("committed {sha} but push failed: {e}"),
     };
 
+    // 9. Clean up cargo build artifacts to prevent volume bloat
+    // (target/ can be 2-4 GB for this workspace)
+    let target_dir = format!("{workspace_root}/target");
+    if tokio::fs::metadata(&target_dir).await.is_ok() {
+        tracing::info!("Cleaning workspace target/ after commit");
+        let _ = tokio::fs::remove_dir_all(&target_dir).await;
+    }
+
     Ok(CommitResult {
         success: true,
         commit_sha: Some(sha),

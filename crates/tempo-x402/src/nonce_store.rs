@@ -107,7 +107,8 @@ impl SqliteNonceStore {
                 recorded_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_nonces_recorded_at ON used_nonces(recorded_at);
-            PRAGMA journal_mode=WAL;",
+            PRAGMA journal_mode=WAL;
+            PRAGMA wal_autocheckpoint=1000;",
         )?;
 
         // Restrict file permissions on Unix to owner-only (0600).

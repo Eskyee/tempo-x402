@@ -1832,6 +1832,9 @@ impl ThinkingLoop {
                 Err(e) => tracing::warn!(error = %e, "Housekeeping: belief decay failed"),
             }
 
+            // WAL checkpoint — prevent .db-wal files from growing unbounded
+            let _ = self.db.wal_checkpoint();
+
             // Lifecycle pruning — keep the database bounded
             match self.db.prune_old_data() {
                 Ok(stats) => {

@@ -297,6 +297,8 @@ pub fn goal_creation_prompt(
          - Create 1-2 goals MAX\n\
          - {endpoint_rule}\n\
          - Your primary work is IMPROVING YOUR OWN CODEBASE — read source files, find bugs, optimize, commit\n\
+         - WRITABLE files: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs, coding.rs, mode.rs, world_model.rs, and crates/tempo-x402/src/*\n\
+         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, benchmark.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
          - Good goals: {good_goals}\n\
          - Bad goals: create an endpoint similar to one that already exists, create an empty GitHub repo, retry the same failed approach, trivial variations of existing work, goals requiring peers when none exist\n\
          - Do NOT create GitHub repos unless you have REAL CODE to put in them (not just a README)\n\
@@ -420,8 +422,14 @@ pub fn planning_prompt(
          - End with a commit step\n\
          - Max 20 steps, prefer fewer — a simple endpoint needs ~5 steps (read, edit, cargo_check, commit)\n\
          - Prefer edit_code over generate_code for existing files\n\
-         - Protected files (soul core, identity, Cargo.toml, Cargo.lock) cannot be modified\n\
-         - Do NOT try to modify Dockerfile, railway.toml, or deployment configs — focus on Rust code\n\
+         - PROTECTED files that CANNOT be modified (writes WILL fail):\n\
+           tools.rs, llm.rs, db.rs, error.rs, guard.rs, config.rs, tool_registry.rs,\n\
+           brain.rs, computer_use.rs, capability.rs, feedback.rs, benchmark.rs, elo.rs,\n\
+           ALL files in identity/, node/routes/, gateway/, .github/, and ALL Cargo.toml/Cargo.lock\n\
+         - Files you CAN edit: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs,\n\
+           coding.rs, mode.rs, neuroplastic.rs, persistent_memory.rs, world_model.rs,\n\
+           and ANY files in crates/tempo-x402/src/ (core lib)\n\
+         - Do NOT try to modify Dockerfile, railway.toml, or deployment configs\n\
          - Use only dependencies already available in the workspace\n\
          - For inter-agent calls, ALWAYS use call_peer with just the slug. NEVER construct URLs manually.\n\n\
          Respond with ONLY a JSON array of steps, no other text.",

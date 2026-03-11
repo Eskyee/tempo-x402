@@ -73,3 +73,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 #   docker run --read-only --tmpfs /tmp -v gateway-data:/data x402-gateway
 
 ENTRYPOINT ["/entrypoint.sh"]
+

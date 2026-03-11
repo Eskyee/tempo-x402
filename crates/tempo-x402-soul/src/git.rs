@@ -109,6 +109,12 @@ impl GitContext {
 
         // Check if already a git repo
         if is_git_repo(&self.workspace_root).await {
+            // Recovery: if .git exists but no source files, checkout HEAD
+            let cargo_toml = format!("{}/Cargo.toml", self.workspace_root);
+            if tokio::fs::metadata(&cargo_toml).await.is_err() {
+                tracing::warn!("Workspace has .git but no source files — recovering with checkout");
+                let _ = self.run_git(&["checkout", "HEAD", "--", "."]).await;
+            }
             return Ok(GitResult {
                 success: true,
                 output: "workspace is already a git repo".to_string(),

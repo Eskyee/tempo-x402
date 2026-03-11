@@ -455,12 +455,10 @@ pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
         "outcomes": outcomes,
         "capability_profile": serde_json::to_value(&profile).ok(),
         "benchmark": {
-            let mut b = serde_json::Map::new();
-            b.insert("pass_at_1".into(), serde_json::json!(benchmark.pass_at_1));
-            b.insert("problems_attempted".into(), serde_json::json!(benchmark.problems_attempted));
-            b.insert("problems_passed".into(), serde_json::json!(benchmark.problems_passed));
-            b.insert("elo".into(), serde_json::json!(elo.rating));
-            serde_json::Value::Object(b)
+            "pass_at_1": benchmark.pass_at_1,
+            "problems_attempted": benchmark.problems_attempted,
+            "problems_passed": benchmark.problems_passed,
+            "elo": elo.rating,
         },
     }))
 }

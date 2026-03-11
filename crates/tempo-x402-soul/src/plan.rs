@@ -193,6 +193,30 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Take a screenshot of the VM display.
+    Screenshot {
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+    /// Click at a position on screen.
+    ScreenClick {
+        x: i32,
+        y: i32,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+    /// Type text via keyboard.
+    ScreenType {
+        text: String,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+    /// Open a URL in the VM's browser.
+    BrowseUrl {
+        url: String,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
 }
 
 impl PlanStep {
@@ -259,6 +283,14 @@ impl PlanStep {
             }
             PlanStep::CreateGithubRepo { name, .. } => format!("create repo {name}"),
             PlanStep::ForkGithubRepo { owner, repo, .. } => format!("fork {owner}/{repo}"),
+            PlanStep::Screenshot { .. } => "screenshot".to_string(),
+            PlanStep::ScreenClick { x, y, .. } => format!("click ({x}, {y})"),
+            PlanStep::ScreenType { text, .. } => {
+                format!("type: {}", safe_truncate(text, 30))
+            }
+            PlanStep::BrowseUrl { url, .. } => {
+                format!("browse: {}", safe_truncate(url, 40))
+            }
         }
     }
 
@@ -279,7 +311,11 @@ impl PlanStep {
             | PlanStep::DiscoverPeers { store_as, .. }
             | PlanStep::CallPeer { store_as, .. }
             | PlanStep::CreateGithubRepo { store_as, .. }
-            | PlanStep::ForkGithubRepo { store_as, .. } => store_as.as_deref(),
+            | PlanStep::ForkGithubRepo { store_as, .. }
+            | PlanStep::Screenshot { store_as, .. }
+            | PlanStep::ScreenClick { store_as, .. }
+            | PlanStep::ScreenType { store_as, .. }
+            | PlanStep::BrowseUrl { store_as, .. } => store_as.as_deref(),
             PlanStep::Commit { .. } | PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } => {
                 None
             }
@@ -555,6 +591,22 @@ impl<'a> PlanExecutor<'a> {
                     &serde_json::json!({ "owner": owner, "repo": repo }),
                 )
                 .await
+            }
+            PlanStep::Screenshot { .. } => {
+                self.execute_tool("screenshot", &serde_json::json!({}))
+                    .await
+            }
+            PlanStep::ScreenClick { x, y, .. } => {
+                self.execute_tool("mouse_click", &serde_json::json!({ "x": x, "y": y }))
+                    .await
+            }
+            PlanStep::ScreenType { text, .. } => {
+                self.execute_tool("type_text", &serde_json::json!({ "text": text }))
+                    .await
+            }
+            PlanStep::BrowseUrl { url, .. } => {
+                self.execute_tool("open_url", &serde_json::json!({ "url": url }))
+                    .await
             }
         }
     }

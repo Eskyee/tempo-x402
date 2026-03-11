@@ -32,6 +32,18 @@ struct SoulStatus {
     /// Active goals driving multi-cycle behavior.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     goals: Vec<GoalEntry>,
+    /// Capability profile — success rates per skill.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capability_profile: Option<serde_json::Value>,
+    /// Recent plan outcomes — feedback loop data.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    plan_outcomes: Vec<serde_json::Value>,
+    /// HumanEval benchmark score + ELO rating.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    benchmark: Option<serde_json::Value>,
+    /// Neural brain status — parameters, training steps, loss.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brain: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -274,6 +286,31 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
         })
     });
 
+    // Fetch capability profile
+    let capability_profile = {
+        let profile = x402_soul::capability::compute_profile(soul_db);
+        serde_json::to_value(&profile).ok()
+    };
+
+    // Fetch recent plan outcomes (feedback loop data)
+    let plan_outcomes: Vec<serde_json::Value> = soul_db
+        .get_recent_plan_outcomes(10)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| {
+            serde_json::json!({
+                "goal_description": o.goal_description,
+                "status": o.status,
+                "lesson": o.lesson,
+                "error_category": o.error_category.map(|c| c.as_str().to_string()),
+                "steps_completed": o.steps_completed,
+                "total_steps": o.total_steps,
+                "replan_count": o.replan_count,
+                "created_at": o.created_at,
+            })
+        })
+        .collect();
+
     HttpResponse::Ok().json(SoulStatus {
         active: true,
         dormant: state.soul_dormant,
@@ -295,7 +332,89 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
         recent_thoughts,
         beliefs,
         goals,
+        capability_profile,
+        plan_outcomes,
+        benchmark: {
+            let score = x402_soul::benchmark::load_score(soul_db);
+            let elo = x402_soul::elo::load_rating(soul_db);
+            let elo_history = x402_soul::elo::load_history(soul_db);
+            score.map(|s| {
+                serde_json::json!({
+                    "pass_at_1": s.pass_at_1,
+                    "problems_attempted": s.problems_attempted,
+                    "problems_passed": s.problems_passed,
+                    "measured_at": s.measured_at,
+                    "elo_rating": elo,
+                    "elo_display": x402_soul::elo::rating_display(soul_db),
+                    "history": s.history,
+                    "elo_history": elo_history,
+                    "reference_scores": x402_soul::benchmark::REFERENCE_SCORES
+                        .iter()
+                        .map(|(name, score)| serde_json::json!({"model": name, "pass_at_1": score}))
+                        .collect::<Vec<_>>(),
+                })
+            })
+        },
+        brain: {
+            let brain = x402_soul::brain::load_brain(soul_db);
+            if brain.train_steps > 0 {
+                Some(serde_json::json!({
+                    "parameters": brain.param_count(),
+                    "train_steps": brain.train_steps,
+                    "running_loss": brain.running_loss,
+                }))
+            } else {
+                None
+            }
+        },
     })
+}
+
+// ── Weight sharing endpoint ──
+
+/// GET /soul/brain/weights — export brain weights for peer sharing.
+pub async fn get_brain_weights(state: web::Data<NodeState>) -> HttpResponse {
+    let Some(soul_db) = &state.soul_db else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "no soul"}));
+    };
+    let brain = x402_soul::brain::load_brain(soul_db);
+    HttpResponse::Ok().json(serde_json::json!({
+        "weights": brain.to_json(),
+        "train_steps": brain.train_steps,
+        "param_count": brain.param_count(),
+    }))
+}
+
+/// POST /soul/brain/merge — merge weight delta from a peer.
+#[derive(Deserialize)]
+struct MergeDeltaRequest {
+    delta: String,
+    merge_rate: Option<f32>,
+}
+
+pub async fn merge_brain_delta(
+    state: web::Data<NodeState>,
+    body: web::Json<MergeDeltaRequest>,
+) -> HttpResponse {
+    let Some(soul_db) = &state.soul_db else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "no soul"}));
+    };
+    let delta: x402_soul::brain::WeightDelta = match serde_json::from_str(&body.delta) {
+        Ok(d) => d,
+        Err(e) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": format!("invalid delta: {e}")}));
+        }
+    };
+    let merge_rate = body.merge_rate.unwrap_or(0.5);
+    let mut brain = x402_soul::brain::load_brain(soul_db);
+    brain.merge_delta(&delta, merge_rate);
+    x402_soul::brain::save_brain(soul_db, &brain);
+    HttpResponse::Ok().json(serde_json::json!({
+        "merged": true,
+        "train_steps": brain.train_steps,
+        "source": delta.source_id,
+    }))
 }
 
 // ── Chat endpoints ──
@@ -689,5 +808,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/soul/nudges", web::get().to(soul_nudges))
         .route("/soul/goals/abandon-all", web::post().to(abandon_all_goals))
         .route("/soul/goals/abandon", web::post().to(abandon_goal))
-        .route("/soul/reset", web::post().to(soul_reset));
+        .route("/soul/reset", web::post().to(soul_reset))
+        .route("/soul/brain/weights", web::get().to(get_brain_weights))
+        .route("/soul/brain/merge", web::post().to(merge_brain_delta));
 }

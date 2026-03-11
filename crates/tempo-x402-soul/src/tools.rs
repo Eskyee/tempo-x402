@@ -425,6 +425,155 @@ impl ToolExecutor {
                 let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
                 self.test_script_endpoint(slug, input).await
             }
+            "screenshot" => {
+                let executor = crate::computer_use::ComputerExecutor::new(
+                    std::path::PathBuf::from("/tmp/screenshots"),
+                );
+                if !executor.is_available() {
+                    return Ok(ToolResult {
+                        stdout: "No display available — computer use requires DISPLAY env var"
+                            .into(),
+                        stderr: String::new(),
+                        exit_code: 1,
+                        duration_ms: 0,
+                    });
+                }
+                let action = crate::computer_use::ComputerAction::Screenshot { region: None };
+                let result = executor.execute(&action).await;
+                Ok(ToolResult {
+                    stdout: if let Some(ss) = &result.screenshot {
+                        format!(
+                            "Screenshot captured: {}x{} at {}",
+                            ss.width, ss.height, ss.path
+                        )
+                    } else {
+                        result
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "Screenshot failed".into())
+                    },
+                    stderr: result.error.unwrap_or_default(),
+                    exit_code: if result.success { 0 } else { 1 },
+                    duration_ms: result.duration_ms,
+                })
+            }
+            "mouse_click" => {
+                let x = args.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let y = args.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let executor = crate::computer_use::ComputerExecutor::new(
+                    std::path::PathBuf::from("/tmp/screenshots"),
+                );
+                let action = crate::computer_use::ComputerAction::MouseClick {
+                    point: crate::computer_use::Point { x, y },
+                    button: crate::computer_use::MouseButton::Left,
+                    double: args
+                        .get("double")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                };
+                let result = executor.execute(&action).await;
+                Ok(ToolResult {
+                    stdout: if result.success {
+                        format!("Clicked at ({x}, {y})")
+                    } else {
+                        String::new()
+                    },
+                    stderr: result.error.unwrap_or_default(),
+                    exit_code: if result.success { 0 } else { 1 },
+                    duration_ms: result.duration_ms,
+                })
+            }
+            "type_text" => {
+                let text = args
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "missing 'text' argument".to_string())?;
+                let executor = crate::computer_use::ComputerExecutor::new(
+                    std::path::PathBuf::from("/tmp/screenshots"),
+                );
+                let action = crate::computer_use::ComputerAction::TypeText {
+                    text: text.to_string(),
+                };
+                let result = executor.execute(&action).await;
+                Ok(ToolResult {
+                    stdout: if result.success {
+                        format!("Typed: {}", text.chars().take(50).collect::<String>())
+                    } else {
+                        String::new()
+                    },
+                    stderr: result.error.unwrap_or_default(),
+                    exit_code: if result.success { 0 } else { 1 },
+                    duration_ms: result.duration_ms,
+                })
+            }
+            "key_press" => {
+                let key = args
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "missing 'key' argument".to_string())?;
+                let executor = crate::computer_use::ComputerExecutor::new(
+                    std::path::PathBuf::from("/tmp/screenshots"),
+                );
+                let action = crate::computer_use::ComputerAction::KeyPress {
+                    key: key.to_string(),
+                    modifiers: vec![],
+                };
+                let result = executor.execute(&action).await;
+                Ok(ToolResult {
+                    stdout: if result.success {
+                        format!("Pressed: {key}")
+                    } else {
+                        String::new()
+                    },
+                    stderr: result.error.unwrap_or_default(),
+                    exit_code: if result.success { 0 } else { 1 },
+                    duration_ms: result.duration_ms,
+                })
+            }
+            "open_url" => {
+                let url = args
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "missing 'url' argument".to_string())?;
+                let executor = crate::computer_use::ComputerExecutor::new(
+                    std::path::PathBuf::from("/tmp/screenshots"),
+                );
+                let action = crate::computer_use::ComputerAction::OpenUrl {
+                    url: url.to_string(),
+                };
+                let result = executor.execute(&action).await;
+                Ok(ToolResult {
+                    stdout: if result.success {
+                        format!("Opened URL: {url}")
+                    } else {
+                        String::new()
+                    },
+                    stderr: result.error.unwrap_or_default(),
+                    exit_code: if result.success { 0 } else { 1 },
+                    duration_ms: result.duration_ms,
+                })
+            }
+            "brain_predict" => {
+                let step_type = args
+                    .get("step_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let brain =
+                    crate::brain::load_brain(self.db.as_ref().ok_or("brain requires database")?);
+                let features = vec![0.0f32; 32]; // minimal features
+                let prediction = brain.predict(&features);
+                Ok(ToolResult {
+                    stdout: format!(
+                        "Brain prediction for '{}': success_prob={:.1}%, likely_error={:?}",
+                        step_type,
+                        prediction.success_prob * 100.0,
+                        prediction.likely_error,
+                    ),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    duration_ms: 0,
+                })
+            }
             _ => {
                 // Check meta-tools and dynamic tools via registry
                 if let Some(ref registry) = self.registry {

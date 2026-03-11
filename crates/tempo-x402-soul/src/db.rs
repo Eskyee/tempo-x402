@@ -312,6 +312,62 @@ impl SoulDatabase {
             )?;
         }
 
+        if version < 7 {
+            // v7: feedback loop — plan outcomes + capability events
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS plan_outcomes (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    goal_id TEXT NOT NULL,
+                    goal_description TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    steps_succeeded TEXT NOT NULL DEFAULT '[]',
+                    steps_failed TEXT NOT NULL DEFAULT '[]',
+                    error_category TEXT,
+                    error_message TEXT,
+                    lesson TEXT NOT NULL DEFAULT '',
+                    total_steps INTEGER NOT NULL DEFAULT 0,
+                    steps_completed INTEGER NOT NULL DEFAULT 0,
+                    replan_count INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_plan_outcomes_created ON plan_outcomes(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_plan_outcomes_status ON plan_outcomes(status);
+
+                CREATE TABLE IF NOT EXISTS capability_events (
+                    id TEXT PRIMARY KEY,
+                    capability TEXT NOT NULL,
+                    succeeded INTEGER NOT NULL,
+                    context TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_capability_events_cap ON capability_events(capability, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_capability_events_created ON capability_events(created_at DESC);
+
+                PRAGMA user_version = 7;",
+            )?;
+        }
+
+        if version < 8 {
+            // v8: HumanEval benchmark runs
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS benchmark_runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    entry_point TEXT NOT NULL,
+                    passed INTEGER NOT NULL,
+                    generated_solution TEXT NOT NULL DEFAULT '',
+                    error_output TEXT NOT NULL DEFAULT '',
+                    total_ms INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_runs_task ON benchmark_runs(task_id);
+                CREATE INDEX IF NOT EXISTS idx_benchmark_runs_created ON benchmark_runs(created_at DESC);
+
+                PRAGMA user_version = 8;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -1304,6 +1360,22 @@ impl SoulDatabase {
             )
             .unwrap_or(0) as u32;
 
+        // 9. Cap plan_outcomes at 100 — keep recent for feedback loop
+        let _ = conn.execute(
+            "DELETE FROM plan_outcomes WHERE id IN (
+                SELECT id FROM plan_outcomes ORDER BY created_at DESC LIMIT -1 OFFSET 100
+            )",
+            [],
+        );
+
+        // 10. Cap capability_events at 500 — keep enough for accurate profiles
+        let _ = conn.execute(
+            "DELETE FROM capability_events WHERE id IN (
+                SELECT id FROM capability_events ORDER BY created_at DESC LIMIT -1 OFFSET 500
+            )",
+            [],
+        );
+
         Ok(PruneStats {
             thoughts: thoughts_pruned,
             goals: goals_pruned,
@@ -1735,6 +1807,266 @@ impl SoulDatabase {
             updated_at: row.get(9)?,
             active: active_int != 0,
         })
+    }
+
+    // ── Plan outcome operations (feedback loop) ──
+
+    /// Insert a plan outcome record.
+    pub fn insert_plan_outcome(
+        &self,
+        outcome: &crate::feedback::PlanOutcome,
+    ) -> Result<(), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        let steps_succeeded = serde_json::to_string(&outcome.steps_succeeded).unwrap_or_default();
+        let steps_failed = serde_json::to_string(&outcome.steps_failed).unwrap_or_default();
+        let error_category = outcome.error_category.as_ref().map(|c| c.as_str());
+
+        conn.execute(
+            "INSERT INTO plan_outcomes (id, plan_id, goal_id, goal_description, status, \
+             steps_succeeded, steps_failed, error_category, error_message, lesson, \
+             total_steps, steps_completed, replan_count, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                outcome.id,
+                outcome.plan_id,
+                outcome.goal_id,
+                outcome.goal_description,
+                outcome.status,
+                steps_succeeded,
+                steps_failed,
+                error_category,
+                outcome.error_message,
+                outcome.lesson,
+                outcome.total_steps as i64,
+                outcome.steps_completed as i64,
+                outcome.replan_count,
+                outcome.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent plan outcomes, ordered newest first.
+    pub fn get_recent_plan_outcomes(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::feedback::PlanOutcome>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, plan_id, goal_id, goal_description, status, \
+             steps_succeeded, steps_failed, error_category, error_message, lesson, \
+             total_steps, steps_completed, replan_count, created_at \
+             FROM plan_outcomes ORDER BY created_at DESC LIMIT ?1",
+        )?;
+
+        let outcomes = stmt
+            .query_map(params![limit], |row| {
+                let steps_succeeded: String = row.get(5)?;
+                let steps_failed: String = row.get(6)?;
+                let error_category_str: Option<String> = row.get(7)?;
+                let error_category = error_category_str.and_then(|s| match s.as_str() {
+                    "compile_error" => Some(crate::feedback::ErrorCategory::CompileError),
+                    "test_failure" => Some(crate::feedback::ErrorCategory::TestFailure),
+                    "file_not_found" => Some(crate::feedback::ErrorCategory::FileNotFound),
+                    "shell_error" => Some(crate::feedback::ErrorCategory::ShellError),
+                    "network_error" => Some(crate::feedback::ErrorCategory::NetworkError),
+                    "protected_file" => Some(crate::feedback::ErrorCategory::ProtectedFile),
+                    "endpoint_error" => Some(crate::feedback::ErrorCategory::EndpointError),
+                    "git_error" => Some(crate::feedback::ErrorCategory::GitError),
+                    "llm_parse_error" => Some(crate::feedback::ErrorCategory::LlmParseError),
+                    "unsolvable" => Some(crate::feedback::ErrorCategory::Unsolvable),
+                    _ => Some(crate::feedback::ErrorCategory::Unknown),
+                });
+
+                Ok(crate::feedback::PlanOutcome {
+                    id: row.get(0)?,
+                    plan_id: row.get(1)?,
+                    goal_id: row.get(2)?,
+                    goal_description: row.get(3)?,
+                    status: row.get(4)?,
+                    steps_succeeded: serde_json::from_str(&steps_succeeded).unwrap_or_default(),
+                    steps_failed: serde_json::from_str(&steps_failed).unwrap_or_default(),
+                    error_category,
+                    error_message: row.get(8)?,
+                    lesson: row.get(9)?,
+                    total_steps: row.get::<_, i64>(10)? as usize,
+                    steps_completed: row.get::<_, i64>(11)? as usize,
+                    replan_count: row.get(12)?,
+                    created_at: row.get(13)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(outcomes)
+    }
+
+    // ── Capability event operations ──
+
+    /// Insert a capability event.
+    pub fn insert_capability_event(
+        &self,
+        event: &crate::capability::CapabilityEvent,
+    ) -> Result<(), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        conn.execute(
+            "INSERT INTO capability_events (id, capability, succeeded, context, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                event.id,
+                event.capability,
+                event.succeeded as i32,
+                event.context,
+                event.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent capability events, ordered newest first.
+    pub fn get_recent_capability_events(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::capability::CapabilityEvent>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, capability, succeeded, context, created_at \
+             FROM capability_events ORDER BY created_at DESC LIMIT ?1",
+        )?;
+
+        let events = stmt
+            .query_map(params![limit], |row| {
+                let succeeded: i32 = row.get(2)?;
+                Ok(crate::capability::CapabilityEvent {
+                    id: row.get(0)?,
+                    capability: row.get(1)?,
+                    succeeded: succeeded != 0,
+                    context: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(events)
+    }
+
+    // ── Benchmark run operations (HumanEval) ──
+
+    /// Insert a benchmark run.
+    pub fn insert_benchmark_run(
+        &self,
+        run: &crate::benchmark::BenchmarkRun,
+    ) -> Result<(), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        conn.execute(
+            "INSERT INTO benchmark_runs (id, task_id, entry_point, passed, \
+             generated_solution, error_output, total_ms, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                run.id,
+                run.task_id,
+                run.entry_point,
+                run.passed as i32,
+                run.generated_solution,
+                run.error_output,
+                run.total_ms as i64,
+                run.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get all benchmark runs (for scoring).
+    pub fn get_all_benchmark_runs(&self) -> Result<Vec<crate::benchmark::BenchmarkRun>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, entry_point, passed, generated_solution, \
+             error_output, total_ms, created_at \
+             FROM benchmark_runs ORDER BY created_at DESC",
+        )?;
+
+        let runs = stmt
+            .query_map([], |row| {
+                let passed: i32 = row.get(3)?;
+                Ok(crate::benchmark::BenchmarkRun {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    entry_point: row.get(2)?,
+                    passed: passed != 0,
+                    generated_solution: row.get(4)?,
+                    error_output: row.get(5)?,
+                    total_ms: row.get::<_, i64>(6)? as u64,
+                    created_at: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(runs)
+    }
+
+    /// Get recent benchmark runs (for display).
+    pub fn get_recent_benchmark_runs(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::benchmark::BenchmarkRun>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, entry_point, passed, generated_solution, \
+             error_output, total_ms, created_at \
+             FROM benchmark_runs ORDER BY created_at DESC LIMIT ?1",
+        )?;
+
+        let runs = stmt
+            .query_map(params![limit], |row| {
+                let passed: i32 = row.get(3)?;
+                Ok(crate::benchmark::BenchmarkRun {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    entry_point: row.get(2)?,
+                    passed: passed != 0,
+                    generated_solution: row.get(4)?,
+                    error_output: row.get(5)?,
+                    total_ms: row.get::<_, i64>(6)? as u64,
+                    created_at: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(runs)
     }
 }
 

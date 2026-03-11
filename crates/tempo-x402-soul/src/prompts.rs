@@ -82,6 +82,8 @@ pub fn goal_creation_prompt(
     recent_errors: &[String],
     recently_failed_goals: &[String],
     fitness: Option<&crate::fitness::FitnessScore>,
+    experience: &str,
+    capability_profile: &str,
 ) -> String {
     let mut sections = Vec::new();
 
@@ -314,6 +316,14 @@ pub fn goal_creation_prompt(
          Priority: 1 (low) to 5 (critical). Be specific."
     ));
 
+    // Inject experience and capability profile for the feedback loop
+    if !experience.is_empty() {
+        sections.push(experience.to_string());
+    }
+    if !capability_profile.is_empty() {
+        sections.push(capability_profile.to_string());
+    }
+
     sections.push(task_section);
 
     sections.join("\n\n")
@@ -326,6 +336,8 @@ pub fn planning_prompt(
     workspace_listing: &str,
     nudges: &[Nudge],
     recent_errors: &[String],
+    experience: &str,
+    capability_profile: &str,
 ) -> String {
     let mut extra_context = String::new();
 
@@ -343,13 +355,24 @@ pub fn planning_prompt(
         }
     }
 
+    let experience_section = if !experience.is_empty() {
+        format!("\n\n{experience}\n\n")
+    } else {
+        String::new()
+    };
+    let capability_section = if !capability_profile.is_empty() {
+        format!("\n\n{capability_profile}\n\n")
+    } else {
+        String::new()
+    };
+
     format!(
         "# Goal\n\
          {}\n\
          Success criteria: {}\n\
          Progress so far: {}\n\n\
          # Workspace\n\
-         {}{}\n\n\
+         {}{}{}{}\n\n\
          # Approaches\n\n\
          ## Code: Read and Improve Your Codebase (PRIMARY)\n\
          - read_file to study how you work (thinking loop, peer discovery, payment flow, etc.)\n\
@@ -405,6 +428,8 @@ pub fn planning_prompt(
         },
         workspace_listing,
         extra_context,
+        experience_section,
+        capability_section,
     )
 }
 

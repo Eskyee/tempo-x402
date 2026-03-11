@@ -1866,6 +1866,262 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                             None
                         }}
 
+                        // Capability profile
+                        {
+                            let cap_profile = data.get("capability_profile");
+                            let capabilities = cap_profile
+                                .and_then(|p| p.get("capabilities"))
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            let measured: Vec<&serde_json::Value> = capabilities
+                                .iter()
+                                .filter(|c| c.get("attempts").and_then(|v| v.as_u64()).unwrap_or(0) > 0)
+                                .collect();
+                            if !measured.is_empty() {
+                                let overall = cap_profile
+                                    .and_then(|p| p.get("overall_success_rate"))
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.5);
+                                let strongest = cap_profile
+                                    .and_then(|p| p.get("strongest"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("-")
+                                    .to_string();
+                                let weakest_cap = cap_profile
+                                    .and_then(|p| p.get("weakest"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("-")
+                                    .to_string();
+                                Some(view! {
+                                    <div class="capability-panel">
+                                        <h3>"Capabilities"</h3>
+                                        <div class="capability-overview">
+                                            <span class="capability-overall">
+                                                {format!("{:.0}% overall", overall * 100.0)}
+                                            </span>
+                                            <span class="capability-best">
+                                                {format!("best: {}", strongest)}
+                                            </span>
+                                            <span class="capability-worst">
+                                                {format!("worst: {}", weakest_cap)}
+                                            </span>
+                                        </div>
+                                        <div class="capability-bars">
+                                            {measured.iter().map(|c| {
+                                                let name = c.get("display_name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("?")
+                                                    .to_string();
+                                                let rate = c.get("success_rate")
+                                                    .and_then(|v| v.as_f64())
+                                                    .unwrap_or(0.0);
+                                                let attempts = c.get("attempts")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                let pct = (rate * 100.0) as u64;
+                                                let bar_class = if rate >= 0.8 {
+                                                    "capability-bar-fill capability-bar-fill--good"
+                                                } else if rate >= 0.5 {
+                                                    "capability-bar-fill capability-bar-fill--ok"
+                                                } else {
+                                                    "capability-bar-fill capability-bar-fill--bad"
+                                                };
+                                                view! {
+                                                    <div class="capability-bar-row">
+                                                        <span class="capability-bar-label">{name}</span>
+                                                        <div class="capability-bar-track">
+                                                            <div class={bar_class}
+                                                                style=format!("width: {}%", pct)>
+                                                            </div>
+                                                        </div>
+                                                        <span class="capability-bar-value">
+                                                            {format!("{}% ({})", pct, attempts)}
+                                                        </span>
+                                                    </div>
+                                                }
+                                            }).collect::<Vec<_>>()}
+                                        </div>
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
+
+                        // Plan outcomes (feedback loop)
+                        {
+                            let outcomes = data.get("plan_outcomes")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            if !outcomes.is_empty() {
+                                Some(view! {
+                                    <div class="outcomes-panel">
+                                        <h3>{format!("Recent Outcomes ({})", outcomes.len())}</h3>
+                                        <div class="outcomes-list">
+                                            {outcomes.iter().take(5).map(|o| {
+                                                let status = o.get("status")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown")
+                                                    .to_string();
+                                                let lesson = o.get("lesson")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let steps_done = o.get("steps_completed")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                let total_steps_o = o.get("total_steps")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                let error_cat = o.get("error_category")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let status_icon = if status == "completed" {
+                                                    "\u{2705}"
+                                                } else {
+                                                    "\u{274C}"
+                                                };
+                                                let truncated_lesson = if lesson.len() > 120 {
+                                                    let mut end = 120;
+                                                    while end > 0 && !lesson.is_char_boundary(end) {
+                                                        end -= 1;
+                                                    }
+                                                    format!("{}...", &lesson[..end])
+                                                } else {
+                                                    lesson
+                                                };
+                                                view! {
+                                                    <div class={format!("outcome-item outcome-item--{}", status)}>
+                                                        <span class="outcome-icon">{status_icon}</span>
+                                                        <div class="outcome-info">
+                                                            <div class="outcome-lesson">{truncated_lesson}</div>
+                                                            <div class="outcome-meta">
+                                                                {format!("{}/{} steps", steps_done, total_steps_o)}
+                                                                {if !error_cat.is_empty() {
+                                                                    format!(" | {}", error_cat)
+                                                                } else {
+                                                                    String::new()
+                                                                }}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            }).collect::<Vec<_>>()}
+                                        </div>
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
+
+                        // HumanEval Benchmark
+                        {
+                            let bench = data.get("benchmark");
+                            if let Some(b) = bench {
+                                let pass_at_1 = b.get("pass_at_1")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let elo_display = b.get("elo_display")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("ELO 1000")
+                                    .to_string();
+                                let attempted = b.get("problems_attempted")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let passed_b = b.get("problems_passed")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let refs = b.get("reference_scores")
+                                    .and_then(|v| v.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                Some(view! {
+                                    <div class="benchmark-panel">
+                                        <h3>"HumanEval Benchmark"</h3>
+                                        <div class="benchmark-score">
+                                            <span class="benchmark-pass-at-1">
+                                                {format!("{:.1}%", pass_at_1)}
+                                            </span>
+                                            <span class="benchmark-label">"pass@1"</span>
+                                            <span class="benchmark-elo">{elo_display}</span>
+                                        </div>
+                                        <div class="benchmark-stats">
+                                            {format!("{}/{} problems solved", passed_b, attempted)}
+                                        </div>
+                                        <div class="benchmark-refs">
+                                            <div class="benchmark-refs-label">"vs. published baselines"</div>
+                                            {refs.iter().take(5).map(|r| {
+                                                let model = r.get("model")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("?")
+                                                    .to_string();
+                                                let ref_score = r.get("pass_at_1")
+                                                    .and_then(|v| v.as_f64())
+                                                    .unwrap_or(0.0);
+                                                let comparison_class = if pass_at_1 > ref_score + 1.0 {
+                                                    "benchmark-ref--above"
+                                                } else if pass_at_1 < ref_score - 1.0 {
+                                                    "benchmark-ref--below"
+                                                } else {
+                                                    "benchmark-ref--equal"
+                                                };
+                                                view! {
+                                                    <div class={format!("benchmark-ref {}", comparison_class)}>
+                                                        <span class="benchmark-ref-model">{model}</span>
+                                                        <span class="benchmark-ref-score">
+                                                            {format!("{:.1}%", ref_score)}
+                                                        </span>
+                                                    </div>
+                                                }
+                                            }).collect::<Vec<_>>()}
+                                        </div>
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
+
+                        // Neural brain panel
+                        {
+                            if let Some(brain) = soul_data.get("brain").and_then(|v| v.as_object()) {
+                                let params = brain.get("parameters")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let train_steps = brain.get("train_steps")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let loss = brain.get("running_loss")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                Some(view! {
+                                    <div class="brain-panel">
+                                        <h3>"Neural Brain"</h3>
+                                        <div class="brain-stats">
+                                            <div class="brain-stat">
+                                                <span class="brain-stat-value">{format!("{}K", params / 1000)}</span>
+                                                <span class="brain-stat-label">"parameters"</span>
+                                            </div>
+                                            <div class="brain-stat">
+                                                <span class="brain-stat-value">{format!("{}", train_steps)}</span>
+                                                <span class="brain-stat-label">"training steps"</span>
+                                            </div>
+                                            <div class="brain-stat">
+                                                <span class="brain-stat-value">{format!("{:.4}", loss)}</span>
+                                                <span class="brain-stat-label">"loss"</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
+
                         {if thoughts.is_empty() && !active {
                             view! {
                                 <p class="soul-muted">"Soul not active"</p>

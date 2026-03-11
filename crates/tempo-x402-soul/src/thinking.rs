@@ -25,6 +25,7 @@ use crate::prompts;
 use crate::tool_registry::ToolRegistry;
 use crate::tools::{self, ToolExecutor};
 use crate::world_model::{Belief, BeliefDomain, Confidence, Goal, ModelUpdate};
+use crate::{capability, feedback};
 
 /// Simplified adaptive pacing for plan-driven execution.
 struct AdaptivePacer {
@@ -244,6 +245,52 @@ impl ThinkingLoop {
                 intro = format!("{:.2}", fitness.introspection),
                 "Fitness score"
             );
+
+            // Run HumanEval benchmark periodically (every 100 cycles)
+            if let Some(llm) = &self.llm {
+                if crate::benchmark::should_run_benchmark(
+                    &self.db,
+                    crate::benchmark::DEFAULT_BENCHMARK_INTERVAL,
+                ) {
+                    tracing::info!("Starting periodic HumanEval benchmark session");
+                    let _ = self.db.set_state(
+                        "last_benchmark_at",
+                        &chrono::Utc::now().timestamp().to_string(),
+                    );
+                    match crate::benchmark::run_benchmark_session(
+                        llm,
+                        &self.db,
+                        &self.config.workspace_root,
+                        crate::benchmark::DEFAULT_SAMPLE_SIZE,
+                    )
+                    .await
+                    {
+                        Ok(pass_at_1) => {
+                            crate::elo::update_rating(&self.db, pass_at_1);
+                            tracing::info!(
+                                pass_at_1 = format!("{:.1}%", pass_at_1),
+                                elo = crate::elo::rating_display(&self.db),
+                                "HumanEval benchmark complete"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "HumanEval benchmark failed");
+                        }
+                    }
+                }
+            }
+
+            // Train the neural brain every 10 cycles
+            if cycle_count % 10 == 0 {
+                let (examples, loss) = crate::brain::train_cycle(&self.db);
+                if examples > 0 {
+                    tracing::info!(
+                        examples,
+                        loss = format!("{:.4}", loss),
+                        "Brain training cycle"
+                    );
+                }
+            }
 
             let next_secs = pacer.next_interval(&snapshot, cycle_result.step_type);
 
@@ -486,12 +533,39 @@ impl ThinkingLoop {
                 break;
             }
 
+            // Brain prediction: estimate success probability before execution
+            let brain_ctx = crate::brain::StepContext {
+                plan_progress: if plan.steps.is_empty() {
+                    0.0
+                } else {
+                    plan.current_step as f32 / plan.steps.len() as f32
+                },
+                replan_count: plan.replan_count,
+                overall_success_rate: crate::capability::compute_profile(&self.db)
+                    .overall_success_rate as f32,
+                capability_success_rate: {
+                    let cap = crate::capability::Capability::from_step(&step);
+                    let profile = crate::capability::compute_profile(&self.db);
+                    profile
+                        .capabilities
+                        .iter()
+                        .find(|s| s.capability == cap.as_str())
+                        .map(|s| s.success_rate as f32)
+                        .unwrap_or(0.5)
+                },
+                consecutive_failures: 0, // TODO: track within plan
+                cycle_count: cycle_count,
+                ..Default::default()
+            };
+            let prediction = crate::brain::predict_step(&self.db, &step, &brain_ctx);
+
             tracing::info!(
                 plan_id = %plan.id,
                 step = plan.current_step,
                 total_steps = plan.steps.len(),
                 step_type = %step_summary,
                 batch_pos = steps_executed,
+                brain_success_prob = format!("{:.1}%", prediction.success_prob * 100.0),
                 "Executing plan step"
             );
 
@@ -500,6 +574,9 @@ impl ThinkingLoop {
             // ── Handle result ──
             match result {
                 StepResult::Success(output) => {
+                    // Track capability success
+                    capability::record_step_result(&self.db, &step, true, &step_summary);
+
                     if let Some(key) = step.store_key() {
                         let truncated = if output.len() > 8000 {
                             let mut end = 8000;
@@ -540,12 +617,16 @@ impl ThinkingLoop {
                 }
                 StepResult::Failed(error) => {
                     tracing::warn!(step = %step_summary, error = %error, "Step failed");
+                    // Track capability failure
+                    capability::record_step_result(&self.db, &step, false, &error);
                     return self
                         .handle_step_failure(llm, &mut plan, &step_summary, &error)
                         .await;
                 }
                 StepResult::NeedsReplan(reason) => {
                     tracing::info!(step = %step_summary, reason = %reason, "Step needs replan");
+                    // Track capability failure
+                    capability::record_step_result(&self.db, &step, false, &reason);
                     return self
                         .handle_step_failure(llm, &mut plan, &step_summary, &reason)
                         .await;
@@ -771,7 +852,16 @@ impl ThinkingLoop {
         let workspace_listing = format!("{}{}{}", top_listing, routes_listing, routes_mod);
 
         let recent_errors = self.get_recent_errors();
-        let prompt = prompts::planning_prompt(goal, &workspace_listing, nudges, &recent_errors);
+        let experience = feedback::consult_experience(&self.db, &goal.description);
+        let cap_guidance = capability::capability_guidance(&self.db);
+        let prompt = prompts::planning_prompt(
+            goal,
+            &workspace_listing,
+            nudges,
+            &recent_errors,
+            &experience,
+            &cap_guidance,
+        );
         let system =
             "You are a software engineering planner. Output ONLY a JSON array of plan steps.";
 
@@ -1002,6 +1092,20 @@ impl ThinkingLoop {
             .map(|g| g.description.clone())
             .collect();
         let fitness = crate::fitness::FitnessScore::load_current(&self.db);
+        let experience = feedback::consult_experience(&self.db, "");
+        let cap_guidance = capability::capability_guidance(&self.db);
+        let benchmark_summary = crate::benchmark::benchmark_summary_for_prompt(&self.db);
+        let brain_summary = crate::brain::brain_summary(&self.db);
+        let cap_with_benchmark = {
+            let mut s = cap_guidance;
+            if !benchmark_summary.is_empty() {
+                s = format!("{s}\n\n{benchmark_summary}");
+            }
+            if !brain_summary.is_empty() {
+                s = format!("{s}\n\n{brain_summary}");
+            }
+            s
+        };
         let prompt = prompts::goal_creation_prompt(
             snapshot,
             &beliefs,
@@ -1012,6 +1116,8 @@ impl ThinkingLoop {
             &recent_errors,
             &failed_descriptions,
             fitness.as_ref(),
+            &experience,
+            &cap_with_benchmark,
         );
         let system = "You are an autonomous agent. Output ONLY a JSON array of goal operations.";
 
@@ -1116,6 +1222,15 @@ impl ThinkingLoop {
         self.db.update_plan(plan)?;
         let _ = self.db.set_state("active_plan_id", "");
 
+        // Record structured outcome for feedback loop
+        feedback::record_outcome(&self.db, plan, &goal.description, None);
+        capability::record_event(
+            &self.db,
+            &capability::Capability::PlanComplete,
+            true,
+            &goal.description,
+        );
+
         self.increment_cycle_count()?;
         Ok(CycleResult {
             step_type: StepType::PlanCompleted,
@@ -1153,6 +1268,22 @@ impl ThinkingLoop {
             plan.status = PlanStatus::Failed;
             self.db.update_plan(plan)?;
             let _ = self.db.set_state("active_plan_id", "");
+
+            // Record structured outcome for feedback loop
+            let goal_for_outcome = self
+                .db
+                .get_goal(&plan.goal_id)
+                .ok()
+                .flatten()
+                .map(|g| g.description.clone())
+                .unwrap_or_else(|| "unknown goal".to_string());
+            feedback::record_outcome(&self.db, plan, &goal_for_outcome, Some(error));
+            capability::record_event(
+                &self.db,
+                &capability::Capability::PlanComplete,
+                false,
+                &format!("{}: {}", step_desc, error),
+            );
 
             // Write failure to persistent memory so we don't repeat the same mistake
             let goal_desc = self

@@ -21,6 +21,8 @@
 //! ## Capabilities
 //!
 //! - **Plan-driven execution** &mdash; goals decompose into deterministic step sequences
+//! - **Feedback loop** &mdash; structured plan outcomes, error classification, lessons fed back into prompts
+//! - **Capability tracking** &mdash; per-skill success rates, profile-guided planning
 //! - **Neuroplastic memory** &mdash; salience scoring, tiered decay
 //! - **World model** &mdash; structured beliefs about self, endpoints, codebase, strategy
 //! - **Coding agent** &mdash; read, write, edit files, run shell, git commit/push/PR
@@ -37,6 +39,8 @@
 //! - [`thinking`] &mdash; main plan-driven loop
 //! - [`plan`] &mdash; plan types, step execution, plan status
 //! - [`prompts`] &mdash; focused prompt builders (goal creation, planning, code generation, replan, reflection)
+//! - [`feedback`] &mdash; structured plan outcomes, error classification, lesson extraction
+//! - [`capability`] &mdash; per-skill success rate tracking and profile-guided planning
 //! - [`tools`] &mdash; tool executor: shell, file ops, git, endpoints, peers
 //! - [`git`] &mdash; branch-per-VM git workflow with fork support
 //! - [`coding`] &mdash; pre-commit validation pipeline (cargo check &rarr; test &rarr; commit)
@@ -47,11 +51,17 @@
 //!
 //! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 
+pub mod benchmark;
+pub mod brain;
+pub mod capability;
 pub mod chat;
 pub mod coding;
+pub mod computer_use;
 pub mod config;
 pub mod db;
+pub mod elo;
 pub mod error;
+pub mod feedback;
 pub mod fitness;
 pub mod git;
 pub mod guard;

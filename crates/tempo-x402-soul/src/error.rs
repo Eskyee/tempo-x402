@@ -26,4 +26,7 @@ pub enum SoulError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("tool error: {0}")]
+    ToolError(String),
 }

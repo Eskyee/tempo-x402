@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::db::SoulDatabase;
-use crate::plan::{Plan, PlanStatus, PlanStep};
+#[cfg(test)]
+use crate::plan::PlanStep;
+use crate::plan::{Plan, PlanStatus};
 
 /// Structured outcome of a completed or failed plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,12 +232,8 @@ pub fn consult_experience(db: &SoulDatabase, goal_desc: &str) -> String {
     }
 
     // Compute word overlap to find relevant outcomes
-    let goal_words: std::collections::HashSet<&str> = goal_desc
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .collect();
+    let goal_lower = goal_desc.to_lowercase();
+    let goal_words: std::collections::HashSet<&str> = goal_lower.split_whitespace().collect();
 
     let mut relevant: Vec<(f64, &PlanOutcome)> = outcomes
         .iter()

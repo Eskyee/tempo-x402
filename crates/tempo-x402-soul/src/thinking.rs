@@ -281,6 +281,13 @@ impl ThinkingLoop {
             }
 
             // Train the neural brain every 10 cycles
+            let cycle_count: u64 = self
+                .db
+                .get_state("total_think_cycles")
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
             if cycle_count % 10 == 0 {
                 let (examples, loss) = crate::brain::train_cycle(&self.db);
                 if examples > 0 {
@@ -534,6 +541,13 @@ impl ThinkingLoop {
             }
 
             // Brain prediction: estimate success probability before execution
+            let cycle_count: u64 = self
+                .db
+                .get_state("total_think_cycles")
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
             let brain_ctx = crate::brain::StepContext {
                 plan_progress: if plan.steps.is_empty() {
                     0.0
@@ -558,6 +572,22 @@ impl ThinkingLoop {
                 ..Default::default()
             };
             let prediction = crate::brain::predict_step(&self.db, &step, &brain_ctx);
+
+            // Log brain prediction with warning if likely to fail
+            let brain_trained = {
+                let brain = crate::brain::load_brain(&self.db);
+                brain.train_steps >= 50
+            };
+            if brain_trained && prediction.success_prob < 0.2 {
+                tracing::warn!(
+                    plan_id = %plan.id,
+                    step = plan.current_step,
+                    step_type = %step_summary,
+                    success_prob = format!("{:.1}%", prediction.success_prob * 100.0),
+                    likely_error = ?prediction.likely_error,
+                    "Brain predicts HIGH FAILURE RISK for this step"
+                );
+            }
 
             tracing::info!(
                 plan_id = %plan.id,

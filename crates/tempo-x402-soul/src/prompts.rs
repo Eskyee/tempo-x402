@@ -402,7 +402,11 @@ pub fn planning_prompt(
          - {{\"type\": \"create_github_repo\", \"name\": \"my-project\", \"description\": \"...\", \"store_as\": \"repo\"}}\n\
          - {{\"type\": \"fork_github_repo\", \"owner\": \"user\", \"repo\": \"project\", \"store_as\": \"fork\"}}\n\
          - {{\"type\": \"discover_peers\", \"store_as\": \"peers\"}}  (fetches sibling/child instances and their endpoints)\n\
-         - {{\"type\": \"call_peer\", \"slug\": \"script-peer-discovery\", \"store_as\": \"result\"}}  (RECOMMENDED for inter-agent calls — discovers peers, resolves URL, signs payment — ONE step)\n\n\
+         - {{\"type\": \"call_peer\", \"slug\": \"script-peer-discovery\", \"store_as\": \"result\"}}  (RECOMMENDED for inter-agent calls — discovers peers, resolves URL, signs payment — ONE step)\n\
+         - {{\"type\": \"screenshot\", \"store_as\": \"screen\"}}  (capture VM display — requires DISPLAY)\n\
+         - {{\"type\": \"screen_click\", \"x\": 100, \"y\": 200, \"store_as\": \"click\"}}  (click at screen position)\n\
+         - {{\"type\": \"screen_type\", \"text\": \"hello\", \"store_as\": \"typed\"}}  (type text via keyboard)\n\
+         - {{\"type\": \"browse_url\", \"url\": \"https://...\", \"store_as\": \"page\"}}  (open URL in browser)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\

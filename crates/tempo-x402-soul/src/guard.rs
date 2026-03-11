@@ -12,6 +12,12 @@ const PROTECTED_PREFIXES: &[&str] = &[
     "crates/tempo-x402-soul/src/guard.rs",
     "crates/tempo-x402-soul/src/config.rs",
     "crates/tempo-x402-soul/src/tool_registry.rs",
+    "crates/tempo-x402-soul/src/brain.rs",
+    "crates/tempo-x402-soul/src/computer_use.rs",
+    "crates/tempo-x402-soul/src/capability.rs",
+    "crates/tempo-x402-soul/src/feedback.rs",
+    "crates/tempo-x402-soul/src/benchmark.rs",
+    "crates/tempo-x402-soul/src/elo.rs",
     "crates/tempo-x402-identity/",
     "crates/tempo-x402-node/src/routes/",
     "crates/tempo-x402-node/src/main.rs",
@@ -120,6 +126,16 @@ mod tests {
             "crates/tempo-x402-gateway/src/routes/register.rs"
         ));
         assert!(is_protected("crates/tempo-x402-gateway/src/proxy.rs"));
+    }
+
+    #[test]
+    fn protects_intelligence_modules() {
+        assert!(is_protected("crates/tempo-x402-soul/src/brain.rs"));
+        assert!(is_protected("crates/tempo-x402-soul/src/computer_use.rs"));
+        assert!(is_protected("crates/tempo-x402-soul/src/capability.rs"));
+        assert!(is_protected("crates/tempo-x402-soul/src/feedback.rs"));
+        assert!(is_protected("crates/tempo-x402-soul/src/benchmark.rs"));
+        assert!(is_protected("crates/tempo-x402-soul/src/elo.rs"));
     }
 
     #[test]

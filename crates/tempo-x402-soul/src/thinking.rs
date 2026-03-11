@@ -508,6 +508,7 @@ impl ThinkingLoop {
         let mut last_step_summary = String::new();
         let mut last_was_llm = false;
         let mut entered_code = false;
+        let mut consecutive_failures: u32 = 0;
         const MAX_BATCH: u32 = 10; // cap mechanical batch to avoid runaway
 
         loop {
@@ -567,7 +568,7 @@ impl ThinkingLoop {
                         .map(|s| s.success_rate as f32)
                         .unwrap_or(0.5)
                 },
-                consecutive_failures: 0, // TODO: track within plan
+                consecutive_failures,
                 cycle_count: cycle_count,
                 ..Default::default()
             };
@@ -632,6 +633,7 @@ impl ThinkingLoop {
                         "Step succeeded"
                     );
 
+                    consecutive_failures = 0; // reset on success
                     last_step_summary = step_summary;
                     last_was_llm = is_llm;
                     if is_code {
@@ -646,7 +648,8 @@ impl ThinkingLoop {
                     // Mechanical step succeeded — continue to next step in same cycle
                 }
                 StepResult::Failed(error) => {
-                    tracing::warn!(step = %step_summary, error = %error, "Step failed");
+                    consecutive_failures += 1;
+                    tracing::warn!(step = %step_summary, error = %error, consecutive_failures, "Step failed");
                     // Track capability failure
                     capability::record_step_result(&self.db, &step, false, &error);
                     return self

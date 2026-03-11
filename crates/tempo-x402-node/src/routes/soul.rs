@@ -140,7 +140,6 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
                 x402_soul::ThoughtType::Observation,
                 x402_soul::ThoughtType::Reflection,
                 x402_soul::ThoughtType::MemoryConsolidation,
-                x402_soul::ThoughtType::Prediction,
             ],
             15,
         )

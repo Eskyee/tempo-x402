@@ -30,8 +30,6 @@ pub enum ThoughtType {
     Escalation,
     /// Consolidated summary of multiple thoughts (long-term memory).
     MemoryConsolidation,
-    /// A prediction about the next cycle's metrics.
-    Prediction,
 }
 
 impl ThoughtType {
@@ -49,7 +47,6 @@ impl ThoughtType {
             Self::CrossHemisphere => "cross_hemisphere",
             Self::Escalation => "escalation",
             Self::MemoryConsolidation => "memory_consolidation",
-            Self::Prediction => "prediction",
         }
     }
 
@@ -67,7 +64,6 @@ impl ThoughtType {
             "cross_hemisphere" => Some(Self::CrossHemisphere),
             "escalation" => Some(Self::Escalation),
             "memory_consolidation" => Some(Self::MemoryConsolidation),
-            "prediction" => Some(Self::Prediction),
             _ => None,
         }
     }

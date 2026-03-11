@@ -652,55 +652,6 @@ impl ThinkingLoop {
         };
 
         if state_changed {
-            // Prediction error
-            let prediction_error = if neuroplastic {
-                match self.db.get_last_prediction() {
-                    Ok(Some(pred_json)) => {
-                        match serde_json::from_str::<neuroplastic::Prediction>(&pred_json) {
-                            Ok(pred) => neuroplastic::compute_prediction_error(&pred, snapshot),
-                            Err(_) => 0.0,
-                        }
-                    }
-                    _ => 0.0,
-                }
-            } else {
-                0.0
-            };
-
-            // Generate new prediction (only when state changed)
-            if neuroplastic {
-                let new_pred =
-                    neuroplastic::generate_prediction(snapshot, pacer.prev_snapshot.as_ref());
-                if let Ok(pred_json) = serde_json::to_string(&new_pred) {
-                    let pred_thought = Thought {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        thought_type: ThoughtType::Prediction,
-                        content: format!(
-                            "Predicted: payments={}, revenue={:.2}, endpoints={}, children={} (confidence {:.0}%)",
-                            new_pred.expected_payments,
-                            new_pred.expected_revenue,
-                            new_pred.expected_endpoint_count,
-                            new_pred.expected_children_count,
-                            new_pred.confidence * 100.0
-                        ),
-                        context: Some(pred_json.clone()),
-                        created_at: chrono::Utc::now().timestamp(),
-                        salience: Some(0.3),
-                        memory_tier: Some("working".to_string()),
-                        strength: Some(1.0),
-                    };
-                    let _ = self.db.insert_thought_with_salience(
-                        &pred_thought,
-                        0.3,
-                        "{}",
-                        "working",
-                        1.0,
-                        None,
-                    );
-                    let _ = self.db.store_prediction(&pred_json);
-                }
-            }
-
             // Record observation
             let obs_content = format!(
                 "Node state captured (uptime {}h, {} endpoints, {} payments)",
@@ -729,7 +680,6 @@ impl ThinkingLoop {
                     &obs_content,
                     snapshot,
                     pacer.prev_snapshot.as_ref(),
-                    prediction_error,
                     &pattern_counts,
                 );
                 let tier = neuroplastic::initial_tier(&ThoughtType::Observation, salience);
@@ -740,7 +690,6 @@ impl ThinkingLoop {
                     &factors_json,
                     tier.as_str(),
                     1.0,
-                    Some(prediction_error),
                 )?;
             } else {
                 self.db.insert_thought(&obs_thought)?;
@@ -1149,10 +1098,9 @@ impl ThinkingLoop {
                     let _ = self.db.insert_thought_with_salience(
                         &reflection,
                         0.6,
-                        r#"{"novelty":0.5,"prediction_error":0.0,"reward_signal":0.3,"recency_boost":0.1,"reinforcement":0.0}"#,
+                        r#"{"novelty":0.5,"reward_signal":0.3,"recency_boost":0.1,"reinforcement":0.0}"#,
                         "working",
                         1.0,
-                        None,
                     );
                 } else {
                     let _ = self.db.insert_thought(&reflection);
@@ -1871,7 +1819,6 @@ impl ThinkingLoop {
                 ThoughtType::Decision,
                 ThoughtType::Observation,
                 ThoughtType::Reflection,
-                ThoughtType::Prediction,
             ],
             20,
         ) {
@@ -1914,10 +1861,9 @@ impl ThinkingLoop {
         match self.db.insert_thought_with_salience(
             &consolidation,
             0.9,
-            r#"{"novelty":0.8,"prediction_error":0.0,"reward_signal":0.0,"recency_boost":0.1,"reinforcement":0.0}"#,
+            r#"{"novelty":0.8,"reward_signal":0.0,"recency_boost":0.1,"reinforcement":0.0}"#,
             "long_term",
             1.0,
-            None,
         ) {
             Ok(()) => {
                 // Consolidation is digestion — delete the source thoughts that were absorbed

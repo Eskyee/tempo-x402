@@ -42,8 +42,8 @@ No dependency on gateway/identity/node. Communicates via `NodeObserver` trait â€
 | `llm.rs` | Gemini API client with thought_signature support |
 | `chat.rs` | Session-based interactive chat with plan context injection |
 | `db.rs` | SQLite: thoughts, soul_state, mutations, tools, pattern_counts, beliefs, goals, plans, nudges, **chat_sessions, chat_messages** tables |
-| `memory.rs` | Thought types (Observation, Reasoning, Decision, Prediction, etc.) |
-| `neuroplastic.rs` | Salience scoring, tiered memory decay, prediction error |
+| `memory.rs` | Thought types (Observation, Reasoning, Decision, etc.) |
+| `neuroplastic.rs` | Salience scoring, tiered memory decay |
 | `persistent_memory.rs` | Persistent markdown memory file â€” read/seed/update, 4KB cap |
 | `world_model.rs` | Structured belief system: Belief, BeliefDomain, Confidence, ModelUpdate types |
 
@@ -99,7 +99,7 @@ Each step can have `store_as` to accumulate results in plan context. LLM steps r
 - Fork workflow: `SOUL_FORK_REPO` + `SOUL_UPSTREAM_REPO` enable push-to-fork + cross-fork PRs
 - Direct push mode: `SOUL_DIRECT_PUSH=true` pushes to fork's main branch directly
 - World model: structured beliefs (auto-synced from snapshot each cycle + LLM updates)
-- Neuroplastic memory: salience scoring, tiered decay, prediction error
+- Neuroplastic memory: salience scoring, tiered decay
 - Nudge queue: external signals (user, system, stagnation) prioritized into goal/plan creation
 - Stagnation detection: per-goal retry limit (2), global idle limit (30 cycles without commit)
 - **Chat sessions**: multi-turn conversation history via `chat_sessions` + `chat_messages` tables (replaces stateless per-request chat)

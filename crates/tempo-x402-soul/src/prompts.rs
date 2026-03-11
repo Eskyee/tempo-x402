@@ -227,27 +227,23 @@ pub fn goal_creation_prompt(
     let situation_analysis = if endpoint_count > 5 && total_payments == 0 {
         format!(
             "## CRITICAL: You have {endpoint_count} endpoints and ZERO payments.\n\
-             STOP creating more endpoints — you clearly have enough. Focus on:\n\
-             1. **Research**: Read your own source code, create new repos for experiments\n\
+             STOP creating more endpoints. Focus on:\n\
+             1. **Improve your own code**: Read your source, find bugs or optimizations, edit Rust files, commit\n\
              2. **Coordinate**: {peer_advice}\n\
-             3. **Prune**: delete_endpoint — remove redundant/similar scripts\n\
-             4. **Expand**: Create GitHub repos, fork interesting projects, do real AI research\n\
-             5. **Improve**: Write real Rust code to make yourself better\n\n\
+             3. **Prune**: delete_endpoint — remove redundant/similar scripts\n\n\
              Do NOT create more endpoints until existing ones earn payments."
         )
     } else if endpoint_count > 0 && paid_endpoints == 0 {
         format!(
             "## WARNING: You have {endpoint_count} endpoints but NONE have received payments.\n\
              Before creating more endpoints, try:\n\
-             1. Create a GitHub repo for a new research project\n\
-             2. {peer_advice}\n\
-             3. Write real Rust code improvements and commit them\n\
-             4. Fork an interesting project and study/improve it"
+             1. Read and improve your own Rust source code — find a real bug or optimization\n\
+             2. {peer_advice}"
         )
     } else if endpoint_count > 0 && paid_endpoints > 0 {
         format!(
             "## {paid_endpoints}/{endpoint_count} endpoints have received payments. Good.\n\
-             Expand: create repos, fork projects, research, {}, build new capabilities.",
+             Keep improving: fix bugs, optimize code, {}.",
             if has_peers {
                 "coordinate with peers"
             } else {
@@ -279,26 +275,27 @@ pub fn goal_creation_prompt(
     };
 
     let good_goals = if has_peers {
-        "create a GitHub repo for research, fork an interesting project, fix a bug, research your own codebase, coordinate with peers, create a genuinely novel endpoint"
+        "fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code, coordinate with peers via call_peer"
     } else {
-        "create a GitHub repo for research, fork an interesting project, fix a bug, research your own codebase, create a genuinely novel endpoint"
+        "fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code, create a genuinely novel endpoint"
     };
 
     let endpoint_rule = if total_payments == 0 && endpoint_count > 5 {
-        "You have too many unpaid endpoints. Do NOT create more. Prune redundant ones, then focus on: create_github_repo, fork_github_repo, research"
+        "You have too many unpaid endpoints. Do NOT create more. Prune redundant ones, then focus on improving your own Rust code"
     } else if endpoint_count >= 10 {
-        "You have the max 10 endpoints. Do NOT create more. Focus on: create_github_repo, fork_github_repo, research, code improvements"
+        "You have the max 10 endpoints. Do NOT create more. Focus on code improvements and peer coordination"
     } else {
-        "Endpoints are fine but each must be UNIQUE — never duplicate similar functionality. Also consider: create_github_repo, fork_github_repo for new projects"
+        "Endpoints are fine but each must be UNIQUE — never duplicate similar functionality"
     };
 
     task_section.push_str(&format!(
         "## Rules\n\
          - Create 1-2 goals MAX\n\
          - {endpoint_rule}\n\
-         - Your primary work is expanding capabilities — code improvements, new repos, research\n\
+         - Your primary work is IMPROVING YOUR OWN CODEBASE — read source files, find bugs, optimize, commit\n\
          - Good goals: {good_goals}\n\
-         - Bad goals: create an endpoint similar to one that already exists, retry the same failed call, trivial variations of existing work, goals requiring peers when none exist\n\
+         - Bad goals: create an endpoint similar to one that already exists, create an empty GitHub repo, retry the same failed approach, trivial variations of existing work, goals requiring peers when none exist\n\
+         - Do NOT create GitHub repos unless you have REAL CODE to put in them (not just a README)\n\
          - Do NOT create \"fix\" goals — if something failed, try something DIFFERENT\n\
          - {peer_rule}\n\
          - Your FITNESS SCORE measures how well you're evolving. Improve your weakest component:\n\
@@ -307,7 +304,7 @@ pub fn goal_creation_prompt(
            - evolution: commit code changes that pass validation\n\
            - coordination: successfully call peers\n\
            - introspection: maintain accurate beliefs\n\
-         - A POSITIVE trend means you're getting smarter. A negative trend means you're stagnating. Act accordingly.\n\n\
+         - A POSITIVE trend means you're getting smarter. A negative trend means you're stagnating.\n\n\
          Respond with a JSON array of goal operations:\n\
          ```json\n\
          [\n\
@@ -353,15 +350,12 @@ pub fn planning_prompt(
          Progress so far: {}\n\n\
          # Workspace\n\
          {}{}\n\n\
-         # Approaches — Research, Code, Repos, and Coordination\n\n\
-         ## Code: Read and Improve Your Codebase\n\
+         # Approaches\n\n\
+         ## Code: Read and Improve Your Codebase (PRIMARY)\n\
          - read_file to study how you work (thinking loop, peer discovery, payment flow, etc.)\n\
          - edit_code / generate_code to make real Rust improvements\n\
-         - cargo_check to validate, commit to deploy\n\n\
-         ## Repos: Create and Fork GitHub Projects\n\
-         - create_github_repo to start new research projects, libraries, experiments\n\
-         - fork_github_repo to study and improve existing open-source projects\n\
-         - This is how you expand beyond your own codebase\n\n\
+         - cargo_check to validate, commit to deploy\n\
+         - This is your MAIN activity — find bugs, optimize, add features to your own code\n\n\
          ## Endpoints: Paid API Services (quality over quantity)\n\
          Use create_script_endpoint for genuinely unique, useful HTTP endpoints.\n\
          Each endpoint must be DIFFERENT from existing ones. Max 10 total.\n\

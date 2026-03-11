@@ -1,12 +1,10 @@
-//! Neuroplastic memory: salience scoring, tiered memory with decay, and prediction error.
+//! Neuroplastic memory: salience scoring and tiered memory with decay.
 //!
-//! Three neuroscience-inspired systems that create a learning loop:
-//! 1. **Salience** — not all thoughts matter equally. Novelty, prediction error, and reward
+//! Two neuroscience-inspired systems:
+//! 1. **Salience** — not all thoughts matter equally. Novelty, reward, and reinforcement
 //!    determine how important a thought is.
 //! 2. **Tiered memory** — sensory (fast decay), working (moderate), long-term (near-permanent).
 //!    High-salience sensory memories get promoted to working memory.
-//! 3. **Prediction error** — the soul predicts next-cycle metrics and learns from surprise
-//!    when reality diverges from expectation.
 
 use std::collections::HashMap;
 
@@ -135,8 +133,6 @@ pub fn compute_reward_signal(
 pub struct SalienceFactors {
     /// How novel is this content? (0.0 = seen many times, 1.0 = never seen)
     pub novelty: f64,
-    /// How much did reality diverge from prediction? (0.0 = perfect, 1.0 = total surprise)
-    pub prediction_error: f64,
     /// Was there a positive change in payments/revenue? (0.0 = no, up to 0.8)
     pub reward_signal: f64,
     /// Constant small boost for being recent (0.1).
@@ -145,28 +141,14 @@ pub struct SalienceFactors {
     pub reinforcement: f64,
 }
 
-/// A prediction about the next cycle's metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Prediction {
-    pub expected_payments: u64,
-    pub expected_revenue: f64,
-    pub expected_endpoint_count: u32,
-    pub expected_children_count: u32,
-    /// How confident the prediction is (0.0 = no basis, 1.0 = strong trend).
-    pub confidence: f64,
-    /// Human-readable basis for the prediction.
-    pub basis: String,
-}
-
 /// Compute salience score and factor breakdown for a thought.
 ///
-/// Weights: novelty 30%, prediction_error 25%, reward_signal 25%, recency 10%, reinforcement 10%.
+/// Weights: novelty 40%, reward_signal 35%, recency 12%, reinforcement 13%.
 pub fn compute_salience(
     _thought_type: &ThoughtType,
     content: &str,
     snapshot: &NodeSnapshot,
     prev_snapshot: Option<&NodeSnapshot>,
-    prediction_error: f64,
     pattern_counts: &HashMap<String, u64>,
 ) -> (f64, SalienceFactors) {
     let fp = content_fingerprint(content);
@@ -178,9 +160,6 @@ pub fn compute_salience(
     } else {
         (1.0 / (count as f64 + 1.0)).min(0.5)
     };
-
-    // Prediction error (already computed, pass through)
-    let pred_error = prediction_error.clamp(0.0, 1.0);
 
     // Reward signal: per-endpoint attribution
     let reward_breakdown = compute_reward_signal(snapshot, prev_snapshot);
@@ -197,12 +176,10 @@ pub fn compute_salience(
     };
 
     let salience =
-        (novelty * 0.3 + pred_error * 0.25 + reward * 0.25 + recency * 0.1 + reinforcement * 0.1)
-            .clamp(0.0, 1.0);
+        (novelty * 0.4 + reward * 0.35 + recency * 0.12 + reinforcement * 0.13).clamp(0.0, 1.0);
 
     let factors = SalienceFactors {
         novelty,
-        prediction_error: pred_error,
         reward_signal: reward,
         recency_boost: recency,
         reinforcement,
@@ -223,105 +200,8 @@ pub fn initial_tier(thought_type: &ThoughtType, salience: f64) -> MemoryTier {
             }
         }
         ThoughtType::MemoryConsolidation => MemoryTier::LongTerm,
-        ThoughtType::Prediction => MemoryTier::Working,
         // Everything else (tool executions, chat, mutations) → working
         _ => MemoryTier::Working,
-    }
-}
-
-/// Generate a prediction for the next cycle based on current and previous snapshots.
-/// Uses simple linear extrapolation — no LLM needed.
-pub fn generate_prediction(current: &NodeSnapshot, prev: Option<&NodeSnapshot>) -> Prediction {
-    match prev {
-        Some(prev) => {
-            // Extrapolate from delta
-            let payment_delta = current.total_payments as i64 - prev.total_payments as i64;
-            let expected_payments = (current.total_payments as i64 + payment_delta).max(0) as u64;
-
-            let cur_rev: f64 = current.total_revenue.parse().unwrap_or(0.0);
-            let prev_rev: f64 = prev.total_revenue.parse().unwrap_or(0.0);
-            let rev_delta = cur_rev - prev_rev;
-            let expected_revenue = (cur_rev + rev_delta).max(0.0);
-
-            let ep_delta = current.endpoint_count as i32 - prev.endpoint_count as i32;
-            let expected_endpoint_count = (current.endpoint_count as i32 + ep_delta).max(0) as u32;
-
-            let ch_delta = current.children_count as i32 - prev.children_count as i32;
-            let expected_children_count = (current.children_count as i32 + ch_delta).max(0) as u32;
-
-            // Confidence based on whether we have a meaningful delta
-            let has_change = payment_delta != 0
-                || rev_delta.abs() > f64::EPSILON
-                || ep_delta != 0
-                || ch_delta != 0;
-            let confidence = if has_change { 0.6 } else { 0.3 };
-
-            Prediction {
-                expected_payments,
-                expected_revenue,
-                expected_endpoint_count,
-                expected_children_count,
-                confidence,
-                basis: format!(
-                    "Linear extrapolation: payments delta {payment_delta}, revenue delta {rev_delta:.2}, endpoints delta {ep_delta}, children delta {ch_delta}"
-                ),
-            }
-        }
-        None => {
-            // No previous snapshot — predict same as current
-            Prediction {
-                expected_payments: current.total_payments,
-                expected_revenue: current.total_revenue.parse().unwrap_or(0.0),
-                expected_endpoint_count: current.endpoint_count,
-                expected_children_count: current.children_count,
-                confidence: 0.1,
-                basis: "No previous snapshot — baseline prediction".to_string(),
-            }
-        }
-    }
-}
-
-/// Compute prediction error: normalized diff between prediction and actual snapshot.
-/// Returns a value in [0.0, 1.0].
-pub fn compute_prediction_error(prediction: &Prediction, actual: &NodeSnapshot) -> f64 {
-    let mut errors = Vec::new();
-
-    // Payments: relative error
-    let pred_pay = prediction.expected_payments as f64;
-    let act_pay = actual.total_payments as f64;
-    if pred_pay > 0.0 || act_pay > 0.0 {
-        let max_val = pred_pay.max(act_pay).max(1.0);
-        errors.push(((pred_pay - act_pay).abs() / max_val).min(1.0));
-    }
-
-    // Revenue: relative error
-    let act_rev: f64 = actual.total_revenue.parse().unwrap_or(0.0);
-    if prediction.expected_revenue > 0.0 || act_rev > 0.0 {
-        let max_val = prediction.expected_revenue.max(act_rev).max(1.0);
-        errors.push(((prediction.expected_revenue - act_rev).abs() / max_val).min(1.0));
-    }
-
-    // Endpoint count: relative error
-    let pred_ep = prediction.expected_endpoint_count as f64;
-    let act_ep = actual.endpoint_count as f64;
-    if pred_ep > 0.0 || act_ep > 0.0 {
-        let max_val = pred_ep.max(act_ep).max(1.0);
-        errors.push(((pred_ep - act_ep).abs() / max_val).min(1.0));
-    }
-
-    // Children count: relative error
-    let pred_ch = prediction.expected_children_count as f64;
-    let act_ch = actual.children_count as f64;
-    if pred_ch > 0.0 || act_ch > 0.0 {
-        let max_val = pred_ch.max(act_ch).max(1.0);
-        errors.push(((pred_ch - act_ch).abs() / max_val).min(1.0));
-    }
-
-    if errors.is_empty() {
-        0.0
-    } else {
-        let sum: f64 = errors.iter().sum();
-        (sum / errors.len() as f64).clamp(0.0, 1.0)
     }
 }
 
@@ -366,7 +246,6 @@ mod tests {
             "brand new observation",
             &snap,
             None,
-            0.0,
             &pattern_counts,
         );
         assert!(salience > 0.0);
@@ -384,7 +263,6 @@ mod tests {
             "same observation again",
             &snap,
             None,
-            0.0,
             &pattern_counts,
         );
         assert!(factors.novelty < 0.5);
@@ -406,7 +284,6 @@ mod tests {
             "new observation",
             &snap,
             Some(&prev),
-            0.0,
             &HashMap::new(),
         );
         assert!(factors.reward_signal > 0.0);
@@ -431,56 +308,6 @@ mod tests {
             initial_tier(&ThoughtType::MemoryConsolidation, 0.1),
             MemoryTier::LongTerm
         );
-    }
-
-    #[test]
-    fn test_generate_prediction_no_prev() {
-        let snap = test_snapshot(10, "100.0", 3, 0);
-        let pred = generate_prediction(&snap, None);
-        assert_eq!(pred.expected_payments, 10);
-        assert!((pred.expected_revenue - 100.0).abs() < f64::EPSILON);
-        assert!(pred.confidence < 0.2);
-    }
-
-    #[test]
-    fn test_generate_prediction_with_delta() {
-        let prev = test_snapshot(10, "100.0", 3, 0);
-        let curr = test_snapshot(15, "150.0", 4, 0);
-        let pred = generate_prediction(&curr, Some(&prev));
-        assert_eq!(pred.expected_payments, 20); // 15 + (15-10)
-        assert!((pred.expected_revenue - 200.0).abs() < f64::EPSILON);
-        assert_eq!(pred.expected_endpoint_count, 5);
-        assert!(pred.confidence > 0.3);
-    }
-
-    #[test]
-    fn test_compute_prediction_error_perfect() {
-        let pred = Prediction {
-            expected_payments: 10,
-            expected_revenue: 100.0,
-            expected_endpoint_count: 3,
-            expected_children_count: 0,
-            confidence: 0.5,
-            basis: "test".to_string(),
-        };
-        let snap = test_snapshot(10, "100.0", 3, 0);
-        let error = compute_prediction_error(&pred, &snap);
-        assert!(error < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_compute_prediction_error_divergent() {
-        let pred = Prediction {
-            expected_payments: 10,
-            expected_revenue: 100.0,
-            expected_endpoint_count: 3,
-            expected_children_count: 0,
-            confidence: 0.5,
-            basis: "test".to_string(),
-        };
-        let snap = test_snapshot(20, "200.0", 6, 2);
-        let error = compute_prediction_error(&pred, &snap);
-        assert!(error > 0.3);
     }
 
     #[test]

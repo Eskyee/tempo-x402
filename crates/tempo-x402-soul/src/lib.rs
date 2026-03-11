@@ -21,7 +21,7 @@
 //! ## Capabilities
 //!
 //! - **Plan-driven execution** &mdash; goals decompose into deterministic step sequences
-//! - **Neuroplastic memory** &mdash; salience scoring, tiered decay, prediction error learning
+//! - **Neuroplastic memory** &mdash; salience scoring, tiered decay
 //! - **World model** &mdash; structured beliefs about self, endpoints, codebase, strategy
 //! - **Coding agent** &mdash; read, write, edit files, run shell, git commit/push/PR
 //! - **Script endpoints** &mdash; create instant bash-based HTTP endpoints
@@ -43,7 +43,7 @@
 //! - [`db`] &mdash; SQLite: thoughts, goals, plans, nudges, beliefs, chat sessions
 //! - [`fitness`] &mdash; 5-component fitness scoring with trend gradient
 //! - [`chat`] &mdash; session-based interactive chat with plan context
-//! - [`neuroplastic`] &mdash; salience scoring, memory decay, prediction error
+//! - [`neuroplastic`] &mdash; salience scoring, memory decay
 //!
 //! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 

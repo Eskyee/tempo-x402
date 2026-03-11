@@ -1064,6 +1064,57 @@ fn DashboardPage() -> impl IntoView {
                         .unwrap_or_default();
                     let active_endpoints = analytics_endpoints.len();
 
+                    // Fitness data from instance info
+                    let fitness = data.get("fitness");
+                    let fitness_total = fitness
+                        .and_then(|f| f.get("total"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let fitness_trend = fitness
+                        .and_then(|f| f.get("trend"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let fitness_economic = fitness
+                        .and_then(|f| f.get("economic"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let fitness_execution = fitness
+                        .and_then(|f| f.get("execution"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let fitness_evolution = fitness
+                        .and_then(|f| f.get("evolution"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let fitness_coordination = fitness
+                        .and_then(|f| f.get("coordination"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let fitness_introspection = fitness
+                        .and_then(|f| f.get("introspection"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+
+                    // Find weakest component
+                    let components = [
+                        ("economic", fitness_economic),
+                        ("execution", fitness_execution),
+                        ("evolution", fitness_evolution),
+                        ("coordination", fitness_coordination),
+                        ("introspection", fitness_introspection),
+                    ];
+                    let weakest = components.iter()
+                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                        .map(|(name, _)| *name)
+                        .unwrap_or("");
+
+                    // Peer (children) data
+                    let children = data.get("children")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    let peer_count = children.len();
+
                     let clone_available = data.get("clone_available")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
@@ -1071,6 +1122,21 @@ fn DashboardPage() -> impl IntoView {
                         .and_then(|v| v.as_str())
                         .unwrap_or("N/A")
                         .to_string();
+
+                    let trend_class = if fitness_trend > 0.001 {
+                        "fitness-trend fitness-trend--up"
+                    } else if fitness_trend < -0.001 {
+                        "fitness-trend fitness-trend--down"
+                    } else {
+                        "fitness-trend fitness-trend--flat"
+                    };
+                    let trend_arrow = if fitness_trend > 0.001 {
+                        "\u{25B2}"
+                    } else if fitness_trend < -0.001 {
+                        "\u{25BC}"
+                    } else {
+                        "\u{25C6}"
+                    };
 
                     view! {
                         // Stats cards
@@ -1092,21 +1158,132 @@ fn DashboardPage() -> impl IntoView {
                             </div>
                         </div>
 
-                        // Analytics stats
+                        // Analytics + fitness + peers stats
                         <div class="stats-grid">
+                            <div class="stat-card">
+                                <span class="stat-label">"Fitness"</span>
+                                <span class="stat-value">{format!("{:.0}%", fitness_total * 100.0)}</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">"Peers"</span>
+                                <span class="stat-value">{peer_count.to_string()}</span>
+                            </div>
                             <div class="stat-card">
                                 <span class="stat-label">"Total Payments"</span>
                                 <span class="stat-value">{total_payments.to_string()}</span>
                             </div>
                             <div class="stat-card">
-                                <span class="stat-label">"Total Revenue"</span>
+                                <span class="stat-label">"Revenue"</span>
                                 <span class="stat-value">{total_revenue_usd}</span>
                             </div>
                             <div class="stat-card">
-                                <span class="stat-label">"Active Endpoints"</span>
+                                <span class="stat-label">"Endpoints"</span>
                                 <span class="stat-value">{active_endpoints.to_string()}</span>
                             </div>
                         </div>
+
+                        // Fitness panel
+                        {if fitness.is_some() {
+                            Some(view! {
+                                <div class="fitness-panel">
+                                    <h2>"Fitness"</h2>
+                                    <div class="fitness-overview">
+                                        <span class="fitness-score-big">
+                                            {format!("{:.0}%", fitness_total * 100.0)}
+                                        </span>
+                                        <div class={trend_class}>
+                                            <span class="fitness-trend-arrow">{trend_arrow}</span>
+                                            {format!("{:+.3}", fitness_trend)}
+                                        </div>
+                                    </div>
+                                    <div class="fitness-bars">
+                                        {components.iter().map(|(name, value)| {
+                                            let is_weakest = *name == weakest;
+                                            let row_class = if is_weakest {
+                                                "fitness-bar-row fitness-bar-row--weakest"
+                                            } else {
+                                                "fitness-bar-row"
+                                            };
+                                            let fill_class = format!("fitness-bar-fill fitness-bar-fill--{}", name);
+                                            let pct = (*value * 100.0) as u64;
+                                            view! {
+                                                <div class={row_class}>
+                                                    <span class="fitness-bar-label">{name.to_string()}</span>
+                                                    <div class="fitness-bar-track">
+                                                        <div class={fill_class}
+                                                            style=format!("width: {}%", pct)>
+                                                        </div>
+                                                    </div>
+                                                    <span class="fitness-bar-value">{format!("{}%", pct)}</span>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+                            })
+                        } else {
+                            None
+                        }}
+
+                        // Peer network panel
+                        {if !children.is_empty() {
+                            Some(view! {
+                                <div class="peer-panel">
+                                    <h2>{format!("Peer Network ({})", peer_count)}</h2>
+                                    <div class="peer-list">
+                                        {children.iter().map(|child| {
+                                            let instance_id = child.get("instance_id")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown")
+                                                .to_string();
+                                            let url = child.get("url")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let peer_status = child.get("status")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown")
+                                                .to_string();
+                                            let dot_class = match peer_status.as_str() {
+                                                "running" => "peer-status-dot peer-status-dot--running",
+                                                "stopped" | "crashed" => "peer-status-dot peer-status-dot--stopped",
+                                                _ => "peer-status-dot peer-status-dot--unknown",
+                                            };
+                                            let label_class = match peer_status.as_str() {
+                                                "running" => "peer-status-label peer-status-label--running",
+                                                "stopped" | "crashed" => "peer-status-label peer-status-label--stopped",
+                                                _ => "peer-status-label",
+                                            };
+                                            let short_id = if instance_id.len() > 12 {
+                                                format!("{}...", &instance_id[..12])
+                                            } else {
+                                                instance_id.clone()
+                                            };
+                                            view! {
+                                                <div class="peer-item">
+                                                    <span class={dot_class}></span>
+                                                    <div class="peer-info">
+                                                        <div class="peer-id">{short_id}</div>
+                                                        {if !url.is_empty() {
+                                                            Some(view! {
+                                                                <div class="peer-url">
+                                                                    <a href={url.clone()} target="_blank">{url}</a>
+                                                                </div>
+                                                            })
+                                                        } else {
+                                                            None
+                                                        }}
+                                                    </div>
+                                                    <span class={label_class}>{peer_status}</span>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+                            })
+                        } else {
+                            None
+                        }}
 
                         // Clone section
                         <div class="clone-section">
@@ -1327,10 +1504,12 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                 let dormant = data.get("dormant").and_then(|v| v.as_bool()).unwrap_or(false);
                 let total_cycles = data.get("total_cycles").and_then(|v| v.as_u64()).unwrap_or(0);
                 let last_think_at = data.get("last_think_at").and_then(|v| v.as_i64());
-                let thoughts = data.get("recent_thoughts")
+                let thoughts: Vec<serde_json::Value> = data.get("recent_thoughts")
                     .and_then(|v| v.as_array())
                     .cloned()
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
 
                 // Mode from status response
                 let mode = data.get("mode")
@@ -1359,6 +1538,17 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                     .and_then(|h| h.get("goals_active"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
+
+                // Fitness from soul status
+                let soul_fitness = data.get("fitness");
+                let soul_fitness_total = soul_fitness
+                    .and_then(|f| f.get("total"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let soul_fitness_trend = soul_fitness
+                    .and_then(|f| f.get("trend"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
 
                 let (badge_class, badge_label) = if !active {
                     ("soul-status--gray", "Inactive")
@@ -1402,6 +1592,19 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
 
                         <div class="stats-grid">
                             <div class="stat-card">
+                                <span class="stat-label">"Fitness"</span>
+                                <span class="stat-value">
+                                    {format!("{:.0}%", soul_fitness_total * 100.0)}
+                                    {if soul_fitness_trend > 0.001 {
+                                        " \u{25B2}"
+                                    } else if soul_fitness_trend < -0.001 {
+                                        " \u{25BC}"
+                                    } else {
+                                        ""
+                                    }}
+                                </span>
+                            </div>
+                            <div class="stat-card">
                                 <span class="stat-label">"Cycles"</span>
                                 <span class="stat-value">{total_cycles.to_string()}</span>
                             </div>
@@ -1419,7 +1622,7 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                         {if active && !dormant {
                             let health_class = if cycles_since_commit > 30 {
                                 "soul-streak soul-streak--danger"
-                            } else if cycles_since_commit > 15 || failed_plans > 0 {
+                            } else if cycles_since_commit > 15 {
                                 "soul-streak soul-streak--warn"
                             } else if goals_active > 0 {
                                 "soul-streak soul-streak--active"
@@ -1428,8 +1631,6 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                             };
                             let health_label = if cycles_since_commit > 30 {
                                 format!("stagnant ({} cycles, no commit)", cycles_since_commit)
-                            } else if failed_plans > 0 {
-                                format!("{} goals, {} failed plans, {} cycles since commit", goals_active, failed_plans, cycles_since_commit)
                             } else if goals_active > 0 {
                                 format!("{} goals active, {} cycles since commit", goals_active, cycles_since_commit)
                             } else {
@@ -1438,6 +1639,18 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                             Some(view! {
                                 <div class={health_class}>
                                     {health_label}
+                                </div>
+                            })
+                        } else {
+                            None
+                        }}
+
+                        // Failed plans warning
+                        {if failed_plans > 0 {
+                            Some(view! {
+                                <div class="soul-failed-plans-warning">
+                                    <span class="soul-failed-plans-warning-icon">{"\u{26A0}"}</span>
+                                    {format!("{} failed plan{}", failed_plans, if failed_plans == 1 { "" } else { "s" })}
                                 </div>
                             })
                         } else {
@@ -1469,7 +1682,7 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                             if !goals.is_empty() {
                                 Some(view! {
                                     <div class="soul-goals">
-                                        <h3>"Active Goals"</h3>
+                                        <h3>{format!("Active Goals ({})", goals.len())}</h3>
                                         {goals.iter().map(|g| {
                                             let desc = g.get("description")
                                                 .and_then(|v| v.as_str())
@@ -1686,7 +1899,6 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                                             "reflection" => "reflect",
                                             "mutation" => "mutate",
                                             "tool_execution" => "tool",
-                                            "prediction" => "pred",
                                             "cross_hemisphere" => "cross",
                                             "escalation" => "escalate",
                                             "memory_consolidation" => "memory",

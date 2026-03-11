@@ -543,7 +543,6 @@ impl SoulDatabase {
         salience_factors_json: &str,
         tier: &str,
         strength: f64,
-        prediction_error: Option<f64>,
     ) -> Result<(), SoulError> {
         let conn = self.conn.lock().map_err(|_| {
             SoulError::Database(rusqlite::Error::InvalidParameterName(
@@ -553,7 +552,7 @@ impl SoulDatabase {
 
         conn.execute(
             "INSERT INTO thoughts (id, thought_type, content, context, created_at, salience, salience_factors, memory_tier, strength, prediction_error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
             params![
                 thought.id,
                 thought.thought_type.as_str(),
@@ -564,7 +563,6 @@ impl SoulDatabase {
                 salience_factors_json,
                 tier,
                 strength,
-                prediction_error,
             ],
         )?;
         Ok(())
@@ -686,16 +684,6 @@ impl SoulDatabase {
         }
 
         Ok(result)
-    }
-
-    /// Store a prediction in soul_state as JSON.
-    pub fn store_prediction(&self, prediction_json: &str) -> Result<(), SoulError> {
-        self.set_state("last_prediction", prediction_json)
-    }
-
-    /// Get the last stored prediction JSON.
-    pub fn get_last_prediction(&self) -> Result<Option<String>, SoulError> {
-        self.get_state("last_prediction")
     }
 
     // ── Dynamic tools CRUD ──────────────────────────────────────────────
@@ -1815,15 +1803,8 @@ mod tests {
             memory_tier: Some("sensory".to_string()),
             strength: Some(1.0),
         };
-        db.insert_thought_with_salience(
-            &thought,
-            0.8,
-            r#"{"novelty":1.0}"#,
-            "sensory",
-            1.0,
-            Some(0.5),
-        )
-        .unwrap();
+        db.insert_thought_with_salience(&thought, 0.8, r#"{"novelty":1.0}"#, "sensory", 1.0)
+            .unwrap();
 
         let recent = db.recent_thoughts(1).unwrap();
         assert_eq!(recent.len(), 1);
@@ -1864,7 +1845,7 @@ mod tests {
             memory_tier: Some("sensory".to_string()),
             strength: Some(0.02),
         };
-        db.insert_thought_with_salience(&t1, 0.1, "{}", "sensory", 0.02, None)
+        db.insert_thought_with_salience(&t1, 0.1, "{}", "sensory", 0.02)
             .unwrap();
 
         // Long-term thought — should never be pruned
@@ -1878,7 +1859,7 @@ mod tests {
             memory_tier: Some("long_term".to_string()),
             strength: Some(0.005),
         };
-        db.insert_thought_with_salience(&t2, 0.9, "{}", "long_term", 0.005, None)
+        db.insert_thought_with_salience(&t2, 0.9, "{}", "long_term", 0.005)
             .unwrap();
 
         let (_decayed, pruned) = db.run_decay_cycle(0.01).unwrap();
@@ -1903,7 +1884,7 @@ mod tests {
             memory_tier: Some("sensory".to_string()),
             strength: Some(1.0),
         };
-        db.insert_thought_with_salience(&t1, 0.8, "{}", "sensory", 1.0, None)
+        db.insert_thought_with_salience(&t1, 0.8, "{}", "sensory", 1.0)
             .unwrap();
 
         let promoted = db.promote_salient_sensory(0.6).unwrap();
@@ -1911,17 +1892,6 @@ mod tests {
 
         let thoughts = db.recent_thoughts(1).unwrap();
         assert_eq!(thoughts[0].memory_tier.as_deref(), Some("working"));
-    }
-
-    #[test]
-    fn test_prediction_storage() {
-        let db = SoulDatabase::new(":memory:").unwrap();
-
-        assert!(db.get_last_prediction().unwrap().is_none());
-
-        db.store_prediction(r#"{"expected_payments":10}"#).unwrap();
-        let pred = db.get_last_prediction().unwrap().unwrap();
-        assert!(pred.contains("expected_payments"));
     }
 
     #[test]

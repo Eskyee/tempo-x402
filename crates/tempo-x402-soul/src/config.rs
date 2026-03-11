@@ -55,7 +55,7 @@ pub struct SoulConfig {
     pub memory_file_path: String,
     /// Gateway URL for endpoint registration (env: GATEWAY_URL, default: None).
     pub gateway_url: Option<String>,
-    /// Enable neuroplastic memory: salience scoring, tiered decay, prediction error.
+    /// Enable neuroplastic memory: salience scoring, tiered decay.
     /// (env: SOUL_NEUROPLASTIC, default: true)
     pub neuroplastic_enabled: bool,
     /// Strength threshold below which non-long-term thoughts are pruned.

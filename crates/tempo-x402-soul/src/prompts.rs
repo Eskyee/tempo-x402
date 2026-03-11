@@ -273,14 +273,15 @@ pub fn goal_creation_prompt(
         "You can discover peer instances via `/instance/siblings` and call their paid endpoints.\n\
          You can clone yourself using `call_peer` with the `/clone` endpoint (do NOT use curl — cloning requires x402 payment signing)"
     } else {
-        "You have NO peers in the network — do NOT create goals that rely on discover_peers or call_peer (they will fail).\n\
+        "Use discover_peers to find sibling agents — it does live network calls even when no peers are cached.\n\
+         Once you find peers, use call_peer to interact with their endpoints.\n\
          To grow the network, clone yourself via the `/clone` endpoint when you have funds"
     };
 
     let good_goals = if has_peers {
         "fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code, coordinate with peers via call_peer"
     } else {
-        "fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code, create a genuinely novel endpoint"
+        "fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code, use discover_peers to find and interact with sibling agents"
     };
 
     let endpoint_rule = if total_payments == 0 && endpoint_count > 5 {

@@ -34,6 +34,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates gosu git curl \
     jq python3 bc \
+    xvfb xdotool scrot imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI for soul PR/issue creation

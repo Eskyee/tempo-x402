@@ -2137,6 +2137,40 @@ impl ToolExecutor {
                         })
                         .collect();
 
+                    // Try to merge brain weights from peer (federated learning)
+                    if let Some(ref db) = self.db {
+                        let brain_url =
+                            format!("{}/soul/brain/weights", sib_url.trim_end_matches('/'));
+                        if let Ok(resp) = client.get(&brain_url).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                    if let Some(weights_json) =
+                                        body.get("weights").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(peer_brain) =
+                                            crate::brain::Brain::from_json(weights_json)
+                                        {
+                                            if peer_brain.train_steps > 0 {
+                                                let mut our_brain = crate::brain::load_brain(db);
+                                                let delta = peer_brain.compute_delta(
+                                                    &crate::brain::Brain::new(),
+                                                    inst_id,
+                                                );
+                                                our_brain.merge_delta(&delta, 0.3); // conservative merge
+                                                crate::brain::save_brain(db, &our_brain);
+                                                tracing::info!(
+                                                    peer = %inst_id,
+                                                    peer_steps = peer_brain.train_steps,
+                                                    "Merged brain weights from peer"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     enriched_peers.push(serde_json::json!({
                         "instance_id": inst_id,
                         "url": sib_url,

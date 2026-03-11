@@ -455,10 +455,10 @@ pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
         "outcomes": outcomes,
         "capability_profile": serde_json::to_value(&profile).ok(),
         "benchmark": {
-            "pass_at_1": benchmark.pass_at_1,
-            "problems_attempted": benchmark.problems_attempted,
-            "problems_passed": benchmark.problems_passed,
-            "elo": elo.rating,
+            "pass_at_1": benchmark.as_ref().map(|b| b.pass_at_1).unwrap_or(0.0),
+            "problems_attempted": benchmark.as_ref().map(|b| b.problems_attempted).unwrap_or(0),
+            "problems_passed": benchmark.as_ref().map(|b| b.problems_passed).unwrap_or(0),
+            "elo": elo,
         },
     }))
 }

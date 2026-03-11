@@ -318,6 +318,82 @@ fn count_error_categories(outcomes: &[PlanOutcome]) -> Vec<(String, u32)> {
     sorted
 }
 
+/// Collect lessons from peer agents (stored during discover_peers).
+/// Returns a formatted string for prompt injection.
+pub fn collect_peer_lessons(db: &SoulDatabase) -> String {
+    // Scan soul_state for peer_lessons_* keys
+    let all_state = db.get_all_state().unwrap_or_default();
+    let mut peer_sections = Vec::new();
+
+    for (key, value) in &all_state {
+        if !key.starts_with("peer_lessons_") {
+            continue;
+        }
+        let peer_id = key.strip_prefix("peer_lessons_").unwrap_or(key);
+        let parsed: serde_json::Value = match serde_json::from_str(value) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let mut lines = Vec::new();
+
+        // Extract lessons from outcomes
+        if let Some(outcomes) = parsed.get("outcomes").and_then(|v| v.as_array()) {
+            for o in outcomes.iter().take(5) {
+                let status = o.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                let lesson = o.get("lesson").and_then(|v| v.as_str()).unwrap_or("");
+                if !lesson.is_empty() {
+                    lines.push(format!("  - [{status}] {lesson}"));
+                }
+            }
+        }
+
+        // Extract capability strengths
+        if let Some(profile) = parsed.get("capability_profile") {
+            if let Some(caps) = profile.as_object() {
+                let strong: Vec<String> = caps
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        let rate = v.get("success_rate").and_then(|r| r.as_f64())?;
+                        if rate > 0.7 {
+                            Some(format!("{k}({rate:.0}%)"))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !strong.is_empty() {
+                    lines.push(format!("  Strengths: {}", strong.join(", ")));
+                }
+            }
+        }
+
+        // Extract benchmark score
+        if let Some(bench) = parsed.get("benchmark") {
+            let pass = bench
+                .get("pass_at_1")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            if pass > 0.0 {
+                lines.push(format!("  HumanEval: {pass:.1}%"));
+            }
+        }
+
+        if !lines.is_empty() {
+            peer_sections.push(format!("Peer {peer_id}:\n{}", lines.join("\n")));
+        }
+    }
+
+    if peer_sections.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "# Peer Intelligence (lessons from sibling agents)\n{}",
+        peer_sections.join("\n")
+    )
+}
+
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;

@@ -417,6 +417,54 @@ pub async fn merge_brain_delta(
     }))
 }
 
+// ── Experience sharing endpoints ──
+
+/// GET /soul/lessons — export lessons (plan outcomes + capability profile) for peer sharing.
+/// This is the key collective-intelligence endpoint: peers fetch each other's hard-won
+/// experience so the swarm learns faster than any individual.
+pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
+    let Some(soul_db) = &state.soul_db else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "no soul"}));
+    };
+
+    // Recent plan outcomes with lessons
+    let outcomes: Vec<serde_json::Value> = soul_db
+        .get_recent_plan_outcomes(20)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| {
+            serde_json::json!({
+                "goal": o.goal_description,
+                "status": o.status,
+                "error_category": o.error_category,
+                "lesson": o.lesson,
+                "steps_succeeded": o.steps_succeeded,
+                "steps_failed": o.steps_failed,
+            })
+        })
+        .collect();
+
+    // Capability profile — what this agent is good/bad at
+    let profile = x402_soul::capability::compute_profile(soul_db);
+
+    // Benchmark score if available
+    let benchmark = x402_soul::benchmark::load_score(soul_db);
+    let elo = x402_soul::elo::load_rating(soul_db);
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "outcomes": outcomes,
+        "capability_profile": serde_json::to_value(&profile).ok(),
+        "benchmark": {
+            let mut b = serde_json::Map::new();
+            b.insert("pass_at_1".into(), serde_json::json!(benchmark.pass_at_1));
+            b.insert("problems_attempted".into(), serde_json::json!(benchmark.problems_attempted));
+            b.insert("problems_passed".into(), serde_json::json!(benchmark.problems_passed));
+            b.insert("elo".into(), serde_json::json!(elo.rating));
+            serde_json::Value::Object(b)
+        },
+    }))
+}
+
 // ── Chat endpoints ──
 
 #[derive(Deserialize)]
@@ -810,5 +858,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/soul/goals/abandon", web::post().to(abandon_goal))
         .route("/soul/reset", web::post().to(soul_reset))
         .route("/soul/brain/weights", web::get().to(get_brain_weights))
-        .route("/soul/brain/merge", web::post().to(merge_brain_delta));
+        .route("/soul/brain/merge", web::post().to(merge_brain_delta))
+        .route("/soul/lessons", web::get().to(get_lessons));
 }

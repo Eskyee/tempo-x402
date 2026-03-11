@@ -512,6 +512,21 @@ impl SoulDatabase {
         Ok(value)
     }
 
+    /// Get all soul state key-value pairs matching a prefix.
+    pub fn get_all_state(&self) -> Result<Vec<(String, String)>, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+
+        let mut stmt = conn.prepare("SELECT key, value FROM soul_state")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Record a mutation (code change attempt).
     pub fn insert_mutation(&self, mutation: &Mutation) -> Result<(), SoulError> {
         let conn = self.conn.lock().map_err(|_| {

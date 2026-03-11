@@ -885,7 +885,13 @@ impl ThinkingLoop {
         let workspace_listing = format!("{}{}{}", top_listing, routes_listing, routes_mod);
 
         let recent_errors = self.get_recent_errors();
-        let experience = feedback::consult_experience(&self.db, &goal.description);
+        let own_experience = feedback::consult_experience(&self.db, &goal.description);
+        let peer_lessons = feedback::collect_peer_lessons(&self.db);
+        let experience = if peer_lessons.is_empty() {
+            own_experience
+        } else {
+            format!("{own_experience}\n\n{peer_lessons}")
+        };
         let cap_guidance = capability::capability_guidance(&self.db);
         let prompt = prompts::planning_prompt(
             goal,
@@ -1125,7 +1131,13 @@ impl ThinkingLoop {
             .map(|g| g.description.clone())
             .collect();
         let fitness = crate::fitness::FitnessScore::load_current(&self.db);
-        let experience = feedback::consult_experience(&self.db, "");
+        let own_experience = feedback::consult_experience(&self.db, "");
+        let peer_lessons = feedback::collect_peer_lessons(&self.db);
+        let experience = if peer_lessons.is_empty() {
+            own_experience
+        } else {
+            format!("{own_experience}\n\n{peer_lessons}")
+        };
         let cap_guidance = capability::capability_guidance(&self.db);
         let benchmark_summary = crate::benchmark::benchmark_summary_for_prompt(&self.db);
         let brain_summary = crate::brain::brain_summary(&self.db);

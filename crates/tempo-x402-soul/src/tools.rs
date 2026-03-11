@@ -2173,12 +2173,47 @@ impl ToolExecutor {
                         }
                     }
 
+                    // Fetch peer's lessons (plan outcomes + capabilities) for collective learning
+                    let mut peer_lessons = Vec::new();
+                    if let Some(ref db) = self.db {
+                        let lessons_url = format!("{}/soul/lessons", sib_url.trim_end_matches('/'));
+                        if let Ok(resp) = client.get(&lessons_url).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                    // Store peer lessons in soul_state for prompt injection
+                                    let key = format!("peer_lessons_{}", inst_id);
+                                    if let Ok(json) = serde_json::to_string(&body) {
+                                        let _ = db.set_state(&key, &json);
+                                    }
+                                    // Extract lesson summaries for the discovery output
+                                    if let Some(outcomes) =
+                                        body.get("outcomes").and_then(|v| v.as_array())
+                                    {
+                                        for o in outcomes.iter().take(5) {
+                                            if let Some(lesson) =
+                                                o.get("lesson").and_then(|v| v.as_str())
+                                            {
+                                                peer_lessons.push(lesson.to_string());
+                                            }
+                                        }
+                                    }
+                                    tracing::info!(
+                                        peer = %inst_id,
+                                        lessons = peer_lessons.len(),
+                                        "Fetched lessons from peer"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
                     enriched_peers.push(serde_json::json!({
                         "instance_id": inst_id,
                         "url": sib_url,
                         "address": address,
                         "version": version,
                         "endpoints": callable_endpoints,
+                        "lessons": peer_lessons,
                     }));
                 }
 

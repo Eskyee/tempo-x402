@@ -1,7 +1,20 @@
-//! Identity management for x402 instances.
+//! # tempo-x402-identity
 //!
-//! Provides wallet identity generation, filesystem persistence, faucet funding,
-//! parent registration, and on-chain ERC-8004 agent identity (when `erc8004` feature is enabled).
+//! Identity management for x402 node instances.
+//!
+//! Handles the full identity lifecycle: wallet key generation, filesystem persistence
+//! (with restricted file permissions), faucet funding, and parent node registration.
+//!
+//! With the `erc8004` feature (default), adds on-chain agent identity via ERC-8004 NFTs:
+//! contract deployment, identity minting, reputation feedback, peer discovery, and recovery proofs.
+//!
+//! ## Bootstrap
+//!
+//! Call [`bootstrap()`] at startup to generate or load an identity. It injects
+//! `EVM_ADDRESS`, `FACILITATOR_PRIVATE_KEY`, and `FACILITATOR_SHARED_SECRET` as
+//! environment variables (only if not already set).
+//!
+//! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 
 use alloy::primitives::Address;
 

@@ -1,7 +1,17 @@
-//! x402-node: self-deploying x402 node with identity bootstrap + clone orchestration.
+//! # tempo-x402-node
 //!
-//! Composes the x402-gateway (API proxy) with identity bootstrap and Railway
-//! clone orchestration. Runs as a standalone binary that can spawn copies of itself.
+//! Self-deploying **autonomous x402 node**.
+//!
+//! Composes the gateway (API proxy + payment rails), identity bootstrap (wallet + faucet),
+//! soul (LLM-powered cognition), and Railway clone orchestration into a single binary.
+//!
+//! On startup: bootstrap identity &rarr; configure gateway &rarr; start embedded facilitator
+//! &rarr; init soul &rarr; spawn thinking loop &rarr; serve HTTP.
+//!
+//! Nodes can clone themselves onto Railway, discover peers, coordinate via paid endpoints,
+//! and evolve through a fitness-driven selection process.
+//!
+//! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::{middleware::Logger, web, App, HttpServer};

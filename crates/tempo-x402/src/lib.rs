@@ -1,35 +1,55 @@
-//! x402 payment protocol for the Tempo blockchain.
+//! # tempo-x402
 //!
-//! Implements [HTTP 402](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/402)
-//! pay-per-request using EIP-712 signed authorizations and TIP-20 (ERC-20 compatible) token
-//! transfers on the Tempo chain.
+//! **HTTP 402 Payment Required** for the Tempo blockchain.
 //!
-//! # Architecture
+//! Implements pay-per-request API monetization using [EIP-712](https://eips.ethereum.org/EIPS/eip-712)
+//! signed authorizations and TIP-20 (ERC-20 compatible) token transfers on the
+//! [Tempo](https://tempo.xyz) chain. One header, one on-chain transfer, zero custodial risk.
+//!
+//! ## How it works
+//!
+//! 1. Client requests a protected endpoint
+//! 2. Server responds **402** with pricing (token, amount, recipient)
+//! 3. Client signs an EIP-712 [`PaymentAuthorization`], retries with `PAYMENT-SIGNATURE` header
+//! 4. Facilitator atomically verifies the signature, checks balance/allowance/nonce,
+//!    and calls `transferFrom` on-chain
+//! 5. Server returns the content + transaction hash
+//!
+//! The facilitator holds no user funds &mdash; it only has token approval to call
+//! `transferFrom` on behalf of clients who explicitly approved it.
+//!
+//! ## Architecture
 //!
 //! Three-party model:
 //!
-//! - **Client** — signs payment authorizations (see [`tempo-x402-client`](https://docs.rs/tempo-x402-client) crate)
-//! - **Server** ([`scheme_server::TempoSchemeServer`]) — gates endpoints, returns 402 with pricing
-//! - **Facilitator** ([`scheme_facilitator::TempoSchemeFacilitator`]) — verifies signatures and settles on-chain
+//! - **Client** ([`client::X402Client`]) &mdash; signs payment authorizations, handles the 402 retry flow
+//! - **Server** ([`scheme_server::TempoSchemeServer`]) &mdash; gates endpoints, returns 402 with pricing
+//! - **Facilitator** ([`scheme_facilitator::TempoSchemeFacilitator`]) &mdash; verifies signatures and settles on-chain
 //!
-//! # Modules
+//! ## Modules
 //!
 //! | Module | Purpose |
 //! |--------|---------|
-//! | [`constants`] | Chain configuration and well-known addresses |
-//! | [`error`] | Error types for all x402 operations |
+//! | [`constants`] | Chain configuration (ID `42431`), token address, well-known addresses |
+//! | [`eip712`] | EIP-712 typed-data signing, signature verification, nonce generation |
+//! | [`wallet`] | WASM-compatible wallet: key generation, EIP-712 signing, payment payloads |
+//! | [`client`] | Client SDK &mdash; handles 402 flow automatically |
+//! | [`scheme`] | Core trait definitions ([`scheme::SchemeClient`], [`scheme::SchemeFacilitator`], [`scheme::SchemeServer`]) |
+//! | [`scheme_server`] | Server implementation: price parsing and payment requirements |
+//! | [`scheme_facilitator`] | Facilitator implementation: signature verification and on-chain settlement |
+//! | [`tip20`] | On-chain TIP-20 token operations (balance, allowance, transfer, approve) |
+//! | [`nonce_store`] | Replay protection backends (in-memory and persistent SQLite) |
 //! | [`payment`] | Payment data structures (payloads, requirements, 402 response body) |
 //! | [`response`] | Facilitator response types (verify/settle results) |
-//! | [`scheme`] | Core trait definitions ([`scheme::SchemeClient`], [`scheme::SchemeFacilitator`], [`scheme::SchemeServer`]) |
-//! | [`eip712`] | EIP-712 typed-data signing, verification, and nonce generation |
-//! | [`tip20`] | On-chain TIP-20 token operations (balance, allowance, transfer, approve) |
-//! | [`nonce_store`] | Replay protection backends (in-memory and SQLite) |
 //! | [`hmac`] | HMAC-SHA256 for facilitator request authentication |
 //! | [`security`] | Constant-time comparison utilities |
-//! | [`scheme_server`] | [`scheme::SchemeServer`] implementation for Tempo |
-//! | [`scheme_facilitator`] | [`scheme::SchemeFacilitator`] implementation for Tempo |
+//! | [`network`] | SSRF protection: private IP detection, DNS validation |
+//! | [`facilitator_client`] | HTTP client for calling a remote facilitator |
+//! | [`error`] | Error types for all x402 operations |
 //!
-//! # Quick example
+//! ## Quick start
+//!
+//! Parse a price and generate payment requirements:
 //!
 //! ```
 //! use x402::scheme::SchemeServer;
@@ -37,11 +57,40 @@
 //!
 //! let server = TempoSchemeServer::default();
 //! let (amount, asset) = server.parse_price("$0.001").unwrap();
-//! assert_eq!(amount, "1000"); // 1000 micro-tokens
+//! assert_eq!(amount, "1000"); // 1000 micro-tokens (6 decimals)
 //! ```
 //!
-//! For making paid requests, see the
-//! [`tempo-x402-client`](https://docs.rs/tempo-x402-client) crate.
+//! Generate a wallet and sign a payment:
+//!
+//! ```
+//! use x402::wallet::{generate_random_key, WalletSigner};
+//!
+//! let key = generate_random_key();
+//! let signer = WalletSigner::from_hex(&key).unwrap();
+//! let address = signer.address();
+//! ```
+//!
+//! ## Workspace crates
+//!
+//! | Crate | Purpose |
+//! |-------|---------|
+//! | **tempo-x402** (this crate) | Core library |
+//! | [`tempo-x402-gateway`](https://docs.rs/tempo-x402-gateway) | API gateway + embedded facilitator |
+//! | [`tempo-x402-identity`](https://docs.rs/tempo-x402-identity) | Agent identity: wallet, faucet, ERC-8004 |
+//! | [`tempo-x402-soul`](https://docs.rs/tempo-x402-soul) | Autonomous cognition: plans, memory, coding agent |
+//! | [`tempo-x402-node`](https://docs.rs/tempo-x402-node) | Self-deploying node with clone orchestration |
+//!
+//! ## Feature flags
+//!
+//! - **`full`** (default) &mdash; all features: async runtime, SQLite nonce store, HTTP client
+//! - **`wasm`** &mdash; WASM-compatible subset: types, EIP-712 signing, wallet (no tokio/rusqlite)
+//! - **`demo`** &mdash; includes a demo private key for testing
+//!
+//! ## Network
+//!
+//! - **Chain**: Tempo Moderato, Chain ID `42431`
+//! - **Token**: pathUSD `0x20c0000000000000000000000000000000000000` (6 decimals)
+//! - **RPC**: `https://rpc.moderato.tempo.xyz`
 
 // ---------------------------------------------------------------------------
 // Public modules — organized by layer

@@ -1,11 +1,51 @@
-//! x402-soul: agentic soul for x402 nodes.
+//! # tempo-x402-soul
 //!
-//! Provides a periodic observe-think-record loop powered by an LLM (currently Gemini).
-//! The soul observes node state via the [`NodeObserver`] trait, reasons
-//! about it, and records thoughts to a dedicated SQLite database.
+//! Autonomous **agentic soul** for x402 nodes.
 //!
-//! Without an LLM API key, the soul runs in dormant mode: it still
-//! observes and records snapshots, but skips LLM calls.
+//! Runs a plan-driven execution loop powered by Gemini:
+//! observe &rarr; create goals &rarr; plan steps &rarr; execute &rarr; reflect &rarr; repeat.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! Every N seconds:
+//!   observe → read nudges → check stagnation → get/create plan
+//!   → execute next step → advance plan → housekeeping → sleep
+//! ```
+//!
+//! Steps that **don't** call LLM: `ReadFile`, `SearchCode`, `ListDir`, `RunShell`,
+//! `Commit`, `CheckSelf`, `CreateScriptEndpoint`, `CargoCheck`.
+//!
+//! Steps that **do** call LLM: `GenerateCode`, `EditCode`, `Think`.
+//!
+//! ## Capabilities
+//!
+//! - **Plan-driven execution** &mdash; goals decompose into deterministic step sequences
+//! - **Neuroplastic memory** &mdash; salience scoring, tiered decay, prediction error learning
+//! - **World model** &mdash; structured beliefs about self, endpoints, codebase, strategy
+//! - **Coding agent** &mdash; read, write, edit files, run shell, git commit/push/PR
+//! - **Script endpoints** &mdash; create instant bash-based HTTP endpoints
+//! - **Peer coordination** &mdash; discover siblings, call paid services, exchange catalogs
+//! - **Fitness evolution** &mdash; 5-component fitness score with trend gradient
+//! - **Interactive chat** &mdash; session-based conversation with plan context injection
+//!
+//! Without a `GEMINI_API_KEY`, the soul runs in **dormant mode**: it still observes
+//! and records snapshots, but skips all LLM calls.
+//!
+//! ## Key modules
+//!
+//! - [`thinking`] &mdash; main plan-driven loop
+//! - [`plan`] &mdash; plan types, step execution, plan status
+//! - [`prompts`] &mdash; focused prompt builders (goal creation, planning, code generation, replan, reflection)
+//! - [`tools`] &mdash; tool executor: shell, file ops, git, endpoints, peers
+//! - [`git`] &mdash; branch-per-VM git workflow with fork support
+//! - [`coding`] &mdash; pre-commit validation pipeline (cargo check &rarr; test &rarr; commit)
+//! - [`db`] &mdash; SQLite: thoughts, goals, plans, nudges, beliefs, chat sessions
+//! - [`fitness`] &mdash; 5-component fitness scoring with trend gradient
+//! - [`chat`] &mdash; session-based interactive chat with plan context
+//! - [`neuroplastic`] &mdash; salience scoring, memory decay, prediction error
+//!
+//! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 
 pub mod chat;
 pub mod coding;

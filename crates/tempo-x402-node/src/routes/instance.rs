@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use alloy::primitives::{Address, U256};
 
 use crate::db;
@@ -30,8 +30,28 @@ fn is_valid_https_url(s: &str) -> bool {
     s.starts_with("https://") && s.len() > 8
 }
 
-/// DELETE /instance/peer/{instance_id} — remove a peer from the peers table
-pub async fn delete_peer(path: web::Path<String>, state: web::Data<NodeState>) -> HttpResponse {
+/// DELETE /instance/peer/{instance_id} — remove a peer from the peers table (requires METRICS_TOKEN)
+pub async fn delete_peer(
+    req: HttpRequest,
+    path: web::Path<String>,
+    state: web::Data<NodeState>,
+) -> HttpResponse {
+    // Require Bearer token auth (METRICS_TOKEN)
+    let auth_header = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok());
+    let expected = state.gateway.config.metrics_token.as_deref();
+    if let Err((status, msg)) =
+        x402::security::check_metrics_auth(auth_header, expected.map(|s| s.as_bytes()), false)
+    {
+        return HttpResponse::build(
+            actix_web::http::StatusCode::from_u16(status)
+                .unwrap_or(actix_web::http::StatusCode::UNAUTHORIZED),
+        )
+        .json(serde_json::json!({ "error": msg }));
+    }
+
     let instance_id = path.into_inner();
 
     if !is_valid_uuid(&instance_id) {

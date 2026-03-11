@@ -570,3 +570,144 @@ pub fn benchmark_summary_for_prompt(db: &SoulDatabase) -> String {
 
     lines.join("\n")
 }
+
+// ── Solution Sharing (Collective Intelligence) ──────────────────────
+
+/// A verified solution that can be shared between peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedSolution {
+    pub task_id: String,
+    pub entry_point: String,
+    pub solution: String,
+    /// Who solved it (instance_id or "self").
+    pub solved_by: String,
+}
+
+/// Export all verified (passed) solutions for peer sharing.
+pub fn export_solutions(db: &SoulDatabase) -> Vec<SharedSolution> {
+    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "self".into());
+
+    // Get our own solved problems
+    let mut solutions: Vec<SharedSolution> = db
+        .get_all_benchmark_runs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.passed && !r.generated_solution.is_empty())
+        .map(|r| SharedSolution {
+            task_id: r.task_id,
+            entry_point: r.entry_point,
+            solution: r.generated_solution,
+            solved_by: instance_id.clone(),
+        })
+        .collect();
+
+    // Also include imported peer solutions
+    if let Some(imported) = db
+        .get_state("imported_solutions")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<Vec<SharedSolution>>(&s).ok())
+    {
+        solutions.extend(imported);
+    }
+
+    // Deduplicate by task_id (keep first/our own)
+    let mut seen = std::collections::HashSet::new();
+    solutions.retain(|s| seen.insert(s.task_id.clone()));
+
+    solutions
+}
+
+/// Import solutions from a peer. Validates them by re-running tests.
+/// Returns the number of new solutions imported.
+pub async fn import_solutions(
+    db: &SoulDatabase,
+    peer_solutions: Vec<SharedSolution>,
+    workspace_root: &str,
+) -> u32 {
+    let mut imported = 0u32;
+
+    // Load existing imported solutions
+    let mut existing: Vec<SharedSolution> = db
+        .get_state("imported_solutions")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // Get our already-solved task IDs
+    let our_solved: std::collections::HashSet<String> = db
+        .get_all_benchmark_runs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.passed)
+        .map(|r| r.task_id)
+        .collect();
+
+    let already_imported: std::collections::HashSet<String> =
+        existing.iter().map(|s| s.task_id.clone()).collect();
+
+    // Load cached problems for test validation
+    let problems = load_cached_problems(db).unwrap_or_default();
+    let problem_map: std::collections::HashMap<&str, &HumanEvalProblem> =
+        problems.iter().map(|p| (p.task_id.as_str(), p)).collect();
+
+    for sol in peer_solutions {
+        // Skip if we already have this solution
+        if our_solved.contains(&sol.task_id) || already_imported.contains(&sol.task_id) {
+            continue;
+        }
+
+        // Validate the peer's solution by running it
+        if let Some(problem) = problem_map.get(sol.task_id.as_str()) {
+            let (passed, _error) = validate_solution(problem, &sol.solution, workspace_root).await;
+            if passed {
+                tracing::info!(
+                    task_id = %sol.task_id,
+                    solved_by = %sol.solved_by,
+                    "Imported verified solution from peer"
+                );
+                existing.push(sol);
+                imported += 1;
+            } else {
+                tracing::debug!(
+                    task_id = %sol.task_id,
+                    "Peer solution failed validation — skipping"
+                );
+            }
+        }
+    }
+
+    // Save updated imports
+    if imported > 0 {
+        if let Ok(json) = serde_json::to_string(&existing) {
+            let _ = db.set_state("imported_solutions", &json);
+        }
+        tracing::info!(
+            imported,
+            total_imported = existing.len(),
+            "Peer solutions imported"
+        );
+    }
+
+    imported
+}
+
+/// Compute the collective pass@1 score: our solutions + verified peer solutions.
+/// This is the "swarm intelligence" metric — higher than any individual agent.
+pub fn collective_score(db: &SoulDatabase) -> (f64, u32, u32) {
+    let all_solutions = export_solutions(db);
+    let total_problems = 164u32; // HumanEval has 164 problems
+
+    let unique_solved: std::collections::HashSet<&str> =
+        all_solutions.iter().map(|s| s.task_id.as_str()).collect();
+
+    let solved = unique_solved.len() as u32;
+    let pass_at_1 = if total_problems > 0 {
+        solved as f64 / total_problems as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    (pass_at_1, solved, total_problems)
+}

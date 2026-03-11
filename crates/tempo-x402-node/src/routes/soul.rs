@@ -338,6 +338,8 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             let score = x402_soul::benchmark::load_score(soul_db);
             let elo = x402_soul::elo::load_rating(soul_db);
             let elo_history = x402_soul::elo::load_history(soul_db);
+            let (collective_pass, collective_solved, collective_total) =
+                x402_soul::benchmark::collective_score(soul_db);
             score.map(|s| {
                 serde_json::json!({
                     "pass_at_1": s.pass_at_1,
@@ -348,6 +350,11 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
                     "elo_display": x402_soul::elo::rating_display(soul_db),
                     "history": s.history,
                     "elo_history": elo_history,
+                    "collective": {
+                        "pass_at_1": collective_pass,
+                        "unique_solved": collective_solved,
+                        "total_problems": collective_total,
+                    },
                     "reference_scores": x402_soul::benchmark::REFERENCE_SCORES
                         .iter()
                         .map(|(name, score)| serde_json::json!({"model": name, "pass_at_1": score}))
@@ -451,6 +458,10 @@ pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
     let benchmark = x402_soul::benchmark::load_score(soul_db);
     let elo = x402_soul::elo::load_rating(soul_db);
 
+    // Collective score: our solutions + verified peer solutions
+    let (collective_pass, collective_solved, collective_total) =
+        x402_soul::benchmark::collective_score(soul_db);
+
     HttpResponse::Ok().json(serde_json::json!({
         "outcomes": outcomes,
         "capability_profile": serde_json::to_value(&profile).ok(),
@@ -459,6 +470,11 @@ pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
             "problems_attempted": benchmark.as_ref().map(|b| b.problems_attempted).unwrap_or(0),
             "problems_passed": benchmark.as_ref().map(|b| b.problems_passed).unwrap_or(0),
             "elo": elo,
+        },
+        "collective": {
+            "pass_at_1": collective_pass,
+            "unique_solved": collective_solved,
+            "total_problems": collective_total,
         },
     }))
 }
@@ -842,6 +858,30 @@ async fn soul_reset(state: web::Data<NodeState>) -> HttpResponse {
     }
 }
 
+/// GET /soul/benchmark/solutions — export verified HumanEval solutions for peer sharing.
+async fn get_benchmark_solutions(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}));
+        }
+    };
+
+    let solutions = x402_soul::benchmark::export_solutions(soul_db);
+    let (collective_pass, solved, total) = x402_soul::benchmark::collective_score(soul_db);
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "solutions": solutions,
+        "count": solutions.len(),
+        "collective_score": {
+            "pass_at_1": collective_pass,
+            "unique_solved": solved,
+            "total_problems": total,
+        },
+    }))
+}
+
 /// POST /soul/benchmark — request a benchmark run on the next cycle.
 /// Sets a flag that the thinking loop checks.
 async fn trigger_benchmark(state: web::Data<NodeState>) -> HttpResponse {
@@ -886,5 +926,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/soul/brain/weights", web::get().to(get_brain_weights))
         .route("/soul/brain/merge", web::post().to(merge_brain_delta))
         .route("/soul/lessons", web::get().to(get_lessons))
-        .route("/soul/benchmark", web::post().to(trigger_benchmark));
+        .route("/soul/benchmark", web::post().to(trigger_benchmark))
+        .route(
+            "/soul/benchmark/solutions",
+            web::get().to(get_benchmark_solutions),
+        );
 }

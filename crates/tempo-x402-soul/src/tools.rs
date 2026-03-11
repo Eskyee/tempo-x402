@@ -2207,6 +2207,38 @@ impl ToolExecutor {
                         }
                     }
 
+                    // Fetch and import peer's verified benchmark solutions (collective intelligence)
+                    let mut solutions_imported = 0u32;
+                    if let Some(ref db) = self.db {
+                        let solutions_url =
+                            format!("{}/soul/benchmark/solutions", sib_url.trim_end_matches('/'));
+                        if let Ok(resp) = client.get(&solutions_url).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                    if let Some(solutions) =
+                                        body.get("solutions").and_then(|v| v.as_array())
+                                    {
+                                        let peer_sols: Vec<crate::benchmark::SharedSolution> =
+                                            solutions
+                                                .iter()
+                                                .filter_map(|s| {
+                                                    serde_json::from_value(s.clone()).ok()
+                                                })
+                                                .collect();
+                                        if !peer_sols.is_empty() {
+                                            let workspace = self.workspace_root.to_string_lossy();
+                                            solutions_imported =
+                                                crate::benchmark::import_solutions(
+                                                    db, peer_sols, workspace,
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     enriched_peers.push(serde_json::json!({
                         "instance_id": inst_id,
                         "url": sib_url,
@@ -2214,6 +2246,7 @@ impl ToolExecutor {
                         "version": version,
                         "endpoints": callable_endpoints,
                         "lessons": peer_lessons,
+                        "solutions_imported": solutions_imported,
                     }));
                 }
 

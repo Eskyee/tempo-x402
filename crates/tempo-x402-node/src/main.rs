@@ -744,12 +744,14 @@ async fn main() -> std::io::Result<()> {
             }
         });
 
-        // Auto-approve own facilitator for pathUSD (needed for x402 payments).
-        // The node's wallet key and facilitator key are the same, so facilitator = self.
+        // Auto-approve the embedded facilitator for pathUSD (needed for x402 payments).
+        // The wallet (identity key) must approve the facilitator address as spender,
+        // so that transferFrom works during settlement.
         // Wait for faucet to fund first (need gas for approve tx).
         {
             let rpc = rpc_url.clone();
             let pk = id.private_key.clone();
+            let fac_key = facilitator_private_key.clone();
             tokio::spawn(async move {
                 // Wait for faucet to settle
                 tokio::time::sleep(std::time::Duration::from_secs(20)).await;
@@ -764,6 +766,22 @@ async fn main() -> std::io::Result<()> {
                 else {
                     return;
                 };
+
+                // Derive facilitator address from its private key
+                let facilitator_addr = if let Some(ref fk) = fac_key {
+                    let fk_trimmed = fk.strip_prefix("0x").unwrap_or(fk);
+                    match fk_trimmed.parse::<alloy::signers::local::PrivateKeySigner>() {
+                        Ok(fac_signer) => fac_signer.address(),
+                        Err(_) => {
+                            tracing::warn!("Cannot parse FACILITATOR_PRIVATE_KEY for auto-approve");
+                            return;
+                        }
+                    }
+                } else {
+                    // No embedded facilitator — nothing to approve
+                    return;
+                };
+
                 let wallet_addr = signer.address();
                 let wallet = alloy::network::EthereumWallet::from(signer);
                 let provider = alloy::providers::ProviderBuilder::new()
@@ -771,9 +789,9 @@ async fn main() -> std::io::Result<()> {
                     .connect_http(rpc_parsed);
                 let token = x402::constants::DEFAULT_TOKEN;
 
-                // Check current allowance (self-approval: wallet approves itself as facilitator)
+                // Check allowance: wallet (owner) → facilitator (spender)
                 let current_allowance =
-                    x402::tip20::allowance(&provider, token, wallet_addr, wallet_addr)
+                    x402::tip20::allowance(&provider, token, wallet_addr, facilitator_addr)
                         .await
                         .unwrap_or(alloy::primitives::U256::ZERO);
 
@@ -781,16 +799,17 @@ async fn main() -> std::io::Result<()> {
                     match x402::tip20::approve(
                         &provider,
                         token,
-                        wallet_addr,
+                        facilitator_addr,
                         alloy::primitives::U256::MAX,
                     )
                     .await
                     {
                         Ok(tx) => {
                             tracing::info!(
-                                address = %wallet_addr,
+                                wallet = %wallet_addr,
+                                facilitator = %facilitator_addr,
                                 tx = %tx,
-                                "Auto-approved own facilitator for pathUSD"
+                                "Auto-approved facilitator for pathUSD"
                             );
                         }
                         Err(e) => {
@@ -802,7 +821,8 @@ async fn main() -> std::io::Result<()> {
                     }
                 } else {
                     tracing::debug!(
-                        address = %wallet_addr,
+                        wallet = %wallet_addr,
+                        facilitator = %facilitator_addr,
                         "Facilitator already approved, skipping"
                     );
                 }

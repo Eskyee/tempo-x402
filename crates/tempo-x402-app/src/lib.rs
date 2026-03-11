@@ -429,7 +429,7 @@ fn WalletManagement() -> impl IntoView {
     }
 }
 
-/// Instance info panel — shows identity, children, clone button
+/// Instance info panel — shows identity, peers, clone button
 #[component]
 fn InstancePanel() -> impl IntoView {
     let (info, set_info) = create_signal(None::<serde_json::Value>);
@@ -477,7 +477,8 @@ fn InstancePanel() -> impl IntoView {
                     let data = info.get().unwrap_or_default();
 
                     let identity = data.get("identity").cloned();
-                    let children_count = data.get("children_count")
+                    let children_count = data.get("peer_count")
+                        .or_else(|| data.get("children_count"))
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
                     let clone_available = data.get("clone_available")
@@ -515,7 +516,8 @@ fn InstancePanel() -> impl IntoView {
                         .and_then(|v| v.as_str())
                         .map(|s| format!("{} pathUSD", s));
 
-                    let children = data.get("children")
+                    let children = data.get("peers")
+                        .or_else(|| data.get("children"))
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
@@ -618,7 +620,7 @@ fn InstancePanel() -> impl IntoView {
 
                             <Show when=move || { children_count > 0 } fallback=|| ()>
                                 <div class="children-list">
-                                    <h4>{format!("Children ({})", children_count)}</h4>
+                                    <h4>{format!("Peers ({})", children_count)}</h4>
                                     <ul>
                                         {children.iter().map(|child| {
                                             let child_id = child.get("instance_id")
@@ -1108,8 +1110,9 @@ fn DashboardPage() -> impl IntoView {
                         .map(|(name, _)| *name)
                         .unwrap_or("");
 
-                    // Peer (children) data
-                    let children = data.get("children")
+                    // Peer data
+                    let children = data.get("peers")
+                        .or_else(|| data.get("children"))
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();

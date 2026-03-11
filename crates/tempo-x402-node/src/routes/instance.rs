@@ -30,7 +30,38 @@ fn is_valid_https_url(s: &str) -> bool {
     s.starts_with("https://") && s.len() > 8
 }
 
-/// GET /instance/info — returns identity, children, version, uptime, clone availability
+/// DELETE /instance/peer/{instance_id} — remove a peer from the peers table
+pub async fn delete_peer(path: web::Path<String>, state: web::Data<NodeState>) -> HttpResponse {
+    let instance_id = path.into_inner();
+
+    if !is_valid_uuid(&instance_id) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid instance_id format"
+        }));
+    }
+
+    match db::delete_child(&state.gateway.db, &instance_id) {
+        Ok(true) => {
+            tracing::info!(instance_id = %instance_id, "Peer deleted");
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "instance_id": instance_id,
+                "message": "peer removed"
+            }))
+        }
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "peer not found"
+        })),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to delete peer");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "failed to delete peer"
+            }))
+        }
+    }
+}
+
+/// GET /instance/info — returns identity, peers, version, uptime, clone availability
 pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
     let identity_info = state.identity.as_ref().map(|id| {
         serde_json::json!({
@@ -42,8 +73,8 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
         })
     });
 
-    // Open a read connection to query active (non-failed) children
-    let children = rusqlite::Connection::open(&state.db_path)
+    // Open a read connection to query active (non-failed) peers
+    let peers = rusqlite::Connection::open(&state.db_path)
         .ok()
         .and_then(|conn| db::query_children_active(&conn).ok())
         .unwrap_or_default();
@@ -52,7 +83,7 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
 
     let clone_available = state.agent.is_some()
         && state.clone_price.is_some()
-        && (children.len() as u32) < state.clone_max_children;
+        && (peers.len() as u32) < state.clone_max_children;
 
     // Fetch node wallet balance (best-effort, non-blocking for the response)
     let wallet_balance = if let Some(ref id) = state.identity {
@@ -98,8 +129,11 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "identity": identity_info,
         "agent_token_id": state.agent_token_id,
-        "children": children,
-        "children_count": children.len(),
+        "peers": peers,
+        "peer_count": peers.len(),
+        // Backwards compat — old frontends may read "children"
+        "children": peers,
+        "children_count": peers.len(),
         "clone_available": clone_available,
         "clone_price": state.clone_price,
         "clone_max_children": state.clone_max_children,
@@ -407,7 +441,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/info", web::get().to(info))
         .route("/register", web::post().to(register))
         .route("/siblings", web::get().to(siblings))
-        .route("/link", web::post().to(link));
+        .route("/link", web::post().to(link))
+        .route("/peer/{instance_id}", web::delete().to(delete_peer));
 
     #[cfg(feature = "erc8004")]
     let scope = scope.route("/peers", web::get().to(peers));

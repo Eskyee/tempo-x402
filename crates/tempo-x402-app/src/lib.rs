@@ -2088,7 +2088,7 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
 
                         // Neural brain panel
                         {
-                            if let Some(brain) = soul_data.get("brain").and_then(|v| v.as_object()) {
+                            if let Some(brain) = data.get("brain").and_then(|v| v.as_object()) {
                                 let params = brain.get("parameters")
                                     .and_then(|v| v.as_u64())
                                     .unwrap_or(0);

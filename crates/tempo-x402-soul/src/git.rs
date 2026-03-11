@@ -148,8 +148,8 @@ impl GitContext {
             // Clean up temp clone
             let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
 
-            // Reset to match workspace files (don't lose the actual source in /app)
-            self.run_git(&["reset", "HEAD"]).await?;
+            // Checkout files so workspace has actual source code (not just .git)
+            self.run_git(&["checkout", "HEAD", "--", "."]).await?;
 
             // Configure git user for commits
             self.run_git(&["config", "user.email", "soul@x402.tempo.xyz"])

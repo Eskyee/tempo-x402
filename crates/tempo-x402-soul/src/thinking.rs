@@ -484,6 +484,17 @@ impl ThinkingLoop {
             plan.status = PlanStatus::Failed;
             let _ = self.db.update_plan(&plan);
             let _ = self.db.set_state("active_plan_id", "");
+            // Record outcome so agents learn from stagnation
+            let goal_desc = self
+                .db
+                .get_goal(&plan.goal_id)
+                .ok()
+                .flatten()
+                .map(|g| g.description.clone())
+                .unwrap_or_else(|| "unknown goal".to_string());
+            let stag_err =
+                format!("{cycles_since_commit} cycles without commit — global stagnation");
+            feedback::record_outcome(&self.db, &plan, &goal_desc, Some(&stag_err));
             let _ = self.db.insert_nudge(
                 "stagnation",
                 &format!("{cycles_since_commit} cycles without progress. All {abandoned} goals reset. Try a completely different approach."),
@@ -515,6 +526,9 @@ impl ThinkingLoop {
                 plan.status = PlanStatus::Failed;
                 let _ = self.db.update_plan(&plan);
                 let _ = self.db.set_state("active_plan_id", "");
+                // Record outcome so agents learn from repeated goal failures
+                let retry_err = format!("Goal failed {} times — abandoned", goal.retry_count);
+                feedback::record_outcome(&self.db, &plan, &goal.description, Some(&retry_err));
                 let desc_preview: String = goal.description.chars().take(80).collect();
                 let _ = self.db.insert_nudge(
                     "stagnation",
@@ -1434,6 +1448,20 @@ impl ThinkingLoop {
                 plan.status = PlanStatus::Failed;
                 self.db.update_plan(plan)?;
                 let _ = self.db.set_state("active_plan_id", "");
+                // Record outcome so agents learn from replan failures
+                let goal_desc = self
+                    .db
+                    .get_goal(&plan.goal_id)
+                    .ok()
+                    .flatten()
+                    .map(|g| g.description.clone())
+                    .unwrap_or_else(|| "unknown goal".to_string());
+                feedback::record_outcome(
+                    &self.db,
+                    plan,
+                    &goal_desc,
+                    Some(&format!("Replan LLM call failed: {e}")),
+                );
             }
         }
 

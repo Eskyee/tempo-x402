@@ -1584,9 +1584,22 @@ impl ThinkingLoop {
                         "verified_source_paths.txt",
                         "soul_call_result.json",
                         "last_soul_call.json",
+                        "peer_info.json",
+                        "peer_data.json",
+                        "peer_status.json",
+                        "info_call_result.json",
+                        "soul_response.json",
+                        "call_result.json",
+                        "network_data.json",
+                        "health_data.json",
                     ];
                     let filename = path.rsplit('/').next().unwrap_or(path);
-                    if bogus_files.iter().any(|&b| filename == b) {
+                    // Also catch any *_result.json or *_response.json patterns
+                    let is_bogus_pattern = filename.ends_with("_result.json")
+                        || filename.ends_with("_response.json")
+                        || filename.ends_with("_data.json")
+                        || filename.ends_with("_output.json");
+                    if bogus_files.iter().any(|&b| filename == b) || is_bogus_pattern {
                         tracing::debug!(
                             path = %path,
                             "Sanitized out ReadFile for non-existent plan artifact"

@@ -143,9 +143,20 @@ pub fn record_event(db: &SoulDatabase, capability: &Capability, succeeded: bool,
 }
 
 /// Record a step result as a capability event.
+/// Some steps map to multiple capabilities (e.g. CreateScriptEndpoint is both
+/// EndpointCreate AND FileWrite since it writes a bash script to disk).
 pub fn record_step_result(db: &SoulDatabase, step: &PlanStep, succeeded: bool, context: &str) {
-    let cap = Capability::from_step(step);
-    record_event(db, &cap, succeeded, context);
+    let primary = Capability::from_step(step);
+    record_event(db, &primary, succeeded, context);
+
+    // Secondary capability: file-writing steps that are tracked under other primaries
+    let also_file_write = matches!(
+        step,
+        PlanStep::CreateScriptEndpoint { .. } | PlanStep::GenerateCode { .. }
+    );
+    if also_file_write {
+        record_event(db, &Capability::FileWrite, succeeded, context);
+    }
 }
 
 /// Compute the current capability profile from recent events.
@@ -243,14 +254,14 @@ pub fn capability_guidance(db: &SoulDatabase) -> String {
         lines.push(format!("Strongest: {strong}"));
     }
     if let Some(ref weak) = profile.weakest {
-        lines.push(format!("Weakest: {weak} — focus on improving this"));
+        lines.push(format!("Weakest: {weak} — be cautious with this"));
     }
 
-    // Show capabilities with data
+    // Show capabilities with meaningful data (3+ attempts to avoid noisy early metrics)
     let measured: Vec<&CapabilityScore> = profile
         .capabilities
         .iter()
-        .filter(|s| s.attempts > 0)
+        .filter(|s| s.attempts >= 3)
         .collect();
 
     if !measured.is_empty() {

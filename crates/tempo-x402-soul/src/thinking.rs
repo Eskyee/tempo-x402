@@ -960,6 +960,11 @@ impl ThinkingLoop {
         match llm.think(system, &prompt).await {
             Ok(response) => {
                 let steps = self.parse_plan_steps(&response)?;
+                let steps = Self::sanitize_plan_steps(steps);
+                if steps.is_empty() {
+                    tracing::warn!("Plan sanitization removed all steps — skipping plan creation");
+                    return Ok(None);
+                }
                 let now = chrono::Utc::now().timestamp();
                 let initial_status = if self.config.require_plan_approval {
                     PlanStatus::PendingApproval
@@ -1431,7 +1436,7 @@ impl ThinkingLoop {
 
         match llm.think(system, &prompt).await {
             Ok(response) => {
-                let new_steps = self.parse_plan_steps(&response)?;
+                let new_steps = Self::sanitize_plan_steps(self.parse_plan_steps(&response)?);
                 // Replace remaining steps with new steps
                 plan.steps.truncate(plan.current_step);
                 plan.steps.extend(new_steps);
@@ -1477,6 +1482,100 @@ impl ThinkingLoop {
 
     /// Parse plan steps from LLM output (find JSON array).
     /// Includes normalization to handle common LLM format mistakes.
+    /// Sanitize plan steps to remove or fix obviously broken steps.
+    /// This runs at plan creation time so broken steps never count as execution failures.
+    fn sanitize_plan_steps(steps: Vec<PlanStep>) -> Vec<PlanStep> {
+        let original_count = steps.len();
+        let mut sanitized = Vec::with_capacity(original_count);
+
+        for step in steps {
+            match &step {
+                // Remove shell commands that reference undefined shell variables
+                // (LLM generates `echo "$soul_response"` thinking plan context is shell vars)
+                PlanStep::RunShell { command, .. } => {
+                    // Skip commands that are purely writing shell-variable placeholders to files
+                    // e.g., `echo "$response" > file.json` or `echo '$info_call_result' > file`
+                    let has_placeholder_var = command.contains("$soul_response")
+                        || command.contains("$info_call_result")
+                        || command.contains("$chat_response")
+                        || command.contains("$soul_call_result")
+                        || command.contains("${soul")
+                        || command.contains("${info")
+                        || command.contains("${chat");
+                    let is_just_echo_to_file = command.starts_with("echo ")
+                        && (command.contains(" > ") || command.contains(" >> "))
+                        && has_placeholder_var;
+
+                    if is_just_echo_to_file {
+                        tracing::debug!(
+                            command = %command,
+                            "Sanitized out shell command with undefined variable placeholder"
+                        );
+                        continue;
+                    }
+
+                    // Skip commands that use unavailable tools
+                    if command.starts_with("jq ") || command.contains("| jq ") {
+                        tracing::debug!(
+                            command = %command,
+                            "Sanitized out shell command using unavailable 'jq'"
+                        );
+                        continue;
+                    }
+
+                    sanitized.push(step);
+                }
+                // Remove ReadFile steps that reference non-existent plan context files
+                // (LLM generates `read siblings.json` or `read discovered_peers.json`)
+                PlanStep::ReadFile { path, .. } => {
+                    let bogus_files = [
+                        "siblings.json",
+                        "discovered_peers.json",
+                        "filtered_peers.json",
+                        "available_tools.txt",
+                        "target_peer_info.json",
+                        "verified_source_paths.txt",
+                        "soul_call_result.json",
+                        "last_soul_call.json",
+                    ];
+                    let filename = path.rsplit('/').next().unwrap_or(path);
+                    if bogus_files.iter().any(|&b| filename == b) {
+                        tracing::debug!(
+                            path = %path,
+                            "Sanitized out ReadFile for non-existent plan artifact"
+                        );
+                        continue;
+                    }
+                    sanitized.push(step);
+                }
+                // Remove CallPaidEndpoint with localhost URLs
+                PlanStep::CallPaidEndpoint { url, .. } => {
+                    if url.contains("localhost") || url.contains("127.0.0.1") {
+                        tracing::debug!(
+                            url = %url,
+                            "Sanitized out CallPaidEndpoint with localhost URL"
+                        );
+                        continue;
+                    }
+                    sanitized.push(step);
+                }
+                // Everything else passes through
+                _ => sanitized.push(step),
+            }
+        }
+
+        if sanitized.len() < original_count {
+            tracing::info!(
+                original = original_count,
+                sanitized = sanitized.len(),
+                removed = original_count - sanitized.len(),
+                "Plan steps sanitized"
+            );
+        }
+
+        sanitized
+    }
+
     fn parse_plan_steps(&self, text: &str) -> Result<Vec<PlanStep>, SoulError> {
         let try_parse = |json_str: &str| -> Result<Vec<PlanStep>, serde_json::Error> {
             // Always normalize first — coerces wrong types (maps→strings) and fixes

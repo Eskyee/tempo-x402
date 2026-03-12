@@ -2352,6 +2352,50 @@ impl ToolExecutor {
                         "lessons": peer_lessons,
                         "solutions_imported": solutions_imported,
                     }));
+
+                    // ── Mutual linking: POST /instance/link back to the peer ──
+                    // This ensures the peer also sees *us* in their siblings list.
+                    // Without this, peer relationships are one-directional.
+                    let our_public_url = std::env::var("RAILWAY_PUBLIC_DOMAIN")
+                        .ok()
+                        .map(|d| format!("https://{d}"))
+                        .or_else(|| {
+                            self.gateway_url
+                                .as_deref()
+                                .filter(|u| u.starts_with("https://"))
+                                .map(String::from)
+                        });
+                    if let Some(our_url) = our_public_url.as_deref() {
+                        // Only link back if we have an externally-reachable URL
+                        if our_url.starts_with("https://") {
+                            let link_url =
+                                format!("{}/instance/link", sib_url.trim_end_matches('/'));
+                            let link_body = serde_json::json!({ "url": our_url });
+                            match client.post(&link_url).json(&link_body).send().await {
+                                Ok(r) if r.status().is_success() => {
+                                    tracing::info!(
+                                        peer = %inst_id,
+                                        our_url = %our_url,
+                                        "Mutual link established — peer now sees us"
+                                    );
+                                }
+                                Ok(r) => {
+                                    tracing::debug!(
+                                        peer = %inst_id,
+                                        status = %r.status(),
+                                        "Mutual link returned non-2xx (non-fatal)"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        peer = %inst_id,
+                                        error = %e,
+                                        "Mutual link request failed (non-fatal)"
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Track successful peer discovery as coordination signal

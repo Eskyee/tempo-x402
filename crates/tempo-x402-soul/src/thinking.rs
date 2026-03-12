@@ -1479,18 +1479,17 @@ impl ThinkingLoop {
     /// Includes normalization to handle common LLM format mistakes.
     fn parse_plan_steps(&self, text: &str) -> Result<Vec<PlanStep>, SoulError> {
         let try_parse = |json_str: &str| -> Result<Vec<PlanStep>, serde_json::Error> {
-            // First try direct parse
-            match serde_json::from_str::<Vec<PlanStep>>(json_str) {
+            // Always normalize first — coerces wrong types (maps→strings) and fixes
+            // missing "type" fields before attempting deserialization.
+            let normalized = Self::normalize_plan_json(json_str);
+            match serde_json::from_str::<Vec<PlanStep>>(&normalized) {
                 Ok(steps) => Ok(steps),
-                Err(direct_err) => {
-                    // Normalize common LLM mistakes and retry
-                    let normalized = Self::normalize_plan_json(json_str);
-                    if normalized != json_str {
-                        serde_json::from_str::<Vec<PlanStep>>(&normalized)
-                    } else {
-                        Err(direct_err)
-                    }
+                Err(_) if normalized != json_str => {
+                    // Normalization changed something but still failed — try original
+                    // in case normalization mangled valid JSON
+                    serde_json::from_str::<Vec<PlanStep>>(json_str)
                 }
+                Err(e) => Err(e),
             }
         };
 
@@ -1536,6 +1535,8 @@ impl ThinkingLoop {
     /// Normalize common LLM plan JSON mistakes into valid PlanStep format.
     /// The LLM often outputs {"action": "ls", "name": "explore"} instead of
     /// {"type": "run_shell", "command": "ls"}.
+    /// Also coerces non-string values to strings (LLM sometimes returns maps/arrays
+    /// where strings are expected).
     fn normalize_plan_json(json_str: &str) -> String {
         let parsed: Vec<serde_json::Value> = match serde_json::from_str(json_str) {
             Ok(v) => v,
@@ -1547,7 +1548,88 @@ impl ThinkingLoop {
             .filter_map(|mut obj| {
                 let map = obj.as_object_mut()?;
 
-                // Already has a valid "type" field — leave it alone
+                // Coerce non-string field values to strings (except "type" and "context_keys").
+                // LLMs sometimes return {"store_as": {"key": "val"}} instead of "val".
+                let keys: Vec<String> = map.keys().cloned().collect();
+                for key in &keys {
+                    if key == "type" || key == "context_keys" {
+                        continue;
+                    }
+                    let needs_coerce = match map.get(key) {
+                        Some(serde_json::Value::Object(_)) => true,
+                        Some(serde_json::Value::Array(_)) => true,
+                        Some(serde_json::Value::Number(n)) => {
+                            // Coerce numbers to strings
+                            map.insert(key.clone(), serde_json::json!(n.to_string()));
+                            false
+                        }
+                        Some(serde_json::Value::Bool(b)) => {
+                            map.insert(key.clone(), serde_json::json!(b.to_string()));
+                            false
+                        }
+                        _ => false,
+                    };
+                    if needs_coerce {
+                        // Try to extract a string from the nested value
+                        let coerced = match map.get(key) {
+                            Some(serde_json::Value::Object(inner)) => {
+                                // Take the first string value, or serialize the whole thing
+                                inner
+                                    .values()
+                                    .find_map(|v| v.as_str().map(String::from))
+                                    .unwrap_or_else(|| {
+                                        serde_json::to_string(map.get(key).unwrap())
+                                            .unwrap_or_default()
+                                    })
+                            }
+                            Some(serde_json::Value::Array(arr)) => {
+                                // For arrays of strings, join them; otherwise serialize
+                                let strings: Vec<&str> =
+                                    arr.iter().filter_map(|v| v.as_str()).collect();
+                                if strings.len() == arr.len() {
+                                    strings.join(", ")
+                                } else {
+                                    serde_json::to_string(map.get(key).unwrap()).unwrap_or_default()
+                                }
+                            }
+                            _ => continue,
+                        };
+                        map.insert(key.clone(), serde_json::json!(coerced));
+                    }
+                }
+
+                // Coerce context_keys: if it's not an array of strings, fix it
+                if let Some(ck) = map.get("context_keys") {
+                    match ck {
+                        serde_json::Value::String(s) => {
+                            // Single string → wrap in array
+                            map.insert("context_keys".to_string(), serde_json::json!([s.clone()]));
+                        }
+                        serde_json::Value::Object(inner) => {
+                            // Map → extract string values as array
+                            let vals: Vec<String> = inner
+                                .values()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect();
+                            map.insert("context_keys".to_string(), serde_json::json!(vals));
+                        }
+                        serde_json::Value::Array(arr) => {
+                            // Array of non-strings → coerce each to string
+                            let vals: Vec<String> = arr
+                                .iter()
+                                .map(|v| {
+                                    v.as_str()
+                                        .map(String::from)
+                                        .unwrap_or_else(|| v.to_string())
+                                })
+                                .collect();
+                            map.insert("context_keys".to_string(), serde_json::json!(vals));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Already has a valid "type" field — return with coerced values
                 if map.contains_key("type") {
                     return Some(obj);
                 }

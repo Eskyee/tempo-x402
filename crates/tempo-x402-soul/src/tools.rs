@@ -2343,6 +2343,31 @@ impl ToolExecutor {
                         }
                     }
 
+                    // Fetch peer's open PRs for peer review system
+                    let mut peer_prs: Vec<serde_json::Value> = Vec::new();
+                    let prs_url = format!("{}/soul/open-prs", sib_url.trim_end_matches('/'));
+                    if let Ok(resp) = client.get(&prs_url).send().await {
+                        if resp.status().is_success() {
+                            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                // Collect PRs that need review
+                                for key in &["fork_prs", "upstream_prs"] {
+                                    if let Some(prs) = body.get(*key).and_then(|v| v.as_array()) {
+                                        for pr in prs {
+                                            let needs_review = pr
+                                                .get("reviewDecision")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.is_empty() || s == "REVIEW_REQUIRED")
+                                                .unwrap_or(true);
+                                            if needs_review {
+                                                peer_prs.push(pr.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     enriched_peers.push(serde_json::json!({
                         "instance_id": inst_id,
                         "url": sib_url,
@@ -2351,6 +2376,7 @@ impl ToolExecutor {
                         "endpoints": callable_endpoints,
                         "lessons": peer_lessons,
                         "solutions_imported": solutions_imported,
+                        "open_prs": peer_prs,
                     }));
 
                     // ── Mutual linking: POST /instance/link back to the peer ──
@@ -2444,6 +2470,30 @@ impl ToolExecutor {
                         }
                         if let Ok(json) = serde_json::to_string(&catalog) {
                             let _ = db.set_state("peer_endpoint_catalog", &json);
+                        }
+
+                        // Persist peer open PRs for review prompt injection
+                        let mut all_peer_prs: Vec<serde_json::Value> = Vec::new();
+                        for peer in &enriched_peers {
+                            let peer_id = peer
+                                .get("instance_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            if let Some(prs) = peer.get("open_prs").and_then(|v| v.as_array()) {
+                                for pr in prs {
+                                    let mut pr_entry = pr.clone();
+                                    if let Some(obj) = pr_entry.as_object_mut() {
+                                        obj.insert(
+                                            "peer_id".to_string(),
+                                            serde_json::Value::String(peer_id.to_string()),
+                                        );
+                                    }
+                                    all_peer_prs.push(pr_entry);
+                                }
+                            }
+                        }
+                        if let Ok(json) = serde_json::to_string(&all_peer_prs) {
+                            let _ = db.set_state("peer_open_prs", &json);
                         }
                     }
                 }

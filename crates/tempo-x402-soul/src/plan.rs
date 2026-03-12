@@ -217,6 +217,14 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Review a peer's pull request — fetch diff, analyze, approve/reject.
+    /// This is the academic peer review mechanism: code only counts when reviewed.
+    ReviewPeerPR {
+        /// PR number on the fork repo.
+        pr_number: u32,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
 }
 
 impl PlanStep {
@@ -291,6 +299,9 @@ impl PlanStep {
             PlanStep::BrowseUrl { url, .. } => {
                 format!("browse: {}", safe_truncate(url, 40))
             }
+            PlanStep::ReviewPeerPR { pr_number, .. } => {
+                format!("review PR #{pr_number}")
+            }
         }
     }
 
@@ -315,7 +326,8 @@ impl PlanStep {
             | PlanStep::Screenshot { store_as, .. }
             | PlanStep::ScreenClick { store_as, .. }
             | PlanStep::ScreenType { store_as, .. }
-            | PlanStep::BrowseUrl { store_as, .. } => store_as.as_deref(),
+            | PlanStep::BrowseUrl { store_as, .. }
+            | PlanStep::ReviewPeerPR { store_as, .. } => store_as.as_deref(),
             PlanStep::Commit { .. } | PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } => {
                 None
             }
@@ -608,6 +620,7 @@ impl<'a> PlanExecutor<'a> {
                 self.execute_tool("open_url", &serde_json::json!({ "url": url }))
                     .await
             }
+            PlanStep::ReviewPeerPR { pr_number, .. } => self.execute_review_pr(*pr_number).await,
         }
     }
 
@@ -624,6 +637,130 @@ impl<'a> PlanExecutor<'a> {
                 }
             }
             Err(e) => StepResult::Failed(e),
+        }
+    }
+
+    /// Execute a peer PR review step.
+    /// Mechanical: fetch diff via `gh pr diff`. LLM: analyze and write review.
+    /// Then submit review via `gh pr review`.
+    async fn execute_review_pr(&self, pr_number: u32) -> StepResult {
+        // Determine repo for `gh` commands
+        let fork_repo = std::env::var("SOUL_FORK_REPO").unwrap_or_default();
+        if fork_repo.is_empty() {
+            return StepResult::Failed(
+                "SOUL_FORK_REPO not set — cannot review PRs without fork repo".to_string(),
+            );
+        }
+
+        // Step 1: Fetch the PR diff
+        let diff_result = self
+            .execute_tool(
+                "execute_shell",
+                &serde_json::json!({
+                    "command": format!("gh pr diff {pr_number} --repo {fork_repo}")
+                }),
+            )
+            .await;
+        let diff = match &diff_result {
+            StepResult::Success(output) => output.clone(),
+            StepResult::Failed(err) | StepResult::NeedsReplan(err) => {
+                return StepResult::Failed(format!("failed to fetch PR #{pr_number} diff: {err}"));
+            }
+        };
+
+        if diff.trim().is_empty() {
+            return StepResult::Failed(format!("PR #{pr_number} has no diff — may not exist"));
+        }
+
+        // Step 2: Fetch PR metadata (title, author branch)
+        let meta_result = self
+            .execute_tool(
+                "execute_shell",
+                &serde_json::json!({
+                    "command": format!(
+                        "gh pr view {pr_number} --repo {fork_repo} --json title,headRefName,author,additions,deletions"
+                    )
+                }),
+            )
+            .await;
+        let pr_meta = match &meta_result {
+            StepResult::Success(output) => output.clone(),
+            _ => "{}".to_string(),
+        };
+
+        // Step 3: Have LLM analyze the diff and decide approve/reject
+        let truncated_diff = if diff.len() > 8000 {
+            format!(
+                "{}\n\n... (diff truncated, {} total bytes)",
+                diff.chars().take(8000).collect::<String>(),
+                diff.len()
+            )
+        } else {
+            diff.clone()
+        };
+
+        let review_prompt = format!(
+            "# Peer Code Review — PR #{pr_number}\n\n\
+             You are reviewing a peer agent's pull request. This is academic peer review:\n\
+             your job is to evaluate code quality, correctness, and usefulness.\n\n\
+             ## PR Metadata\n{pr_meta}\n\n\
+             ## Diff\n```\n{truncated_diff}\n```\n\n\
+             ## Review Criteria\n\
+             1. Does the code compile? (check for obvious syntax/type errors)\n\
+             2. Does it do something useful? (not just trivial/cosmetic changes)\n\
+             3. Could it break existing functionality?\n\
+             4. Is it well-structured?\n\n\
+             ## Your Task\n\
+             Write a concise review (2-4 sentences) and decide: APPROVE or REQUEST_CHANGES.\n\
+             APPROVE = this code improves the codebase.\n\
+             REQUEST_CHANGES = this code has issues that should be fixed first.\n\n\
+             Respond with JSON:\n\
+             ```json\n\
+             {{\"verdict\": \"APPROVE\" or \"REQUEST_CHANGES\", \"review\": \"your review text\"}}\n\
+             ```"
+        );
+
+        // Use Think step to get LLM analysis
+        let plan_context = HashMap::new();
+        let think_result = self.execute_think_step(&review_prompt, &plan_context).await;
+        let review_output = match &think_result {
+            StepResult::Success(output) => output.clone(),
+            StepResult::Failed(err) | StepResult::NeedsReplan(err) => {
+                return StepResult::Failed(format!("LLM review failed: {err}"));
+            }
+        };
+
+        // Parse LLM verdict
+        let (verdict, review_text) = parse_review_verdict(&review_output);
+
+        // Step 4: Submit the review via gh
+        let gh_action = if verdict == "APPROVE" {
+            "--approve"
+        } else {
+            "--request-changes"
+        };
+        let escaped_review = review_text.replace('\'', "'\\''");
+        let review_cmd = format!(
+            "gh pr review {pr_number} --repo {fork_repo} {gh_action} --body '{escaped_review}'"
+        );
+        let submit_result = self
+            .execute_tool(
+                "execute_shell",
+                &serde_json::json!({ "command": review_cmd }),
+            )
+            .await;
+
+        match submit_result {
+            StepResult::Success(_) => StepResult::Success(format!(
+                "Reviewed PR #{pr_number}: {verdict}\n{review_text}"
+            )),
+            StepResult::Failed(err) => {
+                // Review analysis succeeded even if gh submit failed
+                StepResult::Success(format!(
+                    "Reviewed PR #{pr_number} (submit failed: {err}): {verdict}\n{review_text}"
+                ))
+            }
+            other => other,
         }
     }
 
@@ -915,6 +1052,38 @@ impl<'a> PlanExecutor<'a> {
                 )
             })
             .collect()
+    }
+}
+
+/// Parse LLM review output into (verdict, review_text).
+fn parse_review_verdict(output: &str) -> (&str, String) {
+    // Try to parse JSON from the output
+    if let Some(start) = output.find('{') {
+        if let Some(end) = output.rfind('}') {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output[start..=end]) {
+                let verdict = parsed
+                    .get("verdict")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("REQUEST_CHANGES");
+                let review = parsed
+                    .get("review")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("No review text provided")
+                    .to_string();
+                let v = if verdict.contains("APPROVE") {
+                    "APPROVE"
+                } else {
+                    "REQUEST_CHANGES"
+                };
+                return (v, review);
+            }
+        }
+    }
+    // Fallback: look for keywords
+    if output.to_uppercase().contains("APPROVE") && !output.to_uppercase().contains("REQUEST") {
+        ("APPROVE", output.chars().take(500).collect())
+    } else {
+        ("REQUEST_CHANGES", output.chars().take(500).collect())
     }
 }
 

@@ -18,6 +18,10 @@ pub enum Capability {
     FileRead,
     /// Writing/editing files successfully.
     FileWrite,
+    /// Peer code review: reviewed another agent's PR.
+    PeerReview,
+    /// Code accepted: your PR was approved by a peer reviewer.
+    CodeAccepted,
     /// Code compiles after changes (cargo check passes).
     CodeCompile,
     /// Tests pass after changes.
@@ -43,6 +47,8 @@ impl Capability {
         match self {
             Self::FileRead => "file_read",
             Self::FileWrite => "file_write",
+            Self::PeerReview => "peer_review",
+            Self::CodeAccepted => "code_accepted",
             Self::CodeCompile => "code_compile",
             Self::TestPass => "test_pass",
             Self::ShellExec => "shell_exec",
@@ -59,6 +65,8 @@ impl Capability {
         match self {
             Self::FileRead => "File Reading",
             Self::FileWrite => "File Writing",
+            Self::PeerReview => "Peer Review",
+            Self::CodeAccepted => "Code Accepted",
             Self::CodeCompile => "Compilation",
             Self::TestPass => "Test Passing",
             Self::ShellExec => "Shell Execution",
@@ -94,6 +102,7 @@ impl Capability {
             | PlanStep::ScreenClick { .. }
             | PlanStep::ScreenType { .. }
             | PlanStep::BrowseUrl { .. } => Self::ShellExec, // computer use maps to shell capability for now
+            PlanStep::ReviewPeerPR { .. } => Self::PeerReview,
         }
     }
 }
@@ -143,20 +152,9 @@ pub fn record_event(db: &SoulDatabase, capability: &Capability, succeeded: bool,
 }
 
 /// Record a step result as a capability event.
-/// Some steps map to multiple capabilities (e.g. CreateScriptEndpoint is both
-/// EndpointCreate AND FileWrite since it writes a bash script to disk).
 pub fn record_step_result(db: &SoulDatabase, step: &PlanStep, succeeded: bool, context: &str) {
-    let primary = Capability::from_step(step);
-    record_event(db, &primary, succeeded, context);
-
-    // Secondary capability: file-writing steps that are tracked under other primaries
-    let also_file_write = matches!(
-        step,
-        PlanStep::CreateScriptEndpoint { .. } | PlanStep::GenerateCode { .. }
-    );
-    if also_file_write {
-        record_event(db, &Capability::FileWrite, succeeded, context);
-    }
+    let cap = Capability::from_step(step);
+    record_event(db, &cap, succeeded, context);
 }
 
 /// Compute the current capability profile from recent events.
@@ -175,6 +173,8 @@ pub fn compute_profile(db: &SoulDatabase) -> CapabilityProfile {
         Capability::CodeGen,
         Capability::CodeSearch,
         Capability::PlanComplete,
+        Capability::PeerReview,
+        Capability::CodeAccepted,
     ];
 
     let mut scores: Vec<CapabilityScore> = Vec::new();

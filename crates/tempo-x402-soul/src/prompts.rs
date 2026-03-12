@@ -87,6 +87,7 @@ pub fn goal_creation_prompt(
     fitness: Option<&crate::fitness::FitnessScore>,
     experience: &str,
     capability_profile: &str,
+    peer_open_prs: &str,
 ) -> String {
     let mut sections = Vec::new();
 
@@ -289,7 +290,8 @@ pub fn goal_creation_prompt(
     };
 
     let good_goals = if has_peers {
-        "call peer paid endpoints (call_peer with 'info', 'soul', 'chat' slugs — generates x402 payments!), \
+        "review peer PRs (academic peer review — use review_peer_pr step!), \
+         call peer paid endpoints (call_peer with 'info', 'soul', 'chat' slugs — generates x402 payments!), \
          fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code"
     } else {
         "use discover_peers then call_peer to make PAID x402 calls to sibling agents, \
@@ -340,6 +342,38 @@ pub fn goal_creation_prompt(
         sections.push(capability_profile.to_string());
     }
 
+    // Inject peer open PRs for academic peer review
+    if !peer_open_prs.is_empty() {
+        if let Ok(prs) = serde_json::from_str::<Vec<serde_json::Value>>(peer_open_prs) {
+            if !prs.is_empty() {
+                let mut pr_section = format!(
+                    "# Peer PRs Awaiting Review ({} total)\n\
+                     Academic peer review: reviewing peer code is a CORE activity. Your review helps the collective evolve.\n",
+                    prs.len()
+                );
+                for pr in prs.iter().take(10) {
+                    let num = pr.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let title = pr.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                    let peer = pr.get("peer_id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let branch = pr
+                        .get("headRefName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let adds = pr.get("additions").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let dels = pr.get("deletions").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let short_peer = if peer.len() > 12 { &peer[..12] } else { peer };
+                    pr_section.push_str(&format!(
+                        "- PR #{num} by {short_peer}: \"{title}\" ({branch}, +{adds}/-{dels})\n"
+                    ));
+                }
+                pr_section.push_str(
+                    "Use review_peer_pr step to review these. Approved PRs count as CodeAccepted for the author.\n"
+                );
+                sections.push(pr_section);
+            }
+        }
+    }
+
     sections.push(task_section);
 
     sections.join("\n\n")
@@ -355,6 +389,7 @@ pub fn planning_prompt(
     experience: &str,
     capability_profile: &str,
     peer_endpoint_catalog: &str,
+    peer_open_prs: &str,
 ) -> String {
     let mut extra_context = String::new();
 
@@ -396,6 +431,22 @@ pub fn planning_prompt(
                 }
                 extra_context
                     .push_str("Script endpoints (script-*) are especially interesting to call!\n");
+            }
+        }
+    }
+
+    // Inject peer open PRs for review
+    if !peer_open_prs.is_empty() {
+        if let Ok(prs) = serde_json::from_str::<Vec<serde_json::Value>>(peer_open_prs) {
+            if !prs.is_empty() {
+                extra_context.push_str("\n# Peer PRs Available for Review\n");
+                for pr in prs.iter().take(10) {
+                    let num = pr.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let title = pr.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                    extra_context.push_str(&format!("- PR #{num}: \"{title}\"\n"));
+                }
+                extra_context
+                    .push_str("Use {\"type\": \"review_peer_pr\", \"pr_number\": N} to review!\n");
             }
         }
     }
@@ -454,7 +505,8 @@ pub fn planning_prompt(
          - {{\"type\": \"screenshot\", \"store_as\": \"screen\"}}  (capture VM display — requires DISPLAY)\n\
          - {{\"type\": \"screen_click\", \"x\": 100, \"y\": 200, \"store_as\": \"click\"}}  (click at screen position)\n\
          - {{\"type\": \"screen_type\", \"text\": \"hello\", \"store_as\": \"typed\"}}  (type text via keyboard)\n\
-         - {{\"type\": \"browse_url\", \"url\": \"https://...\", \"store_as\": \"page\"}}  (open URL in browser)\n\n\
+         - {{\"type\": \"browse_url\", \"url\": \"https://...\", \"store_as\": \"page\"}}  (open URL in browser)\n\
+         - {{\"type\": \"review_peer_pr\", \"pr_number\": 42, \"store_as\": \"review\"}}  (peer review: fetch diff, LLM analyzes, approve/reject — ACADEMIC PEER REVIEW)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\

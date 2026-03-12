@@ -910,6 +910,117 @@ async fn trigger_benchmark(state: web::Data<NodeState>) -> HttpResponse {
     }))
 }
 
+/// GET /soul/open-prs — list this agent's open pull requests.
+/// Exposed so peer agents can discover PRs that need review (academic peer review).
+async fn open_prs(state: web::Data<NodeState>) -> HttpResponse {
+    let fork_repo = std::env::var("SOUL_FORK_REPO").unwrap_or_default();
+    let upstream_repo = std::env::var("SOUL_UPSTREAM_REPO").unwrap_or_default();
+    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_default();
+
+    if fork_repo.is_empty() {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "instance_id": instance_id,
+            "prs": [],
+            "message": "no fork repo configured"
+        }));
+    }
+
+    // Use gh CLI to list open PRs
+    let workspace =
+        std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".into());
+    let gh_token = std::env::var("GH_TOKEN")
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .unwrap_or_default();
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio::process::Command::new("gh")
+            .args([
+                "pr",
+                "list",
+                "--repo",
+                &fork_repo,
+                "--state",
+                "open",
+                "--json",
+                "number,title,headRefName,author,additions,deletions,createdAt,reviewDecision",
+                "--limit",
+                "20",
+            ])
+            .current_dir(&workspace)
+            .env("GH_TOKEN", &gh_token)
+            .output(),
+    )
+    .await;
+
+    let prs: serde_json::Value = match result {
+        Ok(Ok(output)) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            serde_json::from_str(&stdout).unwrap_or(serde_json::json!([]))
+        }
+        _ => serde_json::json!([]),
+    };
+
+    // Also check upstream PRs if configured
+    let upstream_prs: serde_json::Value = if !upstream_repo.is_empty() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            tokio::process::Command::new("gh")
+                .args([
+                    "pr",
+                    "list",
+                    "--repo",
+                    &upstream_repo,
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,title,headRefName,author,additions,deletions,createdAt,reviewDecision",
+                    "--limit",
+                    "20",
+                ])
+                .current_dir(&workspace)
+                .env("GH_TOKEN", &gh_token)
+                .output(),
+        )
+        .await;
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                serde_json::from_str(&stdout).unwrap_or(serde_json::json!([]))
+            }
+            _ => serde_json::json!([]),
+        }
+    } else {
+        serde_json::json!([])
+    };
+
+    // Count PRs needing review (no review decision yet)
+    let empty_vec = vec![];
+    let fork_prs_arr = prs.as_array().unwrap_or(&empty_vec);
+    let upstream_prs_arr = upstream_prs.as_array().unwrap_or(&empty_vec);
+    let needs_review_count = fork_prs_arr
+        .iter()
+        .chain(upstream_prs_arr.iter())
+        .filter(|pr| {
+            pr.get("reviewDecision")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty() || s == "REVIEW_REQUIRED")
+                .unwrap_or(true)
+        })
+        .count();
+
+    let _ = &state; // suppress unused warning
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "instance_id": instance_id,
+        "fork_repo": fork_repo,
+        "upstream_repo": upstream_repo,
+        "fork_prs": prs,
+        "upstream_prs": upstream_prs,
+        "needs_review_count": needs_review_count,
+    }))
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/soul/status", web::get().to(soul_status))
         .route("/soul/chat", web::post().to(soul_chat))
@@ -930,5 +1041,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route(
             "/soul/benchmark/solutions",
             web::get().to(get_benchmark_solutions),
-        );
+        )
+        .route("/soul/open-prs", web::get().to(open_prs));
 }

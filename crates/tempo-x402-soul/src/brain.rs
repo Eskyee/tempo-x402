@@ -817,6 +817,9 @@ fn capability_to_idx(cap: &Capability) -> usize {
         Capability::CodeGen => 8,
         Capability::CodeSearch => 9,
         Capability::PlanComplete => 10,
+        // Map new capabilities to related existing indices to avoid brain resize
+        Capability::PeerReview => 5,   // maps to PeerCall slot
+        Capability::CodeAccepted => 7, // maps to GitOps slot
     }
 }
 
@@ -830,6 +833,7 @@ fn step_name_to_capability(name: &str) -> Capability {
         s if s.contains("EditCode") => Capability::FileWrite,
         s if s.contains("CargoCheck") => Capability::CodeCompile,
         s if s.contains("Endpoint") => Capability::EndpointCreate,
+        s if s.contains("ReviewPeerPR") => Capability::PeerReview,
         s if s.contains("Peer") => Capability::PeerCall,
         s if s.contains("Think") => Capability::CodeGen,
         _ => Capability::PlanComplete,
@@ -851,7 +855,8 @@ fn step_name_to_idx(name: &str) -> usize {
         s if s.contains("EditCode") => 10,
         s if s.contains("Think") => 11,
         s if s.contains("DeleteEndpoint") => 12,
-        _ => 13,
+        s if s.contains("ReviewPeerPR") => 13,
+        _ => 14,
     }
 }
 

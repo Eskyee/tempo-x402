@@ -352,6 +352,51 @@ impl GitContext {
         })
     }
 
+    /// List open PRs on the fork repo, returning JSON output.
+    /// Used by peer review system so agents can discover each other's PRs.
+    pub async fn list_open_prs(&self) -> Result<GitResult, String> {
+        let repo = self
+            .fork_repo
+            .as_deref()
+            .or(self.upstream_repo.as_deref())
+            .ok_or_else(|| "no repo configured for PR listing".to_string())?;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            tokio::process::Command::new("gh")
+                .args([
+                    "pr",
+                    "list",
+                    "--repo",
+                    repo,
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,title,headRefName,author,additions,deletions,createdAt",
+                    "--limit",
+                    "20",
+                ])
+                .current_dir(&self.workspace_root)
+                .env("GH_TOKEN", self.github_token.as_deref().unwrap_or(""))
+                .output(),
+        )
+        .await
+        .map_err(|_| "gh pr list timed out after 15s".to_string())?
+        .map_err(|e| format!("gh pr list failed: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+
+        Ok(GitResult {
+            success: result.status.success(),
+            output: if result.status.success() {
+                stdout
+            } else {
+                format!("{stdout}\n{stderr}")
+            },
+        })
+    }
+
     /// Create an issue on the upstream repo (or origin repo) using `gh`.
     pub async fn create_issue(
         &self,

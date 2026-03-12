@@ -953,6 +953,12 @@ impl ThinkingLoop {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let peer_prs = self
+            .db
+            .get_state("peer_open_prs")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let prompt = prompts::planning_prompt(
             goal,
             &workspace_listing,
@@ -961,6 +967,7 @@ impl ThinkingLoop {
             &experience,
             &cap_guidance,
             &peer_catalog,
+            &peer_prs,
         );
         let system =
             "You are a software engineering planner. Output ONLY a JSON array of plan steps.";
@@ -1217,6 +1224,12 @@ impl ThinkingLoop {
             }
             s
         };
+        let peer_prs = self
+            .db
+            .get_state("peer_open_prs")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let prompt = prompts::goal_creation_prompt(
             snapshot,
             &beliefs,
@@ -1229,6 +1242,7 @@ impl ThinkingLoop {
             fitness.as_ref(),
             &experience,
             &cap_with_benchmark,
+            &peer_prs,
         );
         let system = "You are an autonomous agent. Output ONLY a JSON array of goal operations.";
 

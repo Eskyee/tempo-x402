@@ -2119,6 +2119,12 @@ impl ToolExecutor {
                     .cloned()
                     .unwrap_or_default();
 
+                // Filter out self from peer list
+                let self_instance_id = std::env::var("INSTANCE_ID").unwrap_or_default();
+                let self_address = std::env::var("EVM_ADDRESS")
+                    .unwrap_or_default()
+                    .to_lowercase();
+
                 let mut enriched_peers = Vec::new();
                 for sib in &siblings {
                     let inst_id = sib
@@ -2130,6 +2136,18 @@ impl ToolExecutor {
                         None => continue,
                     };
                     let address = sib.get("address").and_then(|v| v.as_str());
+
+                    // Skip self — avoid self-payment errors
+                    if inst_id == self_instance_id {
+                        tracing::debug!(instance_id = %inst_id, "Skipping self in peer list");
+                        continue;
+                    }
+                    if let Some(addr) = address {
+                        if addr.to_lowercase() == self_address {
+                            tracing::debug!(address = %addr, "Skipping self (same address) in peer list");
+                            continue;
+                        }
+                    }
 
                     // Fetch peer's /instance/info for endpoints + version
                     let info_url = format!("{}/instance/info", sib_url.trim_end_matches('/'));
@@ -2181,6 +2199,24 @@ impl ToolExecutor {
                                         slug
                                     )),
                                 );
+                                // Sanitize description — strip control characters that break JSON parsing
+                                if let Some(serde_json::Value::String(desc)) =
+                                    obj.get("description")
+                                {
+                                    let clean: String = desc
+                                        .chars()
+                                        .filter(|c| {
+                                            !c.is_control()
+                                                || *c == '\n'
+                                                || *c == '\r'
+                                                || *c == '\t'
+                                        })
+                                        .collect();
+                                    obj.insert(
+                                        "description".to_string(),
+                                        serde_json::Value::String(clean),
+                                    );
+                                }
                             }
                             ep_clone
                         })

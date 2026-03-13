@@ -29,10 +29,10 @@ RUN curl -sSL --retry 5 --retry-delay 5 \
         -C /root/.trunk/tools/wasm-bindgen-${WASM_BINDGEN_VERSION}/ && \
     rm /tmp/wb.tar.gz
 
-# Cook: build all dependencies (this layer is cached when only source changes)
+# Cook: build native dependencies (this layer is cached when only source changes)
+# WASM deps (leptos, wasm-bindgen) are lightweight and built by trunk below
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
-RUN cargo chef cook --release --target wasm32-unknown-unknown --recipe-path recipe.json
 
 # Now copy actual source and build
 COPY . .

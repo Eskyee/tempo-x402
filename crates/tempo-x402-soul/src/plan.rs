@@ -225,6 +225,12 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Clone yourself — triggers the internal self-clone endpoint (no x402 payment needed).
+    /// Creates a new peer node on Railway infrastructure automatically.
+    CloneSelf {
+        #[serde(default)]
+        store_as: Option<String>,
+    },
 }
 
 impl PlanStep {
@@ -302,6 +308,7 @@ impl PlanStep {
             PlanStep::ReviewPeerPR { pr_number, .. } => {
                 format!("review PR #{pr_number}")
             }
+            PlanStep::CloneSelf { .. } => "clone self".to_string(),
         }
     }
 
@@ -327,7 +334,8 @@ impl PlanStep {
             | PlanStep::ScreenClick { store_as, .. }
             | PlanStep::ScreenType { store_as, .. }
             | PlanStep::BrowseUrl { store_as, .. }
-            | PlanStep::ReviewPeerPR { store_as, .. } => store_as.as_deref(),
+            | PlanStep::ReviewPeerPR { store_as, .. }
+            | PlanStep::CloneSelf { store_as, .. } => store_as.as_deref(),
             PlanStep::Commit { .. } | PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } => {
                 None
             }
@@ -621,6 +629,10 @@ impl<'a> PlanExecutor<'a> {
                     .await
             }
             PlanStep::ReviewPeerPR { pr_number, .. } => self.execute_review_pr(*pr_number).await,
+            PlanStep::CloneSelf { .. } => {
+                self.execute_tool("clone_self", &serde_json::json!({}))
+                    .await
+            }
         }
     }
 

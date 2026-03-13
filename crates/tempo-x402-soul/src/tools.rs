@@ -345,6 +345,7 @@ impl ToolExecutor {
                 self.create_script_endpoint(slug, script, description).await
             }
             "discover_peers" => self.discover_peers().await,
+            "clone_self" => self.clone_self().await,
             "call_paid_endpoint" => {
                 let url = args
                     .get("url")
@@ -1968,6 +1969,37 @@ impl ToolExecutor {
             exit_code: 0,
             duration_ms,
         })
+    }
+
+    /// Trigger self-clone via the internal /clone/self endpoint (no x402 payment needed).
+    async fn clone_self(&self) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+        let gateway_url =
+            std::env::var("GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let url = format!("{}/clone/self", gateway_url.trim_end_matches('/'));
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+            .map_err(|e| format!("clone_self request failed: {e}"))?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if status.is_success() {
+            Ok(ToolResult {
+                stdout: format!("Clone triggered successfully: {body}"),
+                stderr: String::new(),
+                exit_code: 0,
+                duration_ms,
+            })
+        } else {
+            Err(format!("clone_self returned {status}: {body}"))
+        }
     }
 
     async fn discover_peers(&self) -> Result<ToolResult, String> {

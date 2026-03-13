@@ -281,12 +281,12 @@ pub fn goal_creation_prompt(
          Every call_peer triggers the full x402 flow: GET → 402 → sign EIP-712 → pay pathUSD → get response.\n\
          Call peers' 'info', 'soul', or 'chat' endpoints. Each call earns them revenue and costs you pathUSD.\n\
          This economic activity is what makes you a real x402 agent, not just a script runner.\n\
-         You can clone yourself using `call_peer` with the `clone` endpoint (do NOT use curl — cloning requires x402 payment signing)"
+         To grow the network, use clone_self — it triggers internal self-cloning (no payment needed, creates a new peer on Railway automatically)"
     } else {
         "Use discover_peers to find sibling agents — it does live network calls even when no peers are cached.\n\
          Once you find peers, use call_peer to make PAID x402 calls to their endpoints.\n\
          Every call_peer uses your wallet to pay pathUSD via EIP-712 signatures — this is what x402 IS.\n\
-         To grow the network, clone yourself via the `clone` endpoint when you have funds"
+         To grow the network, use clone_self — it triggers internal self-cloning (no payment needed, creates a new peer on Railway automatically)"
     };
 
     let good_goals = if has_peers {
@@ -506,7 +506,8 @@ pub fn planning_prompt(
          - {{\"type\": \"screen_click\", \"x\": 100, \"y\": 200, \"store_as\": \"click\"}}  (click at screen position)\n\
          - {{\"type\": \"screen_type\", \"text\": \"hello\", \"store_as\": \"typed\"}}  (type text via keyboard)\n\
          - {{\"type\": \"browse_url\", \"url\": \"https://...\", \"store_as\": \"page\"}}  (open URL in browser)\n\
-         - {{\"type\": \"review_peer_pr\", \"pr_number\": 42, \"store_as\": \"review\"}}  (peer review: fetch diff, LLM analyzes, approve/reject — ACADEMIC PEER REVIEW)\n\n\
+         - {{\"type\": \"review_peer_pr\", \"pr_number\": 42, \"store_as\": \"review\"}}  (peer review: fetch diff, LLM analyzes, approve/reject — ACADEMIC PEER REVIEW)\n\
+         - {{\"type\": \"clone_self\", \"store_as\": \"clone\"}}  (clone yourself — creates a new peer node on Railway automatically, NO payment needed)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\

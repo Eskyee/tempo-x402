@@ -440,8 +440,109 @@ trait Pipe: Sized {
 }
 impl<T> Pipe for T {}
 
+/// POST /clone/self — internal self-clone (no x402 payment required).
+/// Only accessible from localhost or with valid HMAC auth.
+/// This allows the soul to trigger cloning without paying itself.
+pub async fn clone_self(
+    req: HttpRequest,
+    node: web::Data<NodeState>,
+) -> Result<HttpResponse, GatewayError> {
+    // Security: only allow from localhost or with HMAC auth
+    let peer_addr = req
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+    let is_localhost =
+        peer_addr == "127.0.0.1" || peer_addr == "::1" || peer_addr.starts_with("100.64.");
+    let has_auth = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|token| {
+            node.gateway
+                .config
+                .hmac_secret
+                .as_deref()
+                .map_or(false, |secret| {
+                    x402::security::constant_time_eq(token.as_bytes(), secret.as_bytes())
+                })
+        })
+        .unwrap_or(false);
+
+    if !is_localhost && !has_auth {
+        return Ok(HttpResponse::Forbidden()
+            .json(serde_json::json!({"error": "self-clone requires localhost or HMAC auth"})));
+    }
+
+    let agent = node
+        .agent
+        .as_ref()
+        .ok_or_else(|| GatewayError::Internal("cloning not configured".to_string()))?;
+
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    let self_address = std::env::var("EVM_ADDRESS").unwrap_or_default();
+
+    match db::reserve_child_slot(&node.gateway.db, node.clone_max_children, &instance_id) {
+        Ok(true) => {
+            tracing::info!(instance_id = %instance_id, "Self-clone: child slot reserved");
+        }
+        Ok(false) => {
+            return Ok(HttpResponse::Conflict().json(serde_json::json!({
+                "success": false,
+                "error": "clone limit reached",
+            })));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to reserve child slot");
+            return Err(GatewayError::Internal(
+                "failed to reserve clone slot".to_string(),
+            ));
+        }
+    }
+
+    let clone_result = match agent.spawn_clone(&instance_id, &self_address).await {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(instance_id = %instance_id, error = %e, "Self-clone failed");
+            let _ = db::mark_child_failed(&node.gateway.db, &instance_id);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": "clone_failed",
+                "message": format!("Self-clone failed: {e}"),
+            })));
+        }
+    };
+
+    if let Err(e) = db::update_child_deployment(
+        &node.gateway.db,
+        &instance_id,
+        &clone_result.url,
+        &clone_result.railway_service_id,
+        "deploying",
+        clone_result.branch.as_deref(),
+    ) {
+        tracing::error!(instance_id = %instance_id, error = %e, "Failed to update child deployment");
+    }
+
+    tracing::info!(
+        instance_id = %instance_id,
+        url = %clone_result.url,
+        "Self-clone spawned successfully"
+    );
+
+    Ok(HttpResponse::Created().json(serde_json::json!({
+        "success": true,
+        "instance_id": instance_id,
+        "url": clone_result.url,
+        "branch": clone_result.branch,
+        "status": "deploying",
+    })))
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/clone", web::post().to(clone_instance))
+        .route("/clone/self", web::post().to(clone_self))
         .route("/clone/update-all", web::post().to(update_all))
         .route("/clone/{instance_id}/status", web::get().to(clone_status))
         .route(

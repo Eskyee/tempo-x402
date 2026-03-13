@@ -1256,9 +1256,16 @@ async fn main() -> std::io::Result<()> {
                     let service_id = match child.railway_service_id.as_ref() {
                         Some(id) => id,
                         None => {
+                            // Ghost child: no Railway service ID means this child
+                            // was orphaned (service deleted externally). Delete it
+                            // from the DB so it stops spamming the health probe.
                             tracing::warn!(
                                 instance_id = %child.instance_id,
-                                "Cannot redeploy: no Railway service ID"
+                                "Deleting ghost child: no Railway service ID"
+                            );
+                            let _ = db::delete_child(
+                                &version_check_state.gateway.db,
+                                &child.instance_id,
                             );
                             continue;
                         }

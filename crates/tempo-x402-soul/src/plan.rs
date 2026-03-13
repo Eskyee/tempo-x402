@@ -630,8 +630,7 @@ impl<'a> PlanExecutor<'a> {
             }
             PlanStep::ReviewPeerPR { pr_number, .. } => self.execute_review_pr(*pr_number).await,
             PlanStep::CloneSelf { .. } => {
-                self.execute_tool("clone_self", &serde_json::json!({}))
-                    .await
+                Err("CloneSelf is disabled — cloning is manual-only via the frontend".to_string())
             }
         }
     }

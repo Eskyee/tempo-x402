@@ -2104,7 +2104,7 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                                             {format!("{}/{} problems solved (this agent)", passed_b, attempted)}
                                         </div>
                                         // Collective intelligence
-                                        {if collective_solved > 0 || peer_count > 0 {
+                                        {if collective_solved > 0 || collective_total > 0 {
                                             Some(view! {
                                                 <div class="benchmark-collective">
                                                     <div class="benchmark-collective-label">"Collective Intelligence (swarm)"</div>

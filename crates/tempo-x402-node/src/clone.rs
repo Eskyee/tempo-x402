@@ -242,6 +242,18 @@ impl CloneOrchestrator {
         let url = self.railway.create_domain(service_id, &env_id).await?;
         tracing::info!(url = %url, "Domain created");
 
+        // 8b. Set ALLOWED_ORIGINS now that we know the domain
+        let origins = format!("{},{}", url, self.config.self_url);
+        let origins_var = serde_json::Value::Object({
+            let mut m = serde_json::Map::new();
+            m.insert("ALLOWED_ORIGINS".into(), origins.into());
+            m
+        });
+        let _ = self
+            .railway
+            .set_variables(service_id, &env_id, origins_var)
+            .await;
+
         // 9. Deploy (skip for source-based — the deployment trigger already builds)
         let deployment_id = if branch_name.is_none() {
             let id = self.railway.deploy_service(service_id, &env_id).await?;

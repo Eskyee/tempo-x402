@@ -183,8 +183,8 @@ pub fn bootstrap(identity_path: &str) -> Result<InstanceIdentity, IdentityError>
         let private_key = format!("0x{}", alloy::hex::encode(signer.to_bytes()));
         let address = signer.address();
 
-        let instance_id = env::var("RAILWAY_SERVICE_ID")
-            .or_else(|_| env::var("INSTANCE_ID"))
+        let instance_id = env::var("INSTANCE_ID")
+            .or_else(|_| env::var("RAILWAY_SERVICE_ID"))
             .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
 
         let parent_url = env::var("PARENT_URL").ok().filter(|s| !s.is_empty());

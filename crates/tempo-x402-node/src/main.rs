@@ -442,35 +442,69 @@ async fn main() -> std::io::Result<()> {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(2048);
 
-                // Build child env vars from parent's soul-related env vars
+                // Build child env vars — everything a clone needs to be a fully
+                // functional independent x402 node. AUTO_BOOTSTRAP generates its own
+                // identity, facilitator key, EVM_ADDRESS, and shared secret.
                 let mut child_env_vars = std::collections::HashMap::new();
+
+                // Soul / LLM config
                 let child_multiplier =
                     std::env::var("CLONE_CYCLE_MULTIPLIER").unwrap_or_else(|_| "3.0".to_string());
                 child_env_vars.insert("SOUL_CYCLE_MULTIPLIER".into(), child_multiplier);
                 if let Ok(key) = std::env::var("GEMINI_API_KEY") {
                     child_env_vars.insert("GEMINI_API_KEY".into(), key);
                 }
-                // Clones use flash-lite by default for cost efficiency
                 let clone_model = std::env::var("CLONE_GEMINI_MODEL")
                     .unwrap_or_else(|_| "gemini-flash-lite-latest".to_string());
                 child_env_vars.insert("GEMINI_MODEL_FAST".into(), clone_model);
                 child_env_vars.insert("SOUL_CODING_ENABLED".into(), "true".into());
+                child_env_vars.insert("SOUL_AUTONOMOUS_CODING".into(), "true".into());
+                child_env_vars.insert("SOUL_DYNAMIC_TOOLS_ENABLED".into(), "true".into());
                 child_env_vars.insert("SOUL_DB_PATH".into(), "/data/soul.db".into());
+                child_env_vars.insert("SOUL_WORKSPACE_ROOT".into(), "/data/workspace".into());
+                child_env_vars.insert("SOUL_REQUIRE_PLAN_APPROVAL".into(), "false".into());
+
+                // Operational basics
+                child_env_vars.insert("RUST_LOG".into(), "info".into());
+                child_env_vars.insert(
+                    "RATE_LIMIT_RPM".into(),
+                    std::env::var("RATE_LIMIT_RPM").unwrap_or_else(|_| "300".into()),
+                );
+                child_env_vars.insert(
+                    "HEALTH_PROBE_INTERVAL_SECS".into(),
+                    std::env::var("HEALTH_PROBE_INTERVAL_SECS").unwrap_or_else(|_| "300".into()),
+                );
+
+                // Railway API token — child needs this for self-management
+                if let Ok(token) = std::env::var("RAILWAY_TOKEN") {
+                    child_env_vars.insert("RAILWAY_TOKEN".into(), token);
+                }
+
+                // Clone config — children can clone too (pay-it-forward)
+                child_env_vars.insert("CLONE_PRICE".into(), "$1.00".into());
+                if let Some(ref repo) = source_repo {
+                    child_env_vars.insert("CLONE_SOURCE_REPO".into(), repo.clone());
+                }
+
+                // ERC-8004 identity
+                if std::env::var("ERC8004_AUTO_MINT").unwrap_or_default() == "true" {
+                    child_env_vars.insert("ERC8004_AUTO_MINT".into(), "true".into());
+                }
+                if std::env::var("ERC8004_REPUTATION_ENABLED").unwrap_or_default() == "true" {
+                    child_env_vars.insert("ERC8004_REPUTATION_ENABLED".into(), "true".into());
+                }
 
                 // Source-based clones get coding-specific env vars
                 if source_repo.is_some() {
                     if let Some(ref repo) = source_repo {
-                        // Clone's SOUL_FORK_REPO = same fork (it pushes to its own branch)
                         child_env_vars.insert("SOUL_FORK_REPO".into(), repo.clone());
-                        // Clone PRs target fork's main
                         child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), repo.clone());
                     }
-                    child_env_vars.insert("SOUL_DIRECT_PUSH".into(), "true".into());
+                    child_env_vars.insert("SOUL_DIRECT_PUSH".into(), "false".into());
                     if let Some(ref gh_token) = github_token {
                         child_env_vars.insert("GITHUB_TOKEN".into(), gh_token.clone());
                     }
                 } else {
-                    // Docker-based clones: inherit parent's fork/upstream settings
                     if let Ok(fork) = std::env::var("SOUL_FORK_REPO") {
                         child_env_vars.insert("SOUL_FORK_REPO".into(), fork);
                     }
@@ -478,6 +512,11 @@ async fn main() -> std::io::Result<()> {
                         child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), upstream);
                     }
                 }
+
+                // NOTE: Do NOT set FACILITATOR_PRIVATE_KEY, EVM_ADDRESS, or
+                // FACILITATOR_SHARED_SECRET — AUTO_BOOTSTRAP generates unique
+                // ones per node via identity bootstrap. Setting them here would
+                // override the auto-generated values and break independence.
 
                 let clone_config = CloneConfig {
                     docker_image,

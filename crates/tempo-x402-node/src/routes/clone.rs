@@ -465,7 +465,7 @@ pub async fn clone_self(
                 .hmac_secret
                 .as_deref()
                 .map_or(false, |secret| {
-                    x402::security::constant_time_eq(token.as_bytes(), secret.as_bytes())
+                    x402::security::constant_time_eq(token.as_bytes(), secret)
                 })
         })
         .unwrap_or(false);

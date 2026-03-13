@@ -897,7 +897,8 @@ async fn trigger_benchmark(state: web::Data<NodeState>) -> HttpResponse {
         }
     };
 
-    // Clear cooldown so benchmark triggers on next eligible cycle
+    // Force benchmark on next cycle (bypasses warmup + interval checks)
+    let _ = soul_db.set_state("benchmark_force_next", "1");
     let _ = soul_db.set_state("last_benchmark_at", "0");
     let _ = soul_db.set_state("last_benchmark_cycle", "0");
 
@@ -906,8 +907,8 @@ async fn trigger_benchmark(state: web::Data<NodeState>) -> HttpResponse {
     let elo = x402_soul::elo::load_rating(soul_db);
 
     HttpResponse::Ok().json(serde_json::json!({
-        "status": "benchmark_requested",
-        "message": "Benchmark will run on the next cycle that is divisible by the interval (default: 50)",
+        "status": "benchmark_triggered",
+        "message": "Benchmark will run on the next thinking cycle",
         "current_score": current.as_ref().map(|s| s.pass_at_1),
         "current_elo": elo,
         "problems_attempted": current.as_ref().map(|s| s.problems_attempted).unwrap_or(0),

@@ -506,6 +506,19 @@ fn strip_code_blocks(s: &str) -> String {
 
 /// Check if it's time to run a benchmark (every N cycles).
 pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
+    // Check for manual trigger flag (set by POST /soul/benchmark)
+    let forced = db
+        .get_state("benchmark_force_next")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if forced {
+        // Clear the flag so it only fires once
+        let _ = db.set_state("benchmark_force_next", "0");
+        return true;
+    }
+
     let total_cycles: u64 = db
         .get_state("total_think_cycles")
         .ok()

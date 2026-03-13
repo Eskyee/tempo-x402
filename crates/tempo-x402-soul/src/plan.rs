@@ -629,9 +629,9 @@ impl<'a> PlanExecutor<'a> {
                     .await
             }
             PlanStep::ReviewPeerPR { pr_number, .. } => self.execute_review_pr(*pr_number).await,
-            PlanStep::CloneSelf { .. } => {
-                StepResult::Failed("CloneSelf is disabled — cloning is manual-only via the frontend".to_string())
-            }
+            PlanStep::CloneSelf { .. } => StepResult::Failed(
+                "CloneSelf is disabled — cloning is manual-only via the frontend".to_string(),
+            ),
         }
     }
 

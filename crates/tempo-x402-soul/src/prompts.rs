@@ -513,6 +513,7 @@ pub fn planning_prompt(
          - {{\"type\": \"think\", \"question\": \"...\", \"store_as\": \"key\"}}\n\n\
          Rules:\n\
          - **store_as context**: When a step has store_as: \"key\", its output is automatically saved and available to later steps via context_keys. Do NOT try to read_file() on step results — they are NOT files on disk. Use context_keys: [\"key\"] in edit_code/generate_code to access prior step outputs.\n\
+         - ALWAYS start plans with investigation: list_dir or search_code to verify paths exist BEFORE reading/editing\n\
          - ALWAYS read files BEFORE editing them (use store_as to pass content to edit steps)\n\
          - For Rust code changes: put a cargo_check step AFTER each edit_code/generate_code step and BEFORE the commit step\n\
          - edit_code/generate_code steps have a built-in compile-fix loop (3 retries) but cargo_check stores errors explicitly\n\

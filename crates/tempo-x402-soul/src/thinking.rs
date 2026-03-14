@@ -1927,7 +1927,11 @@ impl ThinkingLoop {
                     } else if action_lower.starts_with("cat ") || action_lower.starts_with("read ")
                     {
                         let path = action_str.split_once(' ').map(|x| x.1).unwrap_or("");
-                        step.insert("type".to_string(), serde_json::json!("read_file"));
+                        if path.ends_with('/') || (!path.contains('.') && !path.is_empty()) {
+                            step.insert("type".to_string(), serde_json::json!("list_dir"));
+                        } else {
+                            step.insert("type".to_string(), serde_json::json!("read_file"));
+                        }
                         step.insert("path".to_string(), serde_json::json!(path));
                     } else if action_lower.starts_with("grep ") || action_lower.starts_with("rg ") {
                         step.insert("type".to_string(), serde_json::json!("run_shell"));
@@ -1954,6 +1958,15 @@ impl ThinkingLoop {
                         let path = action_str.split_once(' ').map(|x| x.1).unwrap_or(".");
                         step.insert("type".to_string(), serde_json::json!("list_dir"));
                         step.insert("path".to_string(), serde_json::json!(path));
+                    } else if action_lower.starts_with("think") {
+                        // LLM used "think: ..." or "think about ..." as action
+                        let question = action_str
+                            .strip_prefix("think:")
+                            .or_else(|| action_str.strip_prefix("think "))
+                            .map(|s| s.trim())
+                            .unwrap_or(&action_str);
+                        step.insert("type".to_string(), serde_json::json!("think"));
+                        step.insert("question".to_string(), serde_json::json!(question));
                     } else {
                         // Default: treat as shell command
                         step.insert("type".to_string(), serde_json::json!("run_shell"));
@@ -1968,10 +1981,18 @@ impl ThinkingLoop {
                     return Some(serde_json::Value::Object(step));
                 }
 
-                // Has "path" but no type — probably a read_file
+                // Has "path" but no type — infer read_file or list_dir
                 if let Some(path) = map.get("path").and_then(|v| v.as_str()) {
                     let mut step = serde_json::Map::new();
-                    step.insert("type".to_string(), serde_json::json!("read_file"));
+                    if path.ends_with('/')
+                        || path == "."
+                        || path == ".."
+                        || (!path.contains('.') && !path.is_empty())
+                    {
+                        step.insert("type".to_string(), serde_json::json!("list_dir"));
+                    } else {
+                        step.insert("type".to_string(), serde_json::json!("read_file"));
+                    }
                     step.insert("path".to_string(), serde_json::json!(path));
                     if let Some(store) = map.get("store_as") {
                         step.insert("store_as".to_string(), store.clone());

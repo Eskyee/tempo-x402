@@ -6,6 +6,34 @@ use crate::state::NodeState;
 use x402_gateway::error::GatewayError;
 use x402_gateway::middleware::{payment_response_header, require_payment};
 
+/// Check that the request comes from localhost or carries a valid HMAC Bearer token.
+/// Returns `Ok(())` if authorized, or `Err(HttpResponse::Forbidden)` if not.
+fn require_local_or_hmac(req: &HttpRequest, hmac_secret: Option<&str>) -> Result<(), HttpResponse> {
+    let peer_addr = req
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+    let is_localhost =
+        peer_addr == "127.0.0.1" || peer_addr == "::1" || peer_addr.starts_with("100.64.");
+    let has_auth = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|token| {
+            hmac_secret.map_or(false, |secret| {
+                x402::security::constant_time_eq(token.as_bytes(), secret)
+            })
+        })
+        .unwrap_or(false);
+
+    if !is_localhost && !has_auth {
+        return Err(HttpResponse::Forbidden()
+            .json(serde_json::json!({"error": "requires localhost or HMAC auth"})));
+    }
+    Ok(())
+}
+
 /// POST /clone — x402-gated clone operation
 pub async fn clone_instance(
     req: HttpRequest,
@@ -448,31 +476,8 @@ pub async fn clone_self(
     node: web::Data<NodeState>,
 ) -> Result<HttpResponse, GatewayError> {
     // Security: only allow from localhost or with HMAC auth
-    let peer_addr = req
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
-    let is_localhost =
-        peer_addr == "127.0.0.1" || peer_addr == "::1" || peer_addr.starts_with("100.64.");
-    let has_auth = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|token| {
-            node.gateway
-                .config
-                .hmac_secret
-                .as_deref()
-                .map_or(false, |secret| {
-                    x402::security::constant_time_eq(token.as_bytes(), secret)
-                })
-        })
-        .unwrap_or(false);
-
-    if !is_localhost && !has_auth {
-        return Ok(HttpResponse::Forbidden()
-            .json(serde_json::json!({"error": "self-clone requires localhost or HMAC auth"})));
+    if let Err(resp) = require_local_or_hmac(&req, node.gateway.config.hmac_secret.as_deref()) {
+        return Ok(resp);
     }
 
     let agent = node
@@ -559,32 +564,8 @@ pub async fn clone_specialist(
     body: web::Json<SpawnSpecialistRequest>,
 ) -> Result<HttpResponse, GatewayError> {
     // Security: same as clone_self — localhost or HMAC auth
-    let peer_addr = req
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
-    let is_localhost =
-        peer_addr == "127.0.0.1" || peer_addr == "::1" || peer_addr.starts_with("100.64.");
-    let has_auth = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|token| {
-            node.gateway
-                .config
-                .hmac_secret
-                .as_deref()
-                .map_or(false, |secret| {
-                    x402::security::constant_time_eq(token.as_bytes(), secret)
-                })
-        })
-        .unwrap_or(false);
-
-    if !is_localhost && !has_auth {
-        return Ok(HttpResponse::Forbidden().json(
-            serde_json::json!({"error": "specialist clone requires localhost or HMAC auth"}),
-        ));
+    if let Err(resp) = require_local_or_hmac(&req, node.gateway.config.hmac_secret.as_deref()) {
+        return Ok(resp);
     }
 
     let agent = node

@@ -25,7 +25,8 @@ use crate::config::SoulConfig;
 use crate::db::SoulDatabase;
 use crate::llm::{ConversationMessage, ConversationPart, FunctionDeclaration, LlmClient};
 use crate::mode::AgentMode;
-use crate::tools::{self, ToolExecutor};
+use crate::tool_decl;
+use crate::tools::ToolExecutor;
 
 /// Status of a plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1126,7 +1127,7 @@ impl<'a> PlanExecutor<'a> {
             Be concise and specific in your final answer.";
 
         // Give Think steps read-only tools + shell for investigation
-        let investigate_tools: Vec<_> = tools::available_tools_with_git(false)
+        let investigate_tools: Vec<_> = tool_decl::available_tools_with_git(false)
             .into_iter()
             .filter(|t| {
                 matches!(
@@ -1167,7 +1168,7 @@ impl<'a> PlanExecutor<'a> {
     /// Includes file ops + shell (for cargo check, grep, etc.) — the LLM
     /// needs the same tools a human developer would use.
     fn code_tools(&self) -> Vec<FunctionDeclaration> {
-        let all = tools::available_tools_with_git(self.config.coding_enabled);
+        let all = tool_decl::available_tools_with_git(self.config.coding_enabled);
         all.into_iter()
             .filter(|t| {
                 matches!(

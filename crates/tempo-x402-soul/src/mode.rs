@@ -2,7 +2,7 @@
 //! appropriate tools and prompts per mode.
 
 use crate::llm::FunctionDeclaration;
-use crate::tools;
+use crate::tool_decl;
 
 /// The operating mode of the soul agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,8 +39,8 @@ impl AgentMode {
         dynamic_tools: &[FunctionDeclaration],
         meta_tools: &[FunctionDeclaration],
     ) -> Vec<FunctionDeclaration> {
-        let all = tools::available_tools();
-        let all_with_git = tools::available_tools_with_git(coding_enabled);
+        let all = tool_decl::available_tools();
+        let all_with_git = tool_decl::available_tools_with_git(coding_enabled);
 
         let mut result = match self {
             Self::Observe => {
@@ -54,15 +54,15 @@ impl AgentMode {
                         )
                     })
                     .collect();
-                v.push(tools::update_memory_tool());
-                v.push(tools::update_beliefs_tool());
-                v.push(tools::check_self_tool());
-                v.push(tools::check_reputation_tool());
-                v.push(tools::discover_peers_tool());
-                v.push(tools::call_paid_endpoint_tool());
-                v.push(tools::delete_endpoint_tool());
-                v.push(tools::check_deploy_status_tool());
-                v.push(tools::get_deploy_logs_tool());
+                v.push(tool_decl::update_memory_tool());
+                v.push(tool_decl::update_beliefs_tool());
+                v.push(tool_decl::check_self_tool());
+                v.push(tool_decl::check_reputation_tool());
+                v.push(tool_decl::discover_peers_tool());
+                v.push(tool_decl::call_paid_endpoint_tool());
+                v.push(tool_decl::delete_endpoint_tool());
+                v.push(tool_decl::check_deploy_status_tool());
+                v.push(tool_decl::get_deploy_logs_tool());
                 v
             }
             Self::Chat => {
@@ -76,37 +76,37 @@ impl AgentMode {
                         )
                     })
                     .collect();
-                v.push(tools::update_memory_tool());
-                v.push(tools::update_beliefs_tool());
-                v.push(tools::check_self_tool());
-                v.push(tools::check_reputation_tool());
-                v.push(tools::approve_plan_tool());
-                v.push(tools::reject_plan_tool());
-                v.push(tools::request_plan_tool());
-                v.push(tools::discover_peers_tool());
-                v.push(tools::call_paid_endpoint_tool());
+                v.push(tool_decl::update_memory_tool());
+                v.push(tool_decl::update_beliefs_tool());
+                v.push(tool_decl::check_self_tool());
+                v.push(tool_decl::check_reputation_tool());
+                v.push(tool_decl::approve_plan_tool());
+                v.push(tool_decl::reject_plan_tool());
+                v.push(tool_decl::request_plan_tool());
+                v.push(tool_decl::discover_peers_tool());
+                v.push(tool_decl::call_paid_endpoint_tool());
                 v
             }
             Self::Code => {
                 // All tools including write/edit/commit + update_memory + update_beliefs + register_endpoint + check_self + plan control + economy
                 let mut v = all_with_git;
-                v.push(tools::update_memory_tool());
-                v.push(tools::update_beliefs_tool());
-                v.push(tools::register_endpoint_tool());
-                v.push(tools::delete_endpoint_tool());
-                v.push(tools::check_self_tool());
-                v.push(tools::check_reputation_tool());
-                v.push(tools::update_agent_metadata_tool());
-                v.push(tools::approve_plan_tool());
-                v.push(tools::reject_plan_tool());
-                v.push(tools::request_plan_tool());
-                v.push(tools::discover_peers_tool());
-                v.push(tools::call_paid_endpoint_tool());
-                v.push(tools::check_deploy_status_tool());
-                v.push(tools::get_deploy_logs_tool());
-                v.push(tools::trigger_redeploy_tool());
-                v.push(tools::spawn_specialist_tool());
-                v.push(tools::delegate_task_tool());
+                v.push(tool_decl::update_memory_tool());
+                v.push(tool_decl::update_beliefs_tool());
+                v.push(tool_decl::register_endpoint_tool());
+                v.push(tool_decl::delete_endpoint_tool());
+                v.push(tool_decl::check_self_tool());
+                v.push(tool_decl::check_reputation_tool());
+                v.push(tool_decl::update_agent_metadata_tool());
+                v.push(tool_decl::approve_plan_tool());
+                v.push(tool_decl::reject_plan_tool());
+                v.push(tool_decl::request_plan_tool());
+                v.push(tool_decl::discover_peers_tool());
+                v.push(tool_decl::call_paid_endpoint_tool());
+                v.push(tool_decl::check_deploy_status_tool());
+                v.push(tool_decl::get_deploy_logs_tool());
+                v.push(tool_decl::trigger_redeploy_tool());
+                v.push(tool_decl::spawn_specialist_tool());
+                v.push(tool_decl::delegate_task_tool());
                 v
             }
             Self::Review => {

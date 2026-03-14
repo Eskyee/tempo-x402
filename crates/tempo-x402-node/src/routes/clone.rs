@@ -8,7 +8,10 @@ use x402_gateway::middleware::{payment_response_header, require_payment};
 
 /// Check that the request comes from localhost or carries a valid HMAC Bearer token.
 /// Returns `Ok(())` if authorized, or `Err(HttpResponse::Forbidden)` if not.
-fn require_local_or_hmac(req: &HttpRequest, hmac_secret: Option<&str>) -> Result<(), HttpResponse> {
+fn require_local_or_hmac(
+    req: &HttpRequest,
+    hmac_secret: Option<&[u8]>,
+) -> Result<(), HttpResponse> {
     let peer_addr = req
         .peer_addr()
         .map(|a| a.ip().to_string())

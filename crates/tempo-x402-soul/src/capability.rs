@@ -461,7 +461,7 @@ pub fn role_guidance(db: &SoulDatabase) -> String {
             } else {
                 "+"
             };
-            lines.push(format!("- {bar} {name}: {:.0}%", score * 100.0));
+            lines.push(format!("- {bar} {name}: {:.0}%", *score * 100.0));
         }
     }
 

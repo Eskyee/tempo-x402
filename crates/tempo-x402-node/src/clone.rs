@@ -87,6 +87,22 @@ impl CloneOrchestrator {
         instance_id: &str,
         parent_address: &str,
     ) -> Result<CloneResult, CloneError> {
+        self.spawn_clone_with_extra_vars(
+            instance_id,
+            parent_address,
+            &std::collections::HashMap::new(),
+        )
+        .await
+    }
+
+    /// Spawn a clone with additional env vars merged on top of `child_env_vars`.
+    /// Used by `/clone/specialist` to inject specialization without thread-unsafe `set_var`.
+    pub async fn spawn_clone_with_extra_vars(
+        &self,
+        instance_id: &str,
+        parent_address: &str,
+        extra_vars: &std::collections::HashMap<String, String>,
+    ) -> Result<CloneResult, CloneError> {
         let service_name = format!("x402-{}", &instance_id[..8]);
 
         tracing::info!(
@@ -101,7 +117,7 @@ impl CloneOrchestrator {
 
         // All subsequent steps run with cleanup-on-failure
         match self
-            .spawn_clone_inner(&service_id, instance_id, parent_address)
+            .spawn_clone_inner(&service_id, instance_id, parent_address, extra_vars)
             .await
         {
             Ok(result) => Ok(result),
@@ -146,6 +162,7 @@ impl CloneOrchestrator {
         service_id: &str,
         instance_id: &str,
         parent_address: &str,
+        extra_vars: &std::collections::HashMap<String, String>,
     ) -> Result<CloneResult, CloneError> {
         // 2. Get default environment
         let env_id = self.railway.get_default_environment().await?;
@@ -183,6 +200,11 @@ impl CloneOrchestrator {
 
         // Inject extra env vars (soul config, API keys, etc.)
         for (key, value) in &self.config.child_env_vars {
+            env_map.insert(key.clone(), value.clone().into());
+        }
+
+        // Inject per-clone overrides (e.g., specialization env vars)
+        for (key, value) in extra_vars {
             env_map.insert(key.clone(), value.clone().into());
         }
 

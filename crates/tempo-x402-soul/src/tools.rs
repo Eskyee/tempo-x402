@@ -346,6 +346,33 @@ impl ToolExecutor {
             }
             "discover_peers" => self.discover_peers().await,
             "clone_self" => self.clone_self().await,
+            "spawn_specialist" => {
+                let specialization = args
+                    .get("specialization")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("generalist")
+                    .to_string();
+                let initial_goal = args
+                    .get("initial_goal")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                self.spawn_specialist(&specialization, initial_goal.as_deref())
+                    .await
+            }
+            "delegate_task" => {
+                let target = args
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let task_desc = args
+                    .get("task_description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let priority = args.get("priority").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+                self.delegate_task(&target, &task_desc, priority).await
+            }
             "call_paid_endpoint" => {
                 let url = args
                     .get("url")
@@ -1999,6 +2026,155 @@ impl ToolExecutor {
             })
         } else {
             Err(format!("clone_self returned {status}: {body}"))
+        }
+    }
+
+    /// Spawn a specialized child node — differentiated clone with a specific focus.
+    /// Calls POST /clone/specialist on the gateway with specialization parameters.
+    async fn spawn_specialist(
+        &self,
+        specialization: &str,
+        initial_goal: Option<&str>,
+    ) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+        let gateway_url =
+            std::env::var("GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let url = format!("{}/clone/specialist", gateway_url.trim_end_matches('/'));
+
+        let mut body = serde_json::json!({
+            "specialization": specialization,
+        });
+        if let Some(goal) = initial_goal {
+            body["initial_goal"] = serde_json::json!(goal);
+        }
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+            .map_err(|e| format!("spawn_specialist request failed: {e}"))?;
+
+        let status = resp.status();
+        let resp_body = resp.text().await.unwrap_or_default();
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if status.is_success() {
+            Ok(ToolResult {
+                stdout: format!(
+                    "Specialist '{}' spawned successfully: {}",
+                    specialization, resp_body
+                ),
+                stderr: String::new(),
+                exit_code: 0,
+                duration_ms,
+            })
+        } else {
+            Err(format!(
+                "spawn_specialist returned {}: {}",
+                status, resp_body
+            ))
+        }
+    }
+
+    /// Delegate a task to a child/peer node by sending a high-priority nudge.
+    /// Discovers the target peer and POSTs to their /soul/nudge endpoint.
+    async fn delegate_task(
+        &self,
+        target: &str,
+        task_description: &str,
+        priority: u32,
+    ) -> Result<ToolResult, String> {
+        let start = std::time::Instant::now();
+
+        if target.is_empty() || task_description.is_empty() {
+            return Err("target and task_description are required".to_string());
+        }
+
+        // Find target URL — could be instance_id, URL, or short name
+        let target_url = if target.starts_with("http") {
+            target.to_string()
+        } else {
+            // Try to find peer by instance_id from discovered peers
+            let gateway_url = std::env::var("GATEWAY_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string());
+            let peers_url = format!("{}/instance/children", gateway_url.trim_end_matches('/'));
+            let client = reqwest::Client::new();
+            let resp = client
+                .get(&peers_url)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await
+                .map_err(|e| format!("failed to list children: {e}"))?;
+            let children: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("failed to parse children: {e}"))?;
+
+            // Search by instance_id or partial match
+            let found = children
+                .as_array()
+                .and_then(|arr| {
+                    arr.iter().find(|c| {
+                        let id = c.get("instance_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let url = c.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        id == target || id.starts_with(target) || url.contains(target)
+                    })
+                })
+                .and_then(|c| c.get("url").and_then(|v| v.as_str()))
+                .map(String::from);
+
+            match found {
+                Some(url) => url,
+                None => {
+                    return Err(format!(
+                        "Could not find peer with identifier '{}'. Use discover_peers first.",
+                        target
+                    ))
+                }
+            }
+        };
+
+        // Send nudge to the target node
+        let nudge_url = format!("{}/soul/nudge", target_url.trim_end_matches('/'));
+        let nudge_body = serde_json::json!({
+            "content": format!("[DELEGATED TASK from parent] {}", task_description),
+            "priority": priority.min(5),
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&nudge_url)
+            .json(&nudge_body)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("delegate_task nudge failed: {e}"))?;
+
+        let status = resp.status();
+        let resp_body = resp.text().await.unwrap_or_default();
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if status.is_success() {
+            Ok(ToolResult {
+                stdout: format!(
+                    "Task delegated to {} (priority {}): {}\nResponse: {}",
+                    target_url,
+                    priority,
+                    task_description.chars().take(80).collect::<String>(),
+                    resp_body,
+                ),
+                stderr: String::new(),
+                exit_code: 0,
+                duration_ms,
+            })
+        } else {
+            Err(format!(
+                "delegate_task to {} returned {}: {}",
+                target_url, status, resp_body
+            ))
         }
     }
 
@@ -3682,6 +3858,63 @@ pub fn trigger_redeploy_tool() -> FunctionDeclaration {
         parameters: serde_json::json!({
             "type": "object",
             "properties": {}
+        }),
+    }
+}
+
+/// Return the spawn_specialist tool declaration (Code mode).
+pub fn spawn_specialist_tool() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "spawn_specialist".to_string(),
+        description: "Spawn a differentiated child node with a specific specialization. \
+            Unlike clone_self (identical copy), this creates a node focused on a particular role: \
+            solver, reviewer, tool-builder, researcher, coordinator, or a custom focus. \
+            The child gets its own personality and initial goals tailored to the specialization. \
+            Use this to build a network of specialized agents that divide and conquer tasks."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "specialization": {
+                    "type": "string",
+                    "description": "The specialization for the child: 'solver', 'reviewer', 'tool-builder', 'researcher', 'coordinator', or a custom description"
+                },
+                "initial_goal": {
+                    "type": "string",
+                    "description": "Optional initial goal to seed the specialist with on first boot"
+                }
+            },
+            "required": ["specialization"]
+        }),
+    }
+}
+
+/// Return the delegate_task tool declaration (Code mode).
+pub fn delegate_task_tool() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "delegate_task".to_string(),
+        description: "Delegate a task to a child or peer node by sending a high-priority nudge. \
+            The target can be an instance_id, URL, or partial name. The task is sent as a \
+            high-priority nudge that the target agent will pick up in its next cycle. \
+            Use this to break large tasks into subtasks and distribute work across the colony."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Instance ID, URL, or partial name of the target node"
+                },
+                "task_description": {
+                    "type": "string",
+                    "description": "Description of the task to delegate"
+                },
+                "priority": {
+                    "type": "integer",
+                    "description": "Priority (1-5, where 5 is highest). Default: 5"
+                }
+            },
+            "required": ["target", "task_description"]
         }),
     }
 }

@@ -540,9 +540,150 @@ pub async fn clone_self(
     })))
 }
 
+/// Request body for spawning a specialist clone.
+#[derive(serde::Deserialize)]
+struct SpawnSpecialistRequest {
+    /// What this specialist focuses on: "solver", "reviewer", "tool-builder",
+    /// "researcher", "coordinator", or a custom description.
+    specialization: String,
+    /// Optional initial goal to seed the specialist with.
+    initial_goal: Option<String>,
+}
+
+/// POST /clone/specialist — spawn a differentiated clone with a specific focus.
+/// Only accessible from localhost or with valid HMAC auth (same as clone_self).
+/// The clone gets extra env vars that shape its personality and initial goals.
+pub async fn clone_specialist(
+    req: HttpRequest,
+    node: web::Data<NodeState>,
+    body: web::Json<SpawnSpecialistRequest>,
+) -> Result<HttpResponse, GatewayError> {
+    // Security: same as clone_self — localhost or HMAC auth
+    let peer_addr = req
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+    let is_localhost =
+        peer_addr == "127.0.0.1" || peer_addr == "::1" || peer_addr.starts_with("100.64.");
+    let has_auth = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|token| {
+            node.gateway
+                .config
+                .hmac_secret
+                .as_deref()
+                .map_or(false, |secret| {
+                    x402::security::constant_time_eq(token.as_bytes(), secret)
+                })
+        })
+        .unwrap_or(false);
+
+    if !is_localhost && !has_auth {
+        return Ok(HttpResponse::Forbidden().json(
+            serde_json::json!({"error": "specialist clone requires localhost or HMAC auth"}),
+        ));
+    }
+
+    let agent = node
+        .agent
+        .as_ref()
+        .ok_or_else(|| GatewayError::Internal("cloning not configured".to_string()))?;
+
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    let self_address = std::env::var("EVM_ADDRESS").unwrap_or_default();
+
+    // Validate specialization
+    let specialization = body.specialization.trim();
+    if specialization.is_empty() || specialization.len() > 200 {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "specialization must be 1-200 characters",
+        })));
+    }
+
+    match db::reserve_child_slot(&node.gateway.db, node.clone_max_children, &instance_id) {
+        Ok(true) => {
+            tracing::info!(
+                instance_id = %instance_id,
+                specialization = %specialization,
+                "Specialist clone: child slot reserved"
+            );
+        }
+        Ok(false) => {
+            return Ok(HttpResponse::Conflict().json(serde_json::json!({
+                "success": false,
+                "error": "clone limit reached",
+            })));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to reserve child slot");
+            return Err(GatewayError::Internal(
+                "failed to reserve clone slot".to_string(),
+            ));
+        }
+    }
+
+    // Build extra env vars for this specialist (thread-safe, no set_var)
+    let mut extra_vars = std::collections::HashMap::new();
+    extra_vars.insert(
+        "SOUL_SPECIALIZATION".to_string(),
+        specialization.to_string(),
+    );
+    if let Some(ref goal) = body.initial_goal {
+        extra_vars.insert("SOUL_INITIAL_GOAL".to_string(), goal.clone());
+    }
+
+    let clone_result = match agent
+        .spawn_clone_with_extra_vars(&instance_id, &self_address, &extra_vars)
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(instance_id = %instance_id, error = %e, "Specialist clone failed");
+            let _ = db::mark_child_failed(&node.gateway.db, &instance_id);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": "clone_failed",
+                "message": format!("Specialist clone failed: {e}"),
+            })));
+        }
+    };
+
+    if let Err(e) = db::update_child_deployment(
+        &node.gateway.db,
+        &instance_id,
+        &clone_result.url,
+        &clone_result.railway_service_id,
+        "deploying",
+        clone_result.branch.as_deref(),
+    ) {
+        tracing::error!(instance_id = %instance_id, error = %e, "Failed to update child deployment");
+    }
+
+    tracing::info!(
+        instance_id = %instance_id,
+        url = %clone_result.url,
+        specialization = %specialization,
+        "Specialist clone spawned successfully"
+    );
+
+    Ok(HttpResponse::Created().json(serde_json::json!({
+        "success": true,
+        "instance_id": instance_id,
+        "url": clone_result.url,
+        "branch": clone_result.branch,
+        "specialization": specialization,
+        "initial_goal": body.initial_goal,
+        "status": "deploying",
+    })))
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/clone", web::post().to(clone_instance))
         .route("/clone/self", web::post().to(clone_self))
+        .route("/clone/specialist", web::post().to(clone_specialist))
         .route("/clone/update-all", web::post().to(update_all))
         .route("/clone/{instance_id}/status", web::get().to(clone_status))
         .route(

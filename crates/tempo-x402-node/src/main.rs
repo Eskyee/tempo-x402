@@ -513,6 +513,14 @@ async fn main() -> std::io::Result<()> {
                     }
                 }
 
+                // Forward specialization env vars if set (for specialist clones creating sub-specialists)
+                if let Ok(spec) = std::env::var("SOUL_SPECIALIZATION") {
+                    child_env_vars.insert("SOUL_SPECIALIZATION".into(), spec);
+                }
+                if let Ok(goal) = std::env::var("SOUL_INITIAL_GOAL") {
+                    child_env_vars.insert("SOUL_INITIAL_GOAL".into(), goal);
+                }
+
                 // NOTE: Do NOT set FACILITATOR_PRIVATE_KEY, EVM_ADDRESS, or
                 // FACILITATOR_SHARED_SECRET — AUTO_BOOTSTRAP generates unique
                 // ones per node via identity bootstrap. Setting them here would

@@ -25,7 +25,7 @@ use crate::prompts;
 use crate::tool_registry::ToolRegistry;
 use crate::tools::{self, ToolExecutor};
 use crate::world_model::{Belief, BeliefDomain, Confidence, Goal, ModelUpdate};
-use crate::{capability, feedback};
+use crate::{capability, feedback, validation};
 
 /// Simplified adaptive pacing for plan-driven execution.
 struct AdaptivePacer {
@@ -636,20 +636,51 @@ impl ThinkingLoop {
             };
             let prediction = crate::brain::predict_step(&self.db, &step, &brain_ctx);
 
-            // Log brain prediction with warning if likely to fail
-            let brain_trained = {
-                let brain = crate::brain::load_brain(&self.db);
-                brain.train_steps >= 50
-            };
-            if brain_trained && prediction.success_prob < 0.2 {
-                tracing::warn!(
-                    plan_id = %plan.id,
-                    step = plan.current_step,
-                    step_type = %step_summary,
-                    success_prob = format!("{:.1}%", prediction.success_prob * 100.0),
-                    likely_error = ?prediction.likely_error,
-                    "Brain predicts HIGH FAILURE RISK for this step"
+            // ── Brain-gated execution ──
+            // Instead of just logging brain predictions, actually gate execution.
+            // If brain has enough training data and predicts very low success,
+            // skip the step and force a replan.
+            let (should_execute, gate_reason) =
+                validation::brain_gate_step(&self.db, &step, &prediction);
+
+            if let Some(ref reason) = gate_reason {
+                if should_execute {
+                    tracing::warn!(
+                        plan_id = %plan.id,
+                        step = plan.current_step,
+                        step_type = %step_summary,
+                        "{reason}"
+                    );
+                } else {
+                    tracing::warn!(
+                        plan_id = %plan.id,
+                        step = plan.current_step,
+                        step_type = %step_summary,
+                        "Brain GATED step — forcing replan: {reason}"
+                    );
+                }
+            }
+
+            if !should_execute {
+                // Record the gate event as a capability failure
+                capability::record_step_result(
+                    &self.db,
+                    &step,
+                    false,
+                    &format!(
+                        "brain-gated: {}",
+                        gate_reason.as_deref().unwrap_or("low confidence")
+                    ),
                 );
+                // Force replan
+                return self
+                    .handle_step_failure(
+                        llm,
+                        &mut plan,
+                        &step_summary,
+                        &format!("Brain-gated: {}", gate_reason.unwrap_or_default()),
+                    )
+                    .await;
             }
 
             tracing::info!(
@@ -714,6 +745,23 @@ impl ThinkingLoop {
                     tracing::warn!(step = %step_summary, error = %error, consecutive_failures, "Step failed");
                     // Track capability failure
                     capability::record_step_result(&self.db, &step, false, &error);
+
+                    // Record failure chain for causal reasoning
+                    let goal_desc = self
+                        .db
+                        .get_goal(&plan.goal_id)
+                        .ok()
+                        .flatten()
+                        .map(|g| g.description.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    validation::record_failure_chain(
+                        &self.db,
+                        &goal_desc,
+                        &step,
+                        &error,
+                        plan.replan_count,
+                    );
+
                     return self
                         .handle_step_failure(llm, &mut plan, &step_summary, &error)
                         .await;
@@ -722,6 +770,23 @@ impl ThinkingLoop {
                     tracing::info!(step = %step_summary, reason = %reason, "Step needs replan");
                     // Track capability failure
                     capability::record_step_result(&self.db, &step, false, &reason);
+
+                    // Record failure chain for causal reasoning
+                    let goal_desc = self
+                        .db
+                        .get_goal(&plan.goal_id)
+                        .ok()
+                        .flatten()
+                        .map(|g| g.description.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    validation::record_failure_chain(
+                        &self.db,
+                        &goal_desc,
+                        &step,
+                        &reason,
+                        plan.replan_count,
+                    );
+
                     return self
                         .handle_step_failure(llm, &mut plan, &step_summary, &reason)
                         .await;
@@ -949,10 +1014,16 @@ impl ThinkingLoop {
         let recent_errors = self.get_recent_errors();
         let own_experience = feedback::consult_experience(&self.db, &goal.description);
         let peer_lessons = feedback::collect_peer_lessons(&self.db);
-        let experience = if peer_lessons.is_empty() {
-            own_experience
-        } else {
-            format!("{own_experience}\n\n{peer_lessons}")
+        let failure_chains = validation::failure_chain_summary(&self.db);
+        let experience = {
+            let mut exp = own_experience;
+            if !peer_lessons.is_empty() {
+                exp = format!("{exp}\n\n{peer_lessons}");
+            }
+            if !failure_chains.is_empty() {
+                exp = format!("{exp}\n\n{failure_chains}");
+            }
+            exp
         };
         let cap_guidance = capability::capability_guidance(&self.db);
         let role_guide = capability::role_guidance(&self.db);
@@ -990,6 +1061,59 @@ impl ThinkingLoop {
                     tracing::warn!("Plan sanitization removed all steps — skipping plan creation");
                     return Ok(None);
                 }
+
+                // ── Mechanical plan validation ──
+                // Hard checks that reject bad plans BEFORE execution.
+                // This is server-side enforcement, not prompt injection.
+                let validation = validation::validate_plan(&steps, &self.db, &goal.description);
+                if !validation.is_valid() {
+                    let rejection = validation.rejection_reason();
+                    tracing::warn!(
+                        goal_id = %goal.id,
+                        violations = validation.violations.len(),
+                        "Plan REJECTED by mechanical validation"
+                    );
+                    for v in &validation.violations {
+                        tracing::info!(
+                            rule = v.rule,
+                            severity = ?v.severity,
+                            step = ?v.step_index,
+                            detail = %v.detail,
+                            "Validation violation"
+                        );
+                    }
+                    // Record the rejection as a thought so it's visible
+                    let _ = self.db.insert_thought(&Thought {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        thought_type: ThoughtType::Reasoning,
+                        content: format!("Plan rejected by validation:\n{}", rejection,),
+                        context: None,
+                        created_at: chrono::Utc::now().timestamp(),
+                        salience: None,
+                        memory_tier: None,
+                        strength: None,
+                    });
+                    // Inject rejection reason as a nudge so the next plan creation
+                    // sees what went wrong and fixes it
+                    let _ = self.db.insert_nudge(
+                        "system",
+                        &format!("Previous plan was rejected: {}", rejection),
+                        3,
+                    );
+                    return Ok(None);
+                }
+
+                // Log soft warnings
+                for v in &validation.violations {
+                    if v.severity == validation::Severity::Soft {
+                        tracing::info!(
+                            rule = v.rule,
+                            detail = %v.detail,
+                            "Plan validation warning (soft)"
+                        );
+                    }
+                }
+
                 let now = chrono::Utc::now().timestamp();
                 let initial_status = if self.config.require_plan_approval {
                     PlanStatus::PendingApproval
@@ -1064,26 +1188,46 @@ impl ThinkingLoop {
         let total_goals_ever = self.db.count_all_goals().unwrap_or(0);
         if total_goals_ever == 0 {
             let now = chrono::Utc::now().timestamp();
-            let seed_goals = [
-                (
-                    "Research your own codebase: read the main thinking loop \
-                     (crates/tempo-x402-soul/src/thinking.rs), the prompt system \
-                     (crates/tempo-x402-soul/src/prompts.rs), and the tool executor \
-                     (crates/tempo-x402-soul/src/tools.rs). Understand how you think, \
-                     plan, and act. Record what you learn as beliefs — what are your \
-                     strengths, weaknesses, and opportunities for self-improvement?",
-                    "At least 3 beliefs recorded about own architecture, capabilities, and limitations",
-                    5u32,
-                ),
-                (
+
+            // If this is a specialist with an initial goal, seed that instead of defaults
+            let mut seed_goals: Vec<(&str, &str, u32)> = Vec::new();
+            let initial_goal_storage;
+            if let Some(ref goal) = self.config.initial_goal {
+                initial_goal_storage = goal.clone();
+                seed_goals.push((
+                    &initial_goal_storage,
+                    "Task completed successfully as described",
+                    5,
+                ));
+            }
+
+            // Always include codebase research as the first or second goal
+            seed_goals.push((
+                "Research your own codebase: read the main thinking loop \
+                 (crates/tempo-x402-soul/src/thinking.rs), the prompt system \
+                 (crates/tempo-x402-soul/src/prompts.rs), and the tool executor \
+                 (crates/tempo-x402-soul/src/tools.rs). Understand how you think, \
+                 plan, and act. Record what you learn as beliefs — what are your \
+                 strengths, weaknesses, and opportunities for self-improvement?",
+                "At least 3 beliefs recorded about own architecture, capabilities, and limitations",
+                if self.config.initial_goal.is_some() {
+                    4
+                } else {
+                    5
+                },
+            ));
+
+            if self.config.initial_goal.is_none() {
+                seed_goals.push((
                     "Discover sibling agents using discover_peers and call one of their paid \
                      endpoints using call_peer to verify the agent-to-agent payment flow. \
                      Check what endpoints they offer, pick one, and make a real paid request. \
                      Record the result as a belief about inter-agent commerce.",
                     "discover_peers returns at least one peer with endpoints, call_peer succeeds on one of them",
-                    4u32,
-                ),
-            ];
+                    4,
+                ));
+            }
+
             for (desc, criteria, priority) in &seed_goals {
                 let goal = Goal {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -1100,7 +1244,11 @@ impl ThinkingLoop {
                 };
                 let _ = self.db.insert_goal(&goal);
             }
-            tracing::info!("First boot — seeded 2 starter goals");
+            tracing::info!(
+                count = seed_goals.len(),
+                specialist = ?self.config.specialization,
+                "First boot — seeded starter goals"
+            );
             return Ok(());
         }
 
@@ -1216,10 +1364,16 @@ impl ThinkingLoop {
         let fitness = crate::fitness::FitnessScore::load_current(&self.db);
         let own_experience = feedback::consult_experience(&self.db, "");
         let peer_lessons = feedback::collect_peer_lessons(&self.db);
-        let experience = if peer_lessons.is_empty() {
-            own_experience
-        } else {
-            format!("{own_experience}\n\n{peer_lessons}")
+        let failure_chains = validation::failure_chain_summary(&self.db);
+        let experience = {
+            let mut exp = own_experience;
+            if !peer_lessons.is_empty() {
+                exp = format!("{exp}\n\n{peer_lessons}");
+            }
+            if !failure_chains.is_empty() {
+                exp = format!("{exp}\n\n{failure_chains}");
+            }
+            exp
         };
         let cap_guidance = capability::capability_guidance(&self.db);
         let benchmark_summary = crate::benchmark::benchmark_summary_for_prompt(&self.db);
@@ -1435,6 +1589,20 @@ impl ThinkingLoop {
                 &format!("{}: {}", step_desc, error),
             );
 
+            // Extract and store durable behavioral rules from this failure
+            if let Ok(recent) = self.db.get_recent_plan_outcomes(1) {
+                if let Some(outcome) = recent.first() {
+                    let new_rules = validation::extract_durable_rules(outcome);
+                    if !new_rules.is_empty() {
+                        validation::merge_durable_rules(&self.db, &new_rules);
+                        tracing::info!(
+                            count = new_rules.len(),
+                            "Extracted durable rules from plan failure"
+                        );
+                    }
+                }
+            }
+
             // Write failure to persistent memory so we don't repeat the same mistake
             let goal_desc = self
                 .db
@@ -1484,18 +1652,32 @@ impl ThinkingLoop {
         match llm.think(system, &prompt).await {
             Ok(response) => {
                 let new_steps = Self::sanitize_plan_steps(self.parse_plan_steps(&response)?);
-                // Replace remaining steps with new steps
-                plan.steps.truncate(plan.current_step);
-                plan.steps.extend(new_steps);
-                plan.replan_count += 1;
-                self.db.update_plan(plan)?;
 
-                tracing::info!(
-                    plan_id = %plan.id,
-                    replan_count = plan.replan_count,
-                    new_total_steps = plan.steps.len(),
-                    "Plan replanned"
-                );
+                // Validate replanned steps too
+                let goal_desc = goal.description.clone();
+                let replan_validation = validation::validate_plan(&new_steps, &self.db, &goal_desc);
+                if !replan_validation.is_valid() {
+                    tracing::warn!(
+                        plan_id = %plan.id,
+                        violations = replan_validation.violations.len(),
+                        "Replan also rejected by validation — incrementing replan count"
+                    );
+                    plan.replan_count += 1;
+                    self.db.update_plan(plan)?;
+                } else {
+                    // Replace remaining steps with new steps
+                    plan.steps.truncate(plan.current_step);
+                    plan.steps.extend(new_steps);
+                    plan.replan_count += 1;
+                    self.db.update_plan(plan)?;
+
+                    tracing::info!(
+                        plan_id = %plan.id,
+                        replan_count = plan.replan_count,
+                        new_total_steps = plan.steps.len(),
+                        "Plan replanned"
+                    );
+                }
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Replan failed — marking plan as failed");

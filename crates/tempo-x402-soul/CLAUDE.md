@@ -33,6 +33,7 @@ No dependency on gateway/identity/node. Communicates via `NodeObserver` trait �
 | `plan.rs` | Plan types (PlanStep, Plan, PlanStatus), PlanExecutor — deterministic step execution |
 | `thinking.rs` | Main plan-driven loop: observe → plan → execute → advance |
 | `prompts.rs` | 5 focused prompt builders: goal_creation, planning, code_generation, replan, reflection |
+| `validation.rs` | **Plan validation**: mechanical plan checks (read-before-edit, cargo-check-before-commit, protected files, durable rules, brain gating, failure chains) — server-side enforcement, not prompt injection |
 | `feedback.rs` | **Feedback loop**: structured plan outcomes, error classification, lesson extraction, experience consultation |
 | `capability.rs` | **Capability tracking**: per-skill success rates, capability profiles, guidance for prompts |
 | `benchmark.rs` | **HumanEval benchmark**: fetches 164 problems from HuggingFace, runs via LLM + Python tests, tracks pass@1 vs published baselines |

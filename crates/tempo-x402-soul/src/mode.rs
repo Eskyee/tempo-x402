@@ -105,6 +105,8 @@ impl AgentMode {
                 v.push(tools::check_deploy_status_tool());
                 v.push(tools::get_deploy_logs_tool());
                 v.push(tools::trigger_redeploy_tool());
+                v.push(tools::spawn_specialist_tool());
+                v.push(tools::delegate_task_tool());
                 v
             }
             Self::Review => {

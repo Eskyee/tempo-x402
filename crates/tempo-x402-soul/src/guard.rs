@@ -18,6 +18,7 @@ const PROTECTED_PREFIXES: &[&str] = &[
     "crates/tempo-x402-soul/src/feedback.rs",
     "crates/tempo-x402-soul/src/benchmark.rs",
     "crates/tempo-x402-soul/src/elo.rs",
+    "crates/tempo-x402-soul/src/validation.rs",
     "crates/tempo-x402-identity/",
     "crates/tempo-x402-node/src/routes/",
     "crates/tempo-x402-node/src/main.rs",
@@ -136,6 +137,7 @@ mod tests {
         assert!(is_protected("crates/tempo-x402-soul/src/feedback.rs"));
         assert!(is_protected("crates/tempo-x402-soul/src/benchmark.rs"));
         assert!(is_protected("crates/tempo-x402-soul/src/elo.rs"));
+        assert!(is_protected("crates/tempo-x402-soul/src/validation.rs"));
     }
 
     #[test]

@@ -103,7 +103,9 @@ impl Capability {
             | PlanStep::ScreenType { .. }
             | PlanStep::BrowseUrl { .. } => Self::ShellExec, // computer use maps to shell capability for now
             PlanStep::ReviewPeerPR { .. } => Self::PeerReview,
-            PlanStep::CloneSelf { .. } => Self::PeerCall,
+            PlanStep::CloneSelf { .. }
+            | PlanStep::SpawnSpecialist { .. }
+            | PlanStep::DelegateTask { .. } => Self::PeerCall,
         }
     }
 }

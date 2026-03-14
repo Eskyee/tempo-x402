@@ -67,7 +67,33 @@ pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
         AgentMode::Review => REVIEW_INSTRUCTIONS,
     };
 
-    format!("{base}{lineage}{coding_context}\n\n{mode_instructions}")
+    let specialization_context = match &config.specialization {
+        Some(spec) => {
+            let focus = match spec.as_str() {
+                "solver" => "You are a SOLVER specialist. Your primary focus is solving coding problems, \
+                    fixing bugs, and implementing features. Prioritize code generation, editing, and \
+                    passing tests over other activities.",
+                "reviewer" => "You are a REVIEWER specialist. Your primary focus is reviewing code, \
+                    analyzing PRs, finding bugs in peers' code, and ensuring code quality. \
+                    Prioritize review_peer_pr and code analysis over writing new code.",
+                "tool-builder" => "You are a TOOL-BUILDER specialist. Your primary focus is creating \
+                    new tools, script endpoints, and capabilities that other agents can use. \
+                    Prioritize creating genuinely useful, unique endpoints and tools.",
+                "researcher" => "You are a RESEARCHER specialist. Your primary focus is reading code, \
+                    understanding architectures, exploring new approaches, and documenting discoveries. \
+                    Prioritize investigation and knowledge-building over code changes.",
+                "coordinator" => "You are a COORDINATOR specialist. Your primary focus is delegating tasks \
+                    to other agents, spawning specialists for subtasks, and ensuring the colony works \
+                    efficiently together. Prioritize spawn_specialist and delegate_task over direct coding.",
+                custom => &format!("You are a specialist with focus: {custom}. \
+                    Prioritize activities aligned with this specialization."),
+            };
+            format!("\n\n## Specialization\n{focus}")
+        }
+        None => String::new(),
+    };
+
+    format!("{base}{lineage}{coding_context}{specialization_context}\n\n{mode_instructions}")
 }
 
 // ── Plan-driven prompt builders ─────────────────────────────────────
@@ -313,7 +339,7 @@ pub fn goal_creation_prompt(
          - {endpoint_rule}\n\
          - Your primary work is IMPROVING YOUR OWN CODEBASE — read source files, find bugs, optimize, commit\n\
          - WRITABLE files: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs, coding.rs, mode.rs, world_model.rs, and crates/tempo-x402/src/*\n\
-         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, benchmark.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
+         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, benchmark.rs, validation.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
          - Good goals: {good_goals}\n\
          - Bad goals: create an endpoint similar to one that already exists, create an empty GitHub repo, retry the same failed approach, trivial variations of existing work, goals requiring peers when none exist\n\
          - Do NOT create GitHub repos unless you have REAL CODE to put in them (not just a README)\n\
@@ -519,7 +545,9 @@ pub fn planning_prompt(
          - {{\"type\": \"screen_type\", \"text\": \"hello\", \"store_as\": \"typed\"}}  (type text via keyboard)\n\
          - {{\"type\": \"browse_url\", \"url\": \"https://...\", \"store_as\": \"page\"}}  (open URL in browser)\n\
          - {{\"type\": \"review_peer_pr\", \"pr_number\": 42, \"store_as\": \"review\"}}  (peer review: fetch diff, LLM analyzes, approve/reject — ACADEMIC PEER REVIEW)\n\
-         - {{\"type\": \"clone_self\", \"store_as\": \"clone\"}}  (clone yourself — creates a new peer node on Railway automatically, NO payment needed)\n\n\
+         - {{\"type\": \"clone_self\", \"store_as\": \"clone\"}}  (clone yourself — creates a new peer node on Railway automatically, NO payment needed)\n\
+         - {{\"type\": \"spawn_specialist\", \"specialization\": \"solver\", \"initial_goal\": \"...\", \"store_as\": \"child\"}}  (spawn a DIFFERENTIATED clone with a specific role: solver/reviewer/tool-builder/researcher/coordinator — the child gets its own personality and goals)\n\
+         - {{\"type\": \"delegate_task\", \"target\": \"instance-id-or-url\", \"task_description\": \"...\", \"priority\": 5, \"store_as\": \"result\"}}  (send a task to a child/peer as a high-priority nudge — break big tasks into subtasks)\n\n\
          LLM-assisted:\n\
          - {{\"type\": \"generate_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
          - {{\"type\": \"edit_code\", \"file_path\": \"...\", \"description\": \"...\", \"context_keys\": [\"key\"]}}\n\
@@ -535,7 +563,7 @@ pub fn planning_prompt(
          - Prefer edit_code over generate_code for existing files\n\
          - PROTECTED files that CANNOT be modified (writes WILL fail):\n\
            tools.rs, llm.rs, db.rs, error.rs, guard.rs, config.rs, tool_registry.rs,\n\
-           brain.rs, computer_use.rs, capability.rs, feedback.rs, benchmark.rs, elo.rs,\n\
+           brain.rs, computer_use.rs, capability.rs, feedback.rs, benchmark.rs, elo.rs, validation.rs,\n\
            ALL files in identity/, node/routes/, gateway/, .github/, and ALL Cargo.toml/Cargo.lock\n\
          - Files you CAN edit: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs,\n\
            coding.rs, mode.rs, neuroplastic.rs, persistent_memory.rs, world_model.rs,\n\

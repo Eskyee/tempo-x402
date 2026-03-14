@@ -76,6 +76,7 @@ pub mod prompts;
 pub mod thinking;
 pub mod tool_registry;
 pub mod tools;
+pub mod validation;
 pub mod world_model;
 
 pub use chat::{handle_chat, ChatReply};

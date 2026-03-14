@@ -1,0 +1,843 @@
+//! Plan validation: hard mechanical checks that reject bad plans before execution.
+//!
+//! This is the most impactful single change for genuine recursive self-improvement.
+//! Instead of relying on prompt injection ("please don't do X"), we enforce rules
+//! mechanically at the Rust level. The LLM cannot override these checks.
+//!
+//! ## Design Principles
+//!
+//! 1. **Server-side enforcement > prompt injection** — LLMs ignore instructions.
+//!    Mechanical checks cannot be bypassed.
+//! 2. **Rules derived from data** — Durable rules are extracted from plan outcomes
+//!    and stored in the DB. New plans are checked against them.
+//! 3. **Fail fast** — Reject bad plans at creation time, not after 5 failed steps.
+//! 4. **Explainable rejections** — Every rejection includes a human-readable reason
+//!    that feeds back into the LLM's next attempt.
+
+use crate::db::SoulDatabase;
+use crate::feedback::PlanOutcome;
+use crate::plan::PlanStep;
+
+/// Result of plan validation.
+#[derive(Debug)]
+pub struct ValidationResult {
+    pub valid: bool,
+    pub violations: Vec<PlanViolation>,
+}
+
+/// A specific rule violation found in a plan.
+#[derive(Debug, Clone)]
+pub struct PlanViolation {
+    pub rule: &'static str,
+    pub severity: Severity,
+    pub detail: String,
+    /// Which step index triggered the violation (if applicable).
+    pub step_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Severity {
+    /// Plan must be rejected.
+    Hard,
+    /// Warning — plan proceeds but violation is logged.
+    Soft,
+}
+
+impl ValidationResult {
+    pub fn is_valid(&self) -> bool {
+        !self.violations.iter().any(|v| v.severity == Severity::Hard)
+    }
+
+    /// Format violations for injection into replan prompt.
+    pub fn rejection_reason(&self) -> String {
+        let hard: Vec<&PlanViolation> = self
+            .violations
+            .iter()
+            .filter(|v| v.severity == Severity::Hard)
+            .collect();
+        if hard.is_empty() {
+            return String::new();
+        }
+        let mut lines = vec!["PLAN REJECTED — fix these issues:".to_string()];
+        for v in &hard {
+            let step_info = v
+                .step_index
+                .map(|i| format!(" (step {})", i + 1))
+                .unwrap_or_default();
+            lines.push(format!("- [{}]{}: {}", v.rule, step_info, v.detail));
+        }
+        lines.join("\n")
+    }
+}
+
+/// Validate a plan against mechanical rules. Returns validation result.
+/// Hard violations mean the plan must be rejected and replanned.
+pub fn validate_plan(
+    steps: &[PlanStep],
+    db: &SoulDatabase,
+    goal_description: &str,
+) -> ValidationResult {
+    let mut violations = Vec::new();
+
+    // ── Rule 1: No editing without reading first ──
+    // Plans that edit/generate files without reading them first almost always fail.
+    check_read_before_write(steps, &mut violations);
+
+    // ── Rule 2: No commit without cargo_check ──
+    // Commits without validation always break the build.
+    check_cargo_before_commit(steps, &mut violations);
+
+    // ── Rule 3: Plans must start with investigation ──
+    // Plans that jump straight to editing without understanding context fail.
+    check_starts_with_investigation(steps, &mut violations);
+
+    // ── Rule 4: No retrying recently failed approaches ──
+    // Check if this goal+approach combination has failed before.
+    check_not_retrying_failures(steps, db, goal_description, &mut violations);
+
+    // ── Rule 5: No editing protected files (redundant with sanitize but explicit) ──
+    check_no_protected_files(steps, &mut violations);
+
+    // ── Rule 6: Check durable rules from DB ──
+    check_durable_rules(steps, db, &mut violations);
+
+    // ── Rule 7: Plans with low-capability steps should include fallbacks ──
+    check_capability_feasibility(steps, db, &mut violations);
+
+    // ── Rule 8: Minimum plan quality ──
+    check_plan_quality(steps, &mut violations);
+
+    ValidationResult {
+        valid: violations.iter().all(|v| v.severity != Severity::Hard),
+        violations,
+    }
+}
+
+/// Rule 1: Every edit_code/generate_code step must have a corresponding read_file
+/// for the same file earlier in the plan.
+fn check_read_before_write(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    let mut files_read: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (i, step) in steps.iter().enumerate() {
+        match step {
+            PlanStep::ReadFile { path, .. } => {
+                files_read.insert(normalize_path(path));
+            }
+            PlanStep::EditCode { file_path, .. } => {
+                let normalized = normalize_path(file_path);
+                if !files_read.contains(&normalized) {
+                    violations.push(PlanViolation {
+                        rule: "read-before-edit",
+                        severity: Severity::Hard,
+                        detail: format!(
+                            "edit_code on '{}' without reading it first. Add a read_file step before this.",
+                            file_path
+                        ),
+                        step_index: Some(i),
+                    });
+                }
+            }
+            PlanStep::GenerateCode { file_path, .. } => {
+                // GenerateCode on existing files should read first.
+                // For new files, this is fine — but we can't know at validation time
+                // if the file exists. Use a soft warning.
+                let normalized = normalize_path(file_path);
+                if !files_read.contains(&normalized) && looks_like_existing_file(file_path) {
+                    violations.push(PlanViolation {
+                        rule: "read-before-generate",
+                        severity: Severity::Soft,
+                        detail: format!(
+                            "generate_code on '{}' without reading it first. If the file exists, read it first to avoid overwriting.",
+                            file_path
+                        ),
+                        step_index: Some(i),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rule 2: If there's a commit step, there must be a cargo_check step after the last
+/// code-modifying step and before the commit.
+fn check_cargo_before_commit(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    let mut last_code_step: Option<usize> = None;
+    let mut has_cargo_check_after_last_code = false;
+
+    for (i, step) in steps.iter().enumerate() {
+        match step {
+            PlanStep::EditCode { .. } | PlanStep::GenerateCode { .. } => {
+                last_code_step = Some(i);
+                has_cargo_check_after_last_code = false;
+            }
+            PlanStep::CargoCheck { .. } => {
+                has_cargo_check_after_last_code = true;
+            }
+            PlanStep::Commit { .. } => {
+                if last_code_step.is_some() && !has_cargo_check_after_last_code {
+                    violations.push(PlanViolation {
+                        rule: "cargo-check-before-commit",
+                        severity: Severity::Hard,
+                        detail: "Commit without cargo_check after code changes. Add a cargo_check step before committing.".to_string(),
+                        step_index: Some(i),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rule 3: The first step must be investigative (read_file, list_dir, search_code,
+/// check_self, discover_peers, or think).
+fn check_starts_with_investigation(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    if steps.is_empty() {
+        return;
+    }
+    let first = &steps[0];
+    let is_investigative = matches!(
+        first,
+        PlanStep::ReadFile { .. }
+            | PlanStep::ListDir { .. }
+            | PlanStep::SearchCode { .. }
+            | PlanStep::CheckSelf { .. }
+            | PlanStep::Think { .. }
+            | PlanStep::DiscoverPeers { .. }
+            | PlanStep::CallPeer { .. }
+    );
+    // Also allow discover_peers and call_peer as first steps for coordination goals
+    let is_coordination = matches!(first, PlanStep::RunShell { command, .. } if {
+        let cmd = command.to_lowercase();
+        cmd.contains("discover") || cmd.contains("peer")
+    });
+
+    if !is_investigative && !is_coordination {
+        violations.push(PlanViolation {
+            rule: "investigate-first",
+            severity: Severity::Soft,
+            detail: format!(
+                "Plan starts with {} instead of investigation. Start by reading/listing/searching to understand context.",
+                first.summary()
+            ),
+            step_index: Some(0),
+        });
+    }
+}
+
+/// Rule 4: Check if a similar goal recently failed with the same approach.
+fn check_not_retrying_failures(
+    steps: &[PlanStep],
+    db: &SoulDatabase,
+    goal_description: &str,
+    violations: &mut Vec<PlanViolation>,
+) {
+    let recent_outcomes = match db.get_recent_plan_outcomes(20) {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+
+    // Find recent failures with similar goals
+    let goal_lower = goal_description.to_lowercase();
+    let goal_words: std::collections::HashSet<&str> = goal_lower.split_whitespace().collect();
+
+    for outcome in &recent_outcomes {
+        if outcome.status != "failed" {
+            continue;
+        }
+        // Check similarity
+        let desc_lower = outcome.goal_description.to_lowercase();
+        let outcome_words: std::collections::HashSet<&str> =
+            desc_lower.split_whitespace().collect();
+        let intersection = goal_words
+            .iter()
+            .filter(|w| outcome_words.contains(*w))
+            .count();
+        let union = goal_words.len() + outcome_words.len() - intersection;
+        let similarity = if union > 0 {
+            intersection as f64 / union as f64
+        } else {
+            0.0
+        };
+
+        // High similarity to a recent failure
+        if similarity > 0.6 {
+            // Check if the plan approach is also similar (same step types in same order)
+            let current_step_types: Vec<String> =
+                steps.iter().take(5).map(|s| s.summary()).collect();
+            let failed_step_types = &outcome.steps_succeeded;
+            let step_overlap = current_step_types
+                .iter()
+                .filter(|s| failed_step_types.iter().any(|f| f.contains(s.as_str())))
+                .count();
+
+            if step_overlap > 2 {
+                violations.push(PlanViolation {
+                    rule: "no-retry-same-approach",
+                    severity: Severity::Hard,
+                    detail: format!(
+                        "This plan resembles a recently failed plan for '{}' (similarity: {:.0}%, {} step overlap). The previous failure was: {}. Try a fundamentally different approach.",
+                        outcome.goal_description.chars().take(60).collect::<String>(),
+                        similarity * 100.0,
+                        step_overlap,
+                        outcome.error_message.as_deref().unwrap_or("unknown"),
+                    ),
+                    step_index: None,
+                });
+                break;
+            }
+        }
+    }
+}
+
+/// Rule 5: No steps that target protected files.
+fn check_no_protected_files(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    for (i, step) in steps.iter().enumerate() {
+        let path = match step {
+            PlanStep::EditCode { file_path, .. } => Some(file_path.as_str()),
+            PlanStep::GenerateCode { file_path, .. } => Some(file_path.as_str()),
+            _ => None,
+        };
+        if let Some(p) = path {
+            if crate::guard::is_protected(p) {
+                violations.push(PlanViolation {
+                    rule: "protected-file",
+                    severity: Severity::Hard,
+                    detail: format!("'{}' is a protected file and cannot be modified.", p),
+                    step_index: Some(i),
+                });
+            }
+        }
+    }
+}
+
+/// Rule 6: Check durable behavioral rules stored in the DB.
+/// These are mechanically-enforced rules extracted from past reflections.
+fn check_durable_rules(steps: &[PlanStep], db: &SoulDatabase, violations: &mut Vec<PlanViolation>) {
+    let rules = match db.get_state("durable_rules") {
+        Ok(Some(json_str)) => match serde_json::from_str::<Vec<DurableRule>>(&json_str) {
+            Ok(r) => r,
+            Err(_) => return,
+        },
+        _ => return,
+    };
+
+    for rule in &rules {
+        if rule.check_type == "step_type_blocked" {
+            // Block specific step types
+            for (i, step) in steps.iter().enumerate() {
+                let summary = step.summary().to_lowercase();
+                if summary.contains(&rule.pattern) {
+                    violations.push(PlanViolation {
+                        rule: "durable-rule",
+                        severity: Severity::Hard,
+                        detail: format!("Durable rule '{}': {}", rule.name, rule.reason),
+                        step_index: Some(i),
+                    });
+                }
+            }
+        } else if rule.check_type == "goal_pattern_blocked" {
+            // This is checked at goal creation, not plan validation
+        } else if rule.check_type == "file_blocked" {
+            // Block writes to specific files (beyond guard.rs protections)
+            for (i, step) in steps.iter().enumerate() {
+                let path = match step {
+                    PlanStep::EditCode { file_path, .. } => Some(file_path.as_str()),
+                    PlanStep::GenerateCode { file_path, .. } => Some(file_path.as_str()),
+                    _ => None,
+                };
+                if let Some(p) = path {
+                    if p.contains(&rule.pattern) {
+                        violations.push(PlanViolation {
+                            rule: "durable-rule-file",
+                            severity: Severity::Hard,
+                            detail: format!(
+                                "Durable rule '{}': {} (file: {})",
+                                rule.name, rule.reason, p
+                            ),
+                            step_index: Some(i),
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Rule 7: Check if any step type has a very low success rate (< 20%).
+/// If so, warn — the plan is likely to fail at that step.
+fn check_capability_feasibility(
+    steps: &[PlanStep],
+    db: &SoulDatabase,
+    violations: &mut Vec<PlanViolation>,
+) {
+    let profile = crate::capability::compute_profile(db);
+
+    for (i, step) in steps.iter().enumerate() {
+        let cap = crate::capability::Capability::from_step(step);
+        if let Some(cap_stat) = profile
+            .capabilities
+            .iter()
+            .find(|s| s.capability == cap.as_str())
+        {
+            // Only flag if we have enough data to be confident
+            if cap_stat.total >= 10 && cap_stat.success_rate < 0.2 {
+                violations.push(PlanViolation {
+                    rule: "low-capability",
+                    severity: Severity::Soft,
+                    detail: format!(
+                        "Step '{}' uses capability '{}' which has only {:.0}% success rate ({} attempts). Consider an alternative approach.",
+                        step.summary(),
+                        cap_stat.capability,
+                        cap_stat.success_rate * 100.0,
+                        cap_stat.total,
+                    ),
+                    step_index: Some(i),
+                });
+            }
+        }
+    }
+}
+
+/// Rule 8: Basic plan quality checks.
+fn check_plan_quality(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    // Empty plans
+    if steps.is_empty() {
+        violations.push(PlanViolation {
+            rule: "non-empty",
+            severity: Severity::Hard,
+            detail: "Plan has no steps.".to_string(),
+            step_index: None,
+        });
+        return;
+    }
+
+    // Plans with only think steps (no action)
+    let non_think = steps
+        .iter()
+        .filter(|s| !matches!(s, PlanStep::Think { .. }))
+        .count();
+    if non_think == 0 && steps.len() > 1 {
+        violations.push(PlanViolation {
+            rule: "has-action",
+            severity: Severity::Soft,
+            detail: "Plan contains only think steps with no concrete actions.".to_string(),
+            step_index: None,
+        });
+    }
+
+    // Plans that are just read-read-read with no edits or actions (busy work)
+    let reads_only = steps.iter().all(|s| {
+        matches!(
+            s,
+            PlanStep::ReadFile { .. }
+                | PlanStep::ListDir { .. }
+                | PlanStep::SearchCode { .. }
+                | PlanStep::Think { .. }
+        )
+    });
+    if reads_only && steps.len() > 3 {
+        violations.push(PlanViolation {
+            rule: "not-just-reads",
+            severity: Severity::Soft,
+            detail: "Plan only reads/searches with no concrete actions. Consider what you'll actually DO with the information.".to_string(),
+            step_index: None,
+        });
+    }
+}
+
+// ── Durable Rules System ──────────────────────────────────────────────
+
+/// A durable behavioral rule enforced mechanically.
+/// Stored as JSON array in soul_state key "durable_rules".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DurableRule {
+    pub name: String,
+    /// "step_type_blocked", "goal_pattern_blocked", "file_blocked"
+    pub check_type: String,
+    /// Pattern to match against (lowercase).
+    pub pattern: String,
+    /// Human-readable reason for the rule.
+    pub reason: String,
+    /// How many times this rule has been triggered (for telemetry).
+    pub trigger_count: u64,
+    /// Timestamp when rule was created.
+    pub created_at: i64,
+}
+
+/// Extract durable rules from a plan outcome.
+/// Called after reflection on failed plans. Looks for patterns that should
+/// become permanent behavioral rules.
+pub fn extract_durable_rules(outcome: &PlanOutcome) -> Vec<DurableRule> {
+    let mut rules = Vec::new();
+    let now = chrono::Utc::now().timestamp();
+
+    // Only extract rules from failures
+    if outcome.status != "failed" {
+        return rules;
+    }
+
+    let error = outcome
+        .error_message
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase();
+
+    // Rule: if a specific file caused a protected-file error, block it
+    if error.contains("protected") {
+        if let Some(path) = extract_file_from_error(&error) {
+            rules.push(DurableRule {
+                name: format!("block-{}", path.replace('/', "-")),
+                check_type: "file_blocked".to_string(),
+                pattern: path,
+                reason: format!(
+                    "File is protected. Previous attempt failed: {}",
+                    outcome.lesson.chars().take(100).collect::<String>()
+                ),
+                trigger_count: 0,
+                created_at: now,
+            });
+        }
+    }
+
+    // Rule: if the same error category has happened 3+ times for similar goals,
+    // create a rule blocking that approach
+    // (This is checked separately in merge_durable_rules)
+
+    rules
+}
+
+/// Merge new rules into existing rules in the DB, deduplicating by name.
+pub fn merge_durable_rules(db: &SoulDatabase, new_rules: &[DurableRule]) {
+    if new_rules.is_empty() {
+        return;
+    }
+
+    let mut existing: Vec<DurableRule> = db
+        .get_state("durable_rules")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    for rule in new_rules {
+        // Deduplicate by name
+        if existing.iter().any(|r| r.name == rule.name) {
+            // Increment trigger count
+            if let Some(r) = existing.iter_mut().find(|r| r.name == rule.name) {
+                r.trigger_count += 1;
+            }
+        } else {
+            existing.push(rule.clone());
+        }
+    }
+
+    // Cap at 50 rules (remove oldest first)
+    if existing.len() > 50 {
+        existing.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        existing.truncate(50);
+    }
+
+    if let Ok(json) = serde_json::to_string(&existing) {
+        let _ = db.set_state("durable_rules", &json);
+    }
+}
+
+// ── Brain-Gated Execution ─────────────────────────────────────────────
+
+/// Decide whether to execute a step based on brain prediction.
+/// Returns (should_execute, reason) — if should_execute is false,
+/// the step should be skipped and the plan should be replanned.
+pub fn brain_gate_step(
+    db: &SoulDatabase,
+    step: &PlanStep,
+    prediction: &crate::brain::BrainPrediction,
+) -> (bool, Option<String>) {
+    // Only gate when the brain has enough training data to be reliable
+    let brain = crate::brain::load_brain(db);
+    if brain.train_steps < 100 {
+        return (true, None);
+    }
+
+    // Hard gate: if brain predicts <10% success AND error confidence is high,
+    // skip the step entirely
+    if prediction.success_prob < 0.10 && prediction.error_confidence > 0.6 {
+        let reason = format!(
+            "Brain predicts {:.0}% success with {:.0}% confidence in {:?} error. Skipping step '{}' — replan with a different approach.",
+            prediction.success_prob * 100.0,
+            prediction.error_confidence * 100.0,
+            prediction.likely_error,
+            step.summary(),
+        );
+        return (false, Some(reason));
+    }
+
+    // Soft gate: if brain predicts <25% success, log a warning but proceed
+    // (the warning is visible in logs for human review)
+    if prediction.success_prob < 0.25 {
+        let reason = format!(
+            "Brain warns: {:.0}% success probability for '{}'. Likely error: {:?}.",
+            prediction.success_prob * 100.0,
+            step.summary(),
+            prediction.likely_error,
+        );
+        return (true, Some(reason));
+    }
+
+    (true, None)
+}
+
+// ── Failure Chain Tracking ────────────────────────────────────────────
+
+/// A causal chain of failures linking step → error → file → category.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FailureChain {
+    pub goal_description: String,
+    pub step_type: String,
+    pub file_path: Option<String>,
+    pub error_category: String,
+    pub error_snippet: String,
+    /// What was tried to fix it (replan steps).
+    pub fix_attempts: Vec<String>,
+    /// Whether any fix succeeded.
+    pub resolved: bool,
+    pub created_at: i64,
+}
+
+/// Record a failure chain when a plan step fails.
+pub fn record_failure_chain(
+    db: &SoulDatabase,
+    goal_desc: &str,
+    step: &PlanStep,
+    error: &str,
+    replan_count: u32,
+) {
+    let chain = FailureChain {
+        goal_description: goal_desc.chars().take(100).collect(),
+        step_type: step.summary(),
+        file_path: step.target_file().map(String::from),
+        error_category: crate::feedback::classify_error(error).as_str().to_string(),
+        error_snippet: error.chars().take(200).collect(),
+        fix_attempts: Vec::new(),
+        resolved: false,
+        created_at: chrono::Utc::now().timestamp(),
+    };
+
+    // Store as JSON array in soul_state
+    let mut chains: Vec<FailureChain> = db
+        .get_state("failure_chains")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    chains.push(chain);
+
+    // Keep last 30 failure chains
+    if chains.len() > 30 {
+        chains.drain(..chains.len() - 30);
+    }
+
+    if let Ok(json) = serde_json::to_string(&chains) {
+        let _ = db.set_state("failure_chains", &json);
+    }
+}
+
+/// Get a formatted summary of recent failure chains for prompt injection.
+pub fn failure_chain_summary(db: &SoulDatabase) -> String {
+    let chains: Vec<FailureChain> = db
+        .get_state("failure_chains")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    if chains.is_empty() {
+        return String::new();
+    }
+
+    // Group by error category
+    let mut by_category: std::collections::HashMap<String, Vec<&FailureChain>> =
+        std::collections::HashMap::new();
+    for chain in &chains {
+        by_category
+            .entry(chain.error_category.clone())
+            .or_default()
+            .push(chain);
+    }
+
+    let mut lines = vec!["# Failure Patterns (causal analysis)".to_string()];
+    for (category, chain_list) in &by_category {
+        lines.push(format!(
+            "## {} ({} occurrences)",
+            category,
+            chain_list.len()
+        ));
+        for c in chain_list.iter().take(3) {
+            let file_info = c
+                .file_path
+                .as_deref()
+                .map(|f| format!(" in {}", f))
+                .unwrap_or_default();
+            lines.push(format!(
+                "- {}{}: {}",
+                c.step_type,
+                file_info,
+                c.error_snippet.chars().take(80).collect::<String>()
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+
+fn normalize_path(path: &str) -> String {
+    let s = path.replace('\\', "/");
+    let s = s.strip_prefix("./").unwrap_or(&s);
+    let s = s.strip_prefix("/data/workspace/").unwrap_or(s);
+    let s = s.strip_prefix('/').unwrap_or(s);
+    s.to_string()
+}
+
+/// Heuristic: does this path look like an existing source file?
+fn looks_like_existing_file(path: &str) -> bool {
+    let p = normalize_path(path);
+    // Existing crate source files
+    p.starts_with("crates/") && p.ends_with(".rs")
+}
+
+/// Try to extract a file path from an error message.
+fn extract_file_from_error(error: &str) -> Option<String> {
+    // Look for common patterns like "PROTECTED: 'path/to/file'"
+    if let Some(start) = error.find('\'') {
+        if let Some(end) = error[start + 1..].find('\'') {
+            let path = &error[start + 1..start + 1 + end];
+            if path.contains('/') || path.ends_with(".rs") {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_db() -> SoulDatabase {
+        SoulDatabase::new(":memory:").unwrap()
+    }
+
+    #[test]
+    fn test_read_before_edit_violation() {
+        let db = make_db();
+        let steps = vec![PlanStep::EditCode {
+            file_path: "crates/tempo-x402-soul/src/thinking.rs".to_string(),
+            description: "improve loop".to_string(),
+            context_keys: vec![],
+        }];
+        let result = validate_plan(&steps, &db, "test goal");
+        assert!(!result.is_valid());
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "read-before-edit"));
+    }
+
+    #[test]
+    fn test_read_then_edit_passes() {
+        let db = make_db();
+        let steps = vec![
+            PlanStep::ReadFile {
+                path: "crates/tempo-x402-soul/src/thinking.rs".to_string(),
+                store_as: Some("src".to_string()),
+            },
+            PlanStep::EditCode {
+                file_path: "crates/tempo-x402-soul/src/thinking.rs".to_string(),
+                description: "improve loop".to_string(),
+                context_keys: vec!["src".to_string()],
+            },
+            PlanStep::CargoCheck {
+                store_as: Some("check".to_string()),
+            },
+            PlanStep::Commit {
+                message: "improve thinking loop".to_string(),
+            },
+        ];
+        let result = validate_plan(&steps, &db, "test goal");
+        assert!(result.is_valid());
+    }
+
+    #[test]
+    fn test_commit_without_cargo_check() {
+        let db = make_db();
+        let steps = vec![
+            PlanStep::ReadFile {
+                path: "crates/tempo-x402-soul/src/thinking.rs".to_string(),
+                store_as: Some("src".to_string()),
+            },
+            PlanStep::EditCode {
+                file_path: "crates/tempo-x402-soul/src/thinking.rs".to_string(),
+                description: "fix".to_string(),
+                context_keys: vec![],
+            },
+            PlanStep::Commit {
+                message: "fix".to_string(),
+            },
+        ];
+        let result = validate_plan(&steps, &db, "test goal");
+        assert!(!result.is_valid());
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "cargo-check-before-commit"));
+    }
+
+    #[test]
+    fn test_protected_file_blocked() {
+        let db = make_db();
+        let steps = vec![
+            PlanStep::ReadFile {
+                path: "crates/tempo-x402-soul/src/tools.rs".to_string(),
+                store_as: Some("src".to_string()),
+            },
+            PlanStep::EditCode {
+                file_path: "crates/tempo-x402-soul/src/tools.rs".to_string(),
+                description: "modify tools".to_string(),
+                context_keys: vec![],
+            },
+        ];
+        let result = validate_plan(&steps, &db, "test goal");
+        assert!(!result.is_valid());
+        assert!(result.violations.iter().any(|v| v.rule == "protected-file"));
+    }
+
+    #[test]
+    fn test_empty_plan_rejected() {
+        let db = make_db();
+        let steps: Vec<PlanStep> = vec![];
+        let result = validate_plan(&steps, &db, "test goal");
+        assert!(!result.is_valid());
+        assert!(result.violations.iter().any(|v| v.rule == "non-empty"));
+    }
+
+    #[test]
+    fn test_brain_gate_untrained() {
+        let db = make_db();
+        let step = PlanStep::ReadFile {
+            path: "foo.rs".to_string(),
+            store_as: None,
+        };
+        let prediction = crate::brain::BrainPrediction {
+            success_prob: 0.05,
+            likely_error: crate::feedback::ErrorCategory::Unknown,
+            error_confidence: 0.9,
+            capability_confidence: std::collections::HashMap::new(),
+        };
+        // Brain untrained — should always allow
+        let (should_execute, _) = brain_gate_step(&db, &step, &prediction);
+        assert!(should_execute);
+    }
+}

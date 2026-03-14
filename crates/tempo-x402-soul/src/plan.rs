@@ -231,6 +231,37 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Spawn a specialized child node — differentiated clone with a specific focus.
+    /// Unlike clone_self (identical copy), this creates a node with a specialization
+    /// that shapes its personality, initial goals, and tool focus.
+    SpawnSpecialist {
+        /// What this specialist focuses on: "solver", "reviewer", "tool-builder",
+        /// "researcher", "coordinator", or a custom description.
+        specialization: String,
+        /// Optional initial goal to seed the specialist with.
+        #[serde(default)]
+        initial_goal: Option<String>,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+    /// Delegate a task to a child/peer node via nudge.
+    /// Sends a high-priority nudge to the target node with the task description.
+    /// The target node will see it as a priority nudge and create a goal for it.
+    DelegateTask {
+        /// Instance ID or URL of the target node.
+        target: String,
+        /// Description of the task to delegate.
+        task_description: String,
+        /// Priority (1-5, default 5 for delegated tasks).
+        #[serde(default = "default_priority")]
+        priority: u32,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+}
+
+fn default_priority() -> u32 {
+    5
 }
 
 impl PlanStep {
@@ -309,6 +340,25 @@ impl PlanStep {
                 format!("review PR #{pr_number}")
             }
             PlanStep::CloneSelf { .. } => "clone self".to_string(),
+            PlanStep::SpawnSpecialist { specialization, .. } => {
+                format!("spawn specialist: {}", safe_truncate(specialization, 30))
+            }
+            PlanStep::DelegateTask {
+                target,
+                task_description,
+                ..
+            } => {
+                let short_target = if target.len() > 12 {
+                    &target[..12]
+                } else {
+                    target
+                };
+                format!(
+                    "delegate to {}: {}",
+                    short_target,
+                    safe_truncate(task_description, 30)
+                )
+            }
         }
     }
 
@@ -335,10 +385,22 @@ impl PlanStep {
             | PlanStep::ScreenType { store_as, .. }
             | PlanStep::BrowseUrl { store_as, .. }
             | PlanStep::ReviewPeerPR { store_as, .. }
-            | PlanStep::CloneSelf { store_as, .. } => store_as.as_deref(),
+            | PlanStep::CloneSelf { store_as, .. }
+            | PlanStep::SpawnSpecialist { store_as, .. }
+            | PlanStep::DelegateTask { store_as, .. } => store_as.as_deref(),
             PlanStep::Commit { .. } | PlanStep::GenerateCode { .. } | PlanStep::EditCode { .. } => {
                 None
             }
+        }
+    }
+
+    /// Get the target file of a step, if any.
+    pub fn target_file(&self) -> Option<&str> {
+        match self {
+            PlanStep::ReadFile { path, .. } => Some(path),
+            PlanStep::EditCode { file_path, .. } => Some(file_path),
+            PlanStep::GenerateCode { file_path, .. } => Some(file_path),
+            _ => None,
         }
     }
 }
@@ -632,6 +694,35 @@ impl<'a> PlanExecutor<'a> {
             PlanStep::CloneSelf { .. } => StepResult::Failed(
                 "CloneSelf is disabled — cloning is manual-only via the frontend".to_string(),
             ),
+            PlanStep::SpawnSpecialist {
+                specialization,
+                initial_goal,
+                ..
+            } => {
+                let mut args = serde_json::json!({
+                    "specialization": specialization,
+                });
+                if let Some(goal) = initial_goal {
+                    args["initial_goal"] = serde_json::json!(goal);
+                }
+                self.execute_tool("spawn_specialist", &args).await
+            }
+            PlanStep::DelegateTask {
+                target,
+                task_description,
+                priority,
+                ..
+            } => {
+                self.execute_tool(
+                    "delegate_task",
+                    &serde_json::json!({
+                        "target": target,
+                        "task_description": task_description,
+                        "priority": priority,
+                    }),
+                )
+                .await
+            }
         }
     }
 

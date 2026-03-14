@@ -73,6 +73,12 @@ pub struct SoulConfig {
     /// Master switch for the autonomous thinking loop (env: SOUL_THINKING_ENABLED, default: true).
     /// When false, soul initializes (DB, chat, status endpoints work) but does not run the thinking loop.
     pub thinking_enabled: bool,
+    /// Specialization role for differentiated clones (env: SOUL_SPECIALIZATION, default: None).
+    /// When set, customizes personality and initial goals for this agent's focus area.
+    /// Values: "solver", "reviewer", "tool-builder", "researcher", "coordinator", or custom.
+    pub specialization: Option<String>,
+    /// Initial goal seeded on first boot for specialist clones (env: SOUL_INITIAL_GOAL, default: None).
+    pub initial_goal: Option<String>,
 }
 
 const DEFAULT_PERSONALITY: &str = "\
@@ -247,6 +253,14 @@ impl SoulConfig {
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
 
+        let specialization = std::env::var("SOUL_SPECIALIZATION")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let initial_goal = std::env::var("SOUL_INITIAL_GOAL")
+            .ok()
+            .filter(|s| !s.is_empty());
+
         Ok(Self {
             llm_api_key,
             llm_model_fast,
@@ -278,6 +292,8 @@ impl SoulConfig {
             plan_approval_timeout_mins,
             cycle_multiplier,
             thinking_enabled,
+            specialization,
+            initial_goal,
         })
     }
 }

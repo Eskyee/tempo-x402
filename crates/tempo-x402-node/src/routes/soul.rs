@@ -47,6 +47,12 @@ struct SoulStatus {
     /// Emergent agent role — computed from capability profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<serde_json::Value>,
+    /// Durable behavioral rules — mechanically enforced from past failures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    durable_rules: Option<serde_json::Value>,
+    /// Recent failure chains — causal analysis of why steps fail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_chains: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -385,6 +391,16 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             let role = x402_soul::capability::compute_role(soul_db);
             serde_json::to_value(&role).ok()
         },
+        durable_rules: soul_db
+            .get_state("durable_rules")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+        failure_chains: soul_db
+            .get_state("failure_chains")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
     })
 }
 

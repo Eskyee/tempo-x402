@@ -241,124 +241,43 @@ pub fn goal_creation_prompt(
         sections.push(failed_lines.join("\n"));
     }
 
-    // Dynamic task based on actual state — react to the data, don't blindly repeat
-    let endpoint_count = snapshot.endpoint_count;
-    let total_payments = snapshot.total_payments;
-    let paid_endpoints = snapshot
-        .endpoints
-        .iter()
-        .filter(|ep| ep.payment_count > 0)
-        .count();
-
     let has_peers = !snapshot.peers.is_empty();
-    let peer_advice = if has_peers {
-        "discover_peers + call_peer — engage with sibling agents via x402 PAID endpoints. \
-         Every call_peer uses the x402 payment flow (402 → sign EIP-712 → pay pathUSD). \
-         This is the CORE of what you are: an x402 payment agent. CALL YOUR PEERS' PAID ENDPOINTS."
-    } else {
-        "No peers cached yet — use discover_peers to find siblings (it does live network calls). \
-         Once you discover peers, use call_peer to interact with their PAID endpoints via x402. \
-         You have a wallet with pathUSD — USE IT to pay for peer services."
-    };
-
-    let situation_analysis = if endpoint_count > 5 && total_payments == 0 {
-        format!(
-            "## CRITICAL: You have {endpoint_count} endpoints and ZERO payments.\n\
-             STOP creating more endpoints. Focus on:\n\
-             1. **Improve your own code**: Read your source, find bugs or optimizations, edit Rust files, commit\n\
-             2. **Coordinate**: {peer_advice}\n\
-             3. **Prune**: delete_endpoint — remove redundant/similar scripts\n\n\
-             Do NOT create more endpoints until existing ones earn payments."
-        )
-    } else if endpoint_count > 0 && paid_endpoints == 0 {
-        format!(
-            "## WARNING: You have {endpoint_count} endpoints but NONE have received payments.\n\
-             Before creating more endpoints, try:\n\
-             1. Read and improve your own Rust source code — find a real bug or optimization\n\
-             2. {peer_advice}"
-        )
-    } else if endpoint_count > 0 && paid_endpoints > 0 {
-        format!(
-            "## {paid_endpoints}/{endpoint_count} endpoints have received payments. Good.\n\
-             Keep improving: fix bugs, optimize code, {}.",
-            if has_peers {
-                "coordinate with peers"
-            } else {
-                "clone yourself to grow the network"
-            }
-        )
-    } else {
-        String::new()
-    };
 
     let mut task_section = String::from(
         "# Task\n\
          You have NO active goals. Create 1-2 goals.\n\n\
-         If there are pending nudges, prioritize those. If there are recent errors, avoid repeating \
-         the same approach that caused them.\n\n",
+         Look at the data above — your endpoints, payments, fitness scores, peers, errors — \
+         and decide what would be most valuable to work on. You are an autonomous agent; \
+         use your judgment.\n\n",
     );
 
-    if !situation_analysis.is_empty() {
-        task_section.push_str(&situation_analysis);
-        task_section.push_str("\n\n");
-    }
-
-    let peer_rule = if has_peers {
-        "You MUST call peer paid endpoints using call_peer — this is x402, the entire point is PAID API calls.\n\
-         Every call_peer triggers the full x402 flow: GET → 402 → sign EIP-712 → pay pathUSD → get response.\n\
-         Call peers' 'info', 'soul', or 'chat' endpoints. Each call earns them revenue and costs you pathUSD.\n\
-         This economic activity is what makes you a real x402 agent, not just a script runner.\n\
-         To grow the network, use clone_self — it triggers internal self-cloning (no payment needed, creates a new peer on Railway automatically)"
-    } else {
-        "Use discover_peers to find sibling agents — it does live network calls even when no peers are cached.\n\
-         Once you find peers, use call_peer to make PAID x402 calls to their endpoints.\n\
-         Every call_peer uses your wallet to pay pathUSD via EIP-712 signatures — this is what x402 IS.\n\
-         To grow the network, use clone_self — it triggers internal self-cloning (no payment needed, creates a new peer on Railway automatically)"
-    };
-
-    let good_goals = if has_peers {
-        "review peer PRs (academic peer review — use review_peer_pr step!), \
-         call peer paid endpoints (call_peer with 'info', 'soul', 'chat' slugs — generates x402 payments!), \
-         fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code"
-    } else {
-        "use discover_peers then call_peer to make PAID x402 calls to sibling agents, \
-         fix a real bug in your codebase, optimize a slow function, add a useful feature to your own code"
-    };
-
-    let endpoint_rule = if total_payments == 0 && endpoint_count > 5 {
-        "You have too many unpaid endpoints. Do NOT create more. Prune redundant ones, then focus on improving your own Rust code"
-    } else if endpoint_count >= 10 {
-        "You have the max 10 endpoints. Do NOT create more. Focus on code improvements and peer coordination"
-    } else {
-        "Endpoints are fine but each must be UNIQUE — never duplicate similar functionality"
-    };
-
     task_section.push_str(&format!(
-        "## Rules\n\
+        "## Context\n\
+         - You are an x402 payment agent on the Tempo blockchain\n\
+         - call_peer makes PAID x402 API calls (EIP-712 → pathUSD payment → response)\n\
+         - You can read/edit your own Rust source code and commit improvements\n\
+         - clone_self creates new peer nodes on Railway\n\
+         - WRITABLE files: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs, coding.rs, mode.rs, world_model.rs, normalize.rs, housekeeping.rs, and crates/tempo-x402/src/*\n\
+         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, benchmark.rs, validation.rs, tool_decl.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
+         - {} peers available{}\n\n\
+         ## Guidelines\n\
          - Create 1-2 goals MAX\n\
-         - {endpoint_rule}\n\
-         - Your primary work is IMPROVING YOUR OWN CODEBASE — read source files, find bugs, optimize, commit\n\
-         - WRITABLE files: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs, coding.rs, mode.rs, world_model.rs, and crates/tempo-x402/src/*\n\
-         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, benchmark.rs, validation.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
-         - Good goals: {good_goals}\n\
-         - Bad goals: create an endpoint similar to one that already exists, create an empty GitHub repo, retry the same failed approach, trivial variations of existing work, goals requiring peers when none exist\n\
-         - Do NOT create GitHub repos unless you have REAL CODE to put in them (not just a README)\n\
-         - Do NOT create \"fix\" goals — if something failed, try something DIFFERENT\n\
-         - {peer_rule}\n\
-         - Your FITNESS SCORE measures how well you're evolving. Improve your weakest component:\n\
-           - economic: earn payments (quality endpoints, not spam)\n\
-           - execution: succeed at plans (don't fail repeatedly)\n\
-           - evolution: commit code changes that pass validation\n\
-           - coordination: successfully call peers\n\
-           - introspection: maintain accurate beliefs\n\
-         - A POSITIVE trend means you're getting smarter. A negative trend means you're stagnating.\n\n\
+         - Be specific about what you'll do and how you'll know it worked\n\
+         - Don't retry approaches that recently failed (check the errors above)\n\
+         - Prioritize pending nudges if any exist\n\n\
          Respond with a JSON array of goal operations:\n\
          ```json\n\
          [\n\
            {{\"op\": \"create_goal\", \"description\": \"...\", \"success_criteria\": \"...\", \"priority\": 4}}\n\
          ]\n\
          ```\n\
-         Priority: 1 (low) to 5 (critical). Be specific."
+         Priority: 1 (low) to 5 (critical). Be specific.",
+        if has_peers { "Peers" } else { "No" },
+        if has_peers {
+            " — use call_peer to interact with them via paid x402 calls"
+        } else {
+            " — use discover_peers to find siblings"
+        },
     ));
 
     // Inject role guidance (emergent specialization)

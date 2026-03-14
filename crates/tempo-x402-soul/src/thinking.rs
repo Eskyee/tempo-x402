@@ -1253,96 +1253,11 @@ impl ThinkingLoop {
             return Ok(());
         }
 
-        // ── Demand seed: if endpoints exist with 0 payments, inject a demand goal ──
-        // This bypasses the LLM to ensure demand generation happens deterministically.
-        // Back off if a demand goal was recently abandoned (prevents infinite retry loop).
-        if snapshot.endpoint_count > 0 && snapshot.total_payments == 0 {
-            let active_goals = self.db.get_active_goals().unwrap_or_default();
-            let has_demand_goal = active_goals.iter().any(|g| {
-                let d = g.description.to_lowercase();
-                d.contains("call_peer") || d.contains("discover_peers") || d.contains("call peer")
-            });
-            // Check if a demand goal was recently abandoned (backoff to avoid tight loop)
-            let recently_abandoned = self.db.get_recently_abandoned_goals(5).unwrap_or_default();
-            let recently_failed_demand = recently_abandoned.iter().any(|g| {
-                let d = g.description.to_lowercase();
-                (d.contains("call_peer") || d.contains("discover_peers") || d.contains("demand"))
-                    && (chrono::Utc::now().timestamp() - g.updated_at) < 1800 // 30 min backoff
-            });
-            if !has_demand_goal && !recently_failed_demand {
-                let now = chrono::Utc::now().timestamp();
-                let goal = Goal {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    description: "Engage with the agent network: use discover_peers to find sibling agents, \
-                         then use call_peer to call at least 2 different peer endpoints. \
-                         Also read your own source code (start with crates/tempo-x402-soul/src/thinking.rs) \
-                         to find one concrete improvement you could make to yourself. \
-                         Record what you learn as beliefs."
-                        .to_string(),
-                    status: crate::world_model::GoalStatus::Active,
-                    priority: 5,
-                    success_criteria:
-                        "call_peer succeeds on at least 1 peer endpoint AND at least 1 belief recorded about self-improvement opportunity"
-                            .to_string(),
-                    progress_notes: String::new(),
-                    parent_goal_id: None,
-                    retry_count: 0,
-                    created_at: now,
-                    updated_at: now,
-                    completed_at: None,
-                };
-                let _ = self.db.insert_goal(&goal);
-                tracing::info!(
-                    "Demand seed — injected demand-generation goal (0 payments, {} endpoints)",
-                    snapshot.endpoint_count
-                );
-                return Ok(());
-            }
-
-            // ── Prune seed: too many endpoints with 0 payments → prune during demand backoff ──
-            if recently_failed_demand && snapshot.endpoint_count > 5 {
-                let has_prune_goal = active_goals.iter().any(|g| {
-                    let d = g.description.to_lowercase();
-                    d.contains("delete_endpoint")
-                        || d.contains("prune")
-                        || d.contains("delete endpoint")
-                });
-                let recently_pruned = recently_abandoned.iter().any(|g| {
-                    let d = g.description.to_lowercase();
-                    (d.contains("prune") || d.contains("delete_endpoint"))
-                        && (chrono::Utc::now().timestamp() - g.updated_at) < 3600
-                });
-                if !has_prune_goal && !recently_pruned {
-                    let now = chrono::Utc::now().timestamp();
-                    let goal = Goal {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        description: format!(
-                            "Prune endpoints: you have {} endpoints and 0 payments. \
-                             Use delete_endpoint to remove ALL script endpoints except \
-                             the 2-3 most useful ones. Keep core endpoints: chat, info, clone, \
-                             soul. Target: 5 or fewer total endpoints. \
-                             After pruning, focus on research and code improvement instead.",
-                            snapshot.endpoint_count
-                        ),
-                        status: crate::world_model::GoalStatus::Active,
-                        priority: 4,
-                        success_criteria: "endpoint count reduced to 5 or fewer".to_string(),
-                        progress_notes: String::new(),
-                        parent_goal_id: None,
-                        retry_count: 0,
-                        created_at: now,
-                        updated_at: now,
-                        completed_at: None,
-                    };
-                    let _ = self.db.insert_goal(&goal);
-                    tracing::info!(
-                        "Prune seed — injected endpoint pruning goal ({} endpoints, 0 payments)",
-                        snapshot.endpoint_count
-                    );
-                    return Ok(());
-                }
-            }
-        }
+        // No hardcoded goal injection — let the LLM decide what to do.
+        // The goal creation prompt gives the LLM all the data (endpoint count, payments,
+        // peers, fitness) and lets it decide what goals make sense.
+        // Previous hardcoded demand/prune seeds caused infinite loops when combined
+        // with validation rules that blocked retries of those same goals.
 
         tracing::info!("No goals — asking LLM to create goals");
 

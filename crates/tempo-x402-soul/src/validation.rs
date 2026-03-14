@@ -277,9 +277,9 @@ fn check_not_retrying_failures(
             if step_overlap > 2 {
                 violations.push(PlanViolation {
                     rule: "no-retry-same-approach",
-                    severity: Severity::Hard,
+                    severity: Severity::Soft, // Warn, don't block — Hard severity caused infinite rejection loops
                     detail: format!(
-                        "This plan resembles a recently failed plan for '{}' (similarity: {:.0}%, {} step overlap). The previous failure was: {}. Try a fundamentally different approach.",
+                        "This plan resembles a recently failed plan for '{}' (similarity: {:.0}%, {} step overlap). The previous failure was: {}. Consider a different approach.",
                         outcome.goal_description.chars().take(60).collect::<String>(),
                         similarity * 100.0,
                         step_overlap,
@@ -327,13 +327,13 @@ fn check_durable_rules(steps: &[PlanStep], db: &SoulDatabase, violations: &mut V
 
     for rule in &rules {
         if rule.check_type == "step_type_blocked" {
-            // Block specific step types
+            // Warn about step types that have been problematic
             for (i, step) in steps.iter().enumerate() {
                 let summary = step.summary().to_lowercase();
                 if summary.contains(&rule.pattern) {
                     violations.push(PlanViolation {
                         rule: "durable-rule",
-                        severity: Severity::Hard,
+                        severity: Severity::Soft, // Warn — LLM-extracted rules shouldn't hard-block
                         detail: format!("Durable rule '{}': {}", rule.name, rule.reason),
                         step_index: Some(i),
                     });
@@ -353,7 +353,7 @@ fn check_durable_rules(steps: &[PlanStep], db: &SoulDatabase, violations: &mut V
                     if p.contains(&rule.pattern) {
                         violations.push(PlanViolation {
                             rule: "durable-rule-file",
-                            severity: Severity::Hard,
+                            severity: Severity::Soft, // Warn — LLM-extracted rules shouldn't hard-block
                             detail: format!(
                                 "Durable rule '{}': {} (file: {})",
                                 rule.name, rule.reason, p
@@ -496,9 +496,9 @@ fn check_failure_chain_saturation(
 
         violations.push(PlanViolation {
             rule: "failure-chain-saturated",
-            severity: Severity::Hard,
+            severity: Severity::Soft, // Warn, don't block — Hard severity caused infinite rejection loops
             detail: format!(
-                "This goal has {} unresolved failure chains. Errors: {}. This goal should be abandoned — try a completely different objective instead.",
+                "This goal has {} unresolved failure chains. Errors: {}. Consider abandoning this goal and trying something different.",
                 matching_chains.len(),
                 error_patterns.into_iter().take(3).collect::<Vec<_>>().join("; "),
             ),

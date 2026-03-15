@@ -2838,11 +2838,18 @@ impl ToolExecutor {
 
         let requirements = parse_payment_requirements(req_value)?;
 
-        // Step 2.5: Auto-approve the target's facilitator if needed.
-        // For embedded facilitators, pay_to == facilitator address.
-        // The facilitator calls transferFrom(payer, pay_to, amount), which
-        // requires ERC-20 approve(facilitator, amount) from the payer.
-        if let Ok(pay_to_addr) = requirements.pay_to.parse::<alloy::primitives::Address>() {
+        // Step 2.5: Auto-approve the facilitator if needed.
+        // The facilitator calls transferFrom(payer, pay_to, amount), so the payer
+        // must approve the FACILITATOR address (the caller of transferFrom), NOT pay_to.
+        // The 402 response includes facilitatorAddress when the gateway has an embedded facilitator.
+        // Fall back to pay_to for backwards compatibility (works when pay_to == facilitator).
+        let approve_target: Option<alloy::primitives::Address> = req_value
+            .get("facilitatorAddress")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .or_else(|| requirements.pay_to.parse().ok());
+
+        if let Some(target_addr) = approve_target {
             let rpc_url = std::env::var("RPC_URL")
                 .unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
             if let Ok(rpc_parsed) = rpc_url.parse::<reqwest::Url>() {
@@ -2856,9 +2863,9 @@ impl ToolExecutor {
                     .connect_http(rpc_parsed);
                 let token = x402::constants::DEFAULT_TOKEN;
 
-                // Check current allowance
+                // Check current allowance to the facilitator
                 let current_allowance =
-                    x402::tip20::allowance(&provider, token, payer_addr, pay_to_addr)
+                    x402::tip20::allowance(&provider, token, payer_addr, target_addr)
                         .await
                         .unwrap_or(alloy::primitives::U256::ZERO);
 
@@ -2866,13 +2873,13 @@ impl ToolExecutor {
                 if current_allowance < alloy::primitives::U256::from(1_000_000_000_000_000u64) {
                     tracing::info!(
                         payer = %payer_addr,
-                        facilitator = %pay_to_addr,
+                        facilitator = %target_addr,
                         "Auto-approving facilitator for pathUSD (first payment to this peer)"
                     );
                     match x402::tip20::approve(
                         &provider,
                         token,
-                        pay_to_addr,
+                        target_addr,
                         alloy::primitives::U256::MAX,
                     )
                     .await

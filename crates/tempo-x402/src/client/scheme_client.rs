@@ -120,6 +120,7 @@ mod tests {
             max_timeout_seconds: 30,
             description: None,
             mime_type: None,
+            facilitator_address: None,
         };
 
         let payload = client

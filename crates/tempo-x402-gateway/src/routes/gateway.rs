@@ -118,6 +118,10 @@ async fn do_gateway_proxy(
         &endpoint.price_usd,
         &endpoint.price_amount,
         endpoint.description.as_deref(),
+        state
+            .facilitator
+            .as_ref()
+            .map(|f| f.facilitator.facilitator_address()),
     );
 
     // Require payment (returns 402 with requirements if no valid payment)

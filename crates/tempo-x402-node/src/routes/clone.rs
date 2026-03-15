@@ -68,6 +68,7 @@ pub async fn clone_instance(
         max_timeout_seconds: 60,
         description: Some("Clone instance fee".to_string()),
         mime_type: Some("application/json".to_string()),
+        facilitator_address: None,
     };
 
     // Early 402 if no payment header

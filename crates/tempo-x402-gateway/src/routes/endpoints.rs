@@ -153,6 +153,10 @@ pub async fn update_endpoint(
         state.config.platform_address,
         &state.config.platform_fee,
         &state.config.platform_fee_amount,
+        state
+            .facilitator
+            .as_ref()
+            .map(|f| f.facilitator.facilitator_address()),
     );
 
     // Now settle payment (ownership pre-verified, facilitator will cryptographically
@@ -251,6 +255,10 @@ pub async fn delete_endpoint(
         state.config.platform_address,
         &state.config.platform_fee,
         &state.config.platform_fee_amount,
+        state
+            .facilitator
+            .as_ref()
+            .map(|f| f.facilitator.facilitator_address()),
     );
 
     // Now settle payment (ownership pre-verified, facilitator will cryptographically

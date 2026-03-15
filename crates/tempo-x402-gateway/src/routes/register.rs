@@ -60,6 +60,10 @@ pub async fn register(
         state.config.platform_address,
         &state.config.platform_fee,
         &state.config.platform_fee_amount,
+        state
+            .facilitator
+            .as_ref()
+            .map(|f| f.facilitator.facilitator_address()),
     );
 
     // Check for PAYMENT-SIGNATURE header first WITHOUT touching the database.

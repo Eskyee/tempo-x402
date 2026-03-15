@@ -163,6 +163,7 @@ async fn test_expired_authorization() {
         max_timeout_seconds: 30,
         description: None,
         mime_type: None,
+        facilitator_address: None,
     };
 
     let provider =
@@ -223,6 +224,7 @@ async fn test_not_yet_valid_authorization() {
         max_timeout_seconds: 30,
         description: None,
         mime_type: None,
+        facilitator_address: None,
     };
 
     let provider =

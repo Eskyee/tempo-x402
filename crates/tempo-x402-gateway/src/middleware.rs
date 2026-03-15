@@ -16,6 +16,7 @@ pub fn platform_requirements(
     platform_address: Address,
     fee: &str,
     fee_amount: &str,
+    facilitator_address: Option<Address>,
 ) -> PaymentRequirements {
     PaymentRequirements {
         scheme: SCHEME_NAME.to_string(),
@@ -27,6 +28,7 @@ pub fn platform_requirements(
         max_timeout_seconds: 30,
         description: Some("Platform registration fee".to_string()),
         mime_type: Some("application/json".to_string()),
+        facilitator_address,
     }
 }
 
@@ -36,6 +38,7 @@ pub fn endpoint_requirements(
     price_usd: &str,
     price_amount: &str,
     description: Option<&str>,
+    facilitator_address: Option<Address>,
 ) -> PaymentRequirements {
     PaymentRequirements {
         scheme: SCHEME_NAME.to_string(),
@@ -47,6 +50,7 @@ pub fn endpoint_requirements(
         max_timeout_seconds: 30,
         description: description.map(String::from),
         mime_type: Some("application/json".to_string()),
+        facilitator_address,
     }
 }
 
@@ -220,7 +224,7 @@ mod tests {
         let addr: Address = "0x1234567890123456789012345678901234567890"
             .parse()
             .unwrap();
-        let req = platform_requirements(addr, "$0.01", "10000");
+        let req = platform_requirements(addr, "$0.01", "10000", None);
 
         assert_eq!(req.scheme, "tempo-tip20");
         assert_eq!(req.network, "eip155:42431");
@@ -234,7 +238,7 @@ mod tests {
         let addr: Address = "0xabcdef1234567890abcdef1234567890abcdef12"
             .parse()
             .unwrap();
-        let req = endpoint_requirements(addr, "$0.05", "50000", Some("Test API"));
+        let req = endpoint_requirements(addr, "$0.05", "50000", Some("Test API"), None);
 
         assert_eq!(req.price, "$0.05");
         assert_eq!(req.amount, "50000");

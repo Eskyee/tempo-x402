@@ -45,6 +45,10 @@ pub struct PaymentRequirements {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// The address that calls transferFrom — payers must ERC-20 approve THIS address.
+    /// For embedded facilitators this differs from pay_to (the endpoint owner).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facilitator_address: Option<Address>,
 }
 
 /// The 402 response body returned by the resource server.

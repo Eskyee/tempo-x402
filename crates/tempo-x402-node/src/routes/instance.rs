@@ -93,11 +93,8 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
         })
     });
 
-    // Open a read connection to query active (non-failed) peers
-    let peers = rusqlite::Connection::open(&state.db_path)
-        .ok()
-        .and_then(|conn| db::query_children_active(&conn).ok())
-        .unwrap_or_default();
+    // Query active (non-failed) peers via gateway DB (consistent with writes)
+    let peers = db::list_children_active(&state.gateway.db).unwrap_or_default();
 
     let uptime_secs = (chrono::Utc::now() - state.started_at).num_seconds();
 
@@ -240,10 +237,7 @@ pub async fn register(
 
 /// GET /instance/siblings — returns list of active sibling instances with their URLs and endpoints
 pub async fn siblings(state: web::Data<NodeState>) -> HttpResponse {
-    let children = rusqlite::Connection::open(&state.db_path)
-        .ok()
-        .and_then(|conn| db::query_children_active(&conn).ok())
-        .unwrap_or_default();
+    let children = db::list_children_active(&state.gateway.db).unwrap_or_default();
 
     let mut siblings = Vec::new();
     for child in &children {
@@ -359,6 +353,25 @@ pub async fn link(body: web::Json<serde_json::Value>, state: web::Data<NodeState
         .and_then(|id| id.get("address"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    // Prevent self-link
+    if let Some(ref identity) = state.identity {
+        if instance_id == identity.instance_id {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "cannot link self as peer"
+            }));
+        }
+    }
+
+    // Prevent linking our own parent as a child
+    if let Ok(parent_url_env) = std::env::var("PARENT_URL") {
+        let parent_norm = parent_url_env.trim_end_matches('/');
+        if peer_url == parent_norm {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "cannot link parent as child"
+            }));
+        }
+    }
 
     // Insert/update the peer in the children table
     match db::link_peer(&state.gateway.db, &instance_id, address, peer_url) {

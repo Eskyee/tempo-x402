@@ -305,6 +305,41 @@ pub fn query_children_active(
     Ok(children)
 }
 
+/// List active (non-failed) children via the Database wrapper (consistent with writes).
+pub fn list_children_active(db: &Database) -> Result<Vec<ChildInstance>, GatewayError> {
+    db.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, instance_id, address, url, railway_service_id,
+                   funded_amount, funding_tx, status, branch, created_at, updated_at
+            FROM children
+            WHERE status != 'failed'
+            ORDER BY created_at DESC
+            "#,
+        )?;
+
+        let children = stmt
+            .query_map([], |row| {
+                Ok(ChildInstance {
+                    id: row.get(0)?,
+                    instance_id: row.get(1)?,
+                    address: row.get(2)?,
+                    url: row.get(3)?,
+                    railway_service_id: row.get(4)?,
+                    funded_amount: row.get(5)?,
+                    funding_tx: row.get(6)?,
+                    status: row.get(7)?,
+                    branch: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(children)
+    })
+}
+
 /// Delete a child record only if its status is 'failed'.
 /// Returns `Ok(true)` if a row was deleted, `Ok(false)` if not found or not failed.
 pub fn delete_failed_child(db: &Database, instance_id: &str) -> Result<bool, GatewayError> {

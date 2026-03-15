@@ -2584,6 +2584,42 @@ impl ToolExecutor {
                         }
                     }
 
+                    // Fetch and import peer's failed benchmark attempts (collaborative solving)
+                    // This is the core 2>1 mechanism: one agent's failure helps the other succeed
+                    let mut failures_imported = 0u32;
+                    if let Some(ref db) = self.db {
+                        let failures_url =
+                            format!("{}/soul/benchmark/failures", sib_url.trim_end_matches('/'));
+                        if let Ok(resp) = client.get(&failures_url).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                    if let Some(failures) =
+                                        body.get("failures").and_then(|v| v.as_array())
+                                    {
+                                        let peer_fails: Vec<crate::benchmark::SharedFailure> =
+                                            failures
+                                                .iter()
+                                                .filter_map(|f| {
+                                                    serde_json::from_value(f.clone()).ok()
+                                                })
+                                                .collect();
+                                        if !peer_fails.is_empty() {
+                                            failures_imported =
+                                                crate::benchmark::import_failures(db, peer_fails);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if failures_imported > 0 {
+                        tracing::info!(
+                            failures_imported = failures_imported,
+                            peer = %sib_url,
+                            "Imported peer benchmark failures for collaborative solving"
+                        );
+                    }
+
                     // Fetch peer's open PRs for peer review system
                     let mut peer_prs: Vec<serde_json::Value> = Vec::new();
                     let prs_url = format!("{}/soul/open-prs", sib_url.trim_end_matches('/'));

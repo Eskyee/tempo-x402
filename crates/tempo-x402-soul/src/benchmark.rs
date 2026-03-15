@@ -391,14 +391,31 @@ pub fn sample_problems(problems: &[ExercismProblem], n: usize) -> Vec<ExercismPr
 }
 
 /// Generate a solution for an Exercism Rust problem using the LLM.
+/// If `peer_failures` is provided, they're injected as negative context —
+/// the LLM sees what was tried before and why it failed, making it more
+/// likely to find a different, working approach. This is the core mechanism
+/// for proving collective intelligence (2 agents > 1 agent).
 pub async fn generate_solution(
     llm: &LlmClient,
     problem: &ExercismProblem,
+    peer_failures: &[SharedFailure],
 ) -> Result<String, String> {
-    let system = "You are a Rust coding expert. Implement the solution for the given exercise. \
-        Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
-        The code must compile and pass all tests. Include all necessary use statements and type definitions. \
-        Do NOT include any test code or #[cfg(test)] modules — only the implementation.";
+    let system = if peer_failures.is_empty() {
+        "You are a Rust coding expert. Implement the solution for the given exercise. \
+         Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
+         The code must compile and pass all tests. Include all necessary use statements and type definitions. \
+         Do NOT include any test code or #[cfg(test)] modules — only the implementation."
+            .to_string()
+    } else {
+        "You are a Rust coding expert. Implement the solution for the given exercise. \
+         IMPORTANT: A previous attempt at this problem FAILED. Study the failed solution and \
+         its error output below carefully. Your solution MUST take a DIFFERENT approach to avoid \
+         the same mistake. \
+         Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
+         The code must compile and pass all tests. Include all necessary use statements and type definitions. \
+         Do NOT include any test code or #[cfg(test)] modules — only the implementation."
+            .to_string()
+    };
 
     let mut prompt = format!(
         "Implement this Exercism Rust exercise: {}\n\n",
@@ -434,6 +451,30 @@ pub async fn generate_solution(
         }
     }
 
+    // Inject peer failure context — the core collaborative intelligence mechanism
+    let task_id = format!("exercism/{}", problem.slug);
+    let relevant_failures: Vec<&SharedFailure> = peer_failures
+        .iter()
+        .filter(|f| f.task_id == task_id)
+        .collect();
+    if !relevant_failures.is_empty() {
+        prompt.push_str("## FAILED PREVIOUS ATTEMPTS (from peer agents — learn from these mistakes)\n\n");
+        for (i, failure) in relevant_failures.iter().enumerate().take(2) {
+            let sol_preview: String = failure.failed_solution.chars().take(1500).collect();
+            let err_preview: String = failure.error_output.chars().take(500).collect();
+            prompt.push_str(&format!(
+                "### Attempt {} (by peer {})\n```rust\n{}\n```\n**Error:**\n```\n{}\n```\n\n",
+                i + 1,
+                failure.attempted_by,
+                sol_preview,
+                err_preview,
+            ));
+        }
+        prompt.push_str(
+            "Your solution MUST avoid the same errors. Take a fundamentally different approach.\n\n",
+        );
+    }
+
     // Show test code so the LLM knows the expected API
     let test_preview: String = problem.test_code.chars().take(4000).collect();
     prompt.push_str(&format!(
@@ -442,7 +483,7 @@ pub async fn generate_solution(
     ));
 
     let response = llm
-        .think(system, &prompt)
+        .think(&system, &prompt)
         .await
         .map_err(|e| format!("LLM generation failed: {e}"))?;
 
@@ -582,15 +623,25 @@ pub async fn run_benchmark_session(
     let mut earned_weight = 0.0f64;
     let mut passed = 0u32;
     let mut attempted = 0u32;
+    let mut rescued = 0u32; // solved BECAUSE of peer failure context
     let now = chrono::Utc::now().timestamp();
+
+    // Load peer failures for collaborative solving
+    let peer_failures = load_peer_failures(db);
+    let peer_failure_task_ids: std::collections::HashSet<&str> = peer_failures
+        .iter()
+        .map(|f| f.task_id.as_str())
+        .collect();
 
     for problem in &sample {
         attempted += 1;
         let weight = difficulty_weight(&problem.difficulty);
         total_weight += weight;
+        let task_id = format!("exercism/{}", problem.slug);
+        let has_peer_context = peer_failure_task_ids.contains(task_id.as_str());
 
-        // Generate solution
-        let solution = match generate_solution(llm, problem).await {
+        // Generate solution (with peer failure context if available)
+        let solution = match generate_solution(llm, problem, &peer_failures).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(
@@ -612,16 +663,26 @@ pub async fn run_benchmark_session(
         if success {
             passed += 1;
             earned_weight += weight;
-            tracing::info!(
-                slug = %problem.slug,
-                difficulty = %problem.difficulty,
-                "Benchmark: PASS"
-            );
+            if has_peer_context {
+                rescued += 1;
+                tracing::info!(
+                    slug = %problem.slug,
+                    difficulty = %problem.difficulty,
+                    "Benchmark: PASS (RESCUED by peer failure context)"
+                );
+            } else {
+                tracing::info!(
+                    slug = %problem.slug,
+                    difficulty = %problem.difficulty,
+                    "Benchmark: PASS"
+                );
+            }
         } else {
             tracing::info!(
                 slug = %problem.slug,
                 difficulty = %problem.difficulty,
                 error = %error_output.chars().take(100).collect::<String>(),
+                has_peer_context = has_peer_context,
                 "Benchmark: FAIL"
             );
         }
@@ -653,8 +714,23 @@ pub async fn run_benchmark_session(
         raw = format!("{:.1}%", raw_rate),
         passed = passed,
         attempted = attempted,
+        rescued = rescued,
+        peer_failures_available = peer_failures.len(),
         "Exercism Rust benchmark session complete"
     );
+
+    // Record rescued count for collective intelligence tracking
+    if rescued > 0 {
+        let _ = db.set_state(
+            "benchmark_rescued",
+            &serde_json::json!({
+                "rescued": rescued,
+                "total_passed": passed,
+                "measured_at": now,
+            })
+            .to_string(),
+        );
+    }
 
     Ok(weighted_score)
 }
@@ -900,6 +976,97 @@ pub struct SharedSolution {
     pub solution: String,
     /// Who solved it (instance_id or "self").
     pub solved_by: String,
+}
+
+/// A failed attempt that can be shared between peers for collaborative solving.
+/// The key insight: one agent's failure is another agent's learning signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedFailure {
+    pub task_id: String,
+    pub entry_point: String,
+    /// The solution that was attempted but failed.
+    pub failed_solution: String,
+    /// The error output from cargo test.
+    pub error_output: String,
+    /// Who attempted it.
+    pub attempted_by: String,
+}
+
+/// Export failed attempts for peer sharing (collaborative solving).
+/// Peers can use these as negative context to avoid the same mistakes.
+pub fn export_failures(db: &SoulDatabase) -> Vec<SharedFailure> {
+    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "self".into());
+
+    // Get our failed attempts (only most recent per task_id)
+    let runs = db.get_all_benchmark_runs().unwrap_or_default();
+    let mut failures: std::collections::HashMap<String, SharedFailure> =
+        std::collections::HashMap::new();
+
+    for r in &runs {
+        if !r.passed && !r.generated_solution.is_empty() && !r.error_output.is_empty() {
+            // Keep the most recent failure per task_id
+            let entry = failures.entry(r.task_id.clone()).or_insert_with(|| SharedFailure {
+                task_id: r.task_id.clone(),
+                entry_point: r.entry_point.clone(),
+                failed_solution: r.generated_solution.clone(),
+                error_output: r.error_output.clone(),
+                attempted_by: instance_id.clone(),
+            });
+            // Update if this is a more recent failure
+            if r.created_at > 0 {
+                entry.failed_solution = r.generated_solution.clone();
+                entry.error_output = r.error_output.clone();
+            }
+        }
+    }
+
+    // Exclude task_ids we eventually solved (failure is no longer relevant)
+    let solved: std::collections::HashSet<String> = runs
+        .iter()
+        .filter(|r| r.passed)
+        .map(|r| r.task_id.clone())
+        .collect();
+    failures.retain(|task_id, _| !solved.contains(task_id));
+
+    failures.into_values().collect()
+}
+
+/// Load peer failures from DB (imported via discover_peers).
+pub fn load_peer_failures(db: &SoulDatabase) -> Vec<SharedFailure> {
+    db.get_state("peer_failures")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Import peer failures for collaborative solving.
+pub fn import_failures(db: &SoulDatabase, peer_failures: Vec<SharedFailure>) -> u32 {
+    let mut existing: Vec<SharedFailure> = load_peer_failures(db);
+    let existing_ids: std::collections::HashSet<String> =
+        existing.iter().map(|f| format!("{}:{}", f.task_id, f.attempted_by)).collect();
+
+    let mut imported = 0u32;
+    for failure in peer_failures {
+        let key = format!("{}:{}", failure.task_id, failure.attempted_by);
+        if !existing_ids.contains(&key) {
+            existing.push(failure);
+            imported += 1;
+        }
+    }
+
+    // Cap at 200 to prevent unbounded growth
+    if existing.len() > 200 {
+        existing.drain(..existing.len() - 200);
+    }
+
+    if imported > 0 {
+        if let Ok(json) = serde_json::to_string(&existing) {
+            let _ = db.set_state("peer_failures", &json);
+        }
+    }
+
+    imported
 }
 
 /// Export all verified (passed) solutions for peer sharing.

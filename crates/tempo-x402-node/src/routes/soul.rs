@@ -919,6 +919,25 @@ async fn get_benchmark_solutions(state: web::Data<NodeState>) -> HttpResponse {
     }))
 }
 
+/// GET /soul/benchmark/failures — export failed attempts for collaborative solving.
+/// Peers use these as negative context to avoid the same mistakes.
+async fn get_benchmark_failures(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}));
+        }
+    };
+
+    let failures = x402_soul::benchmark::export_failures(soul_db);
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "failures": failures,
+        "count": failures.len(),
+    }))
+}
+
 /// POST /soul/benchmark — request a benchmark run on the next cycle.
 /// Sets a flag that the thinking loop checks.
 async fn trigger_benchmark(state: web::Data<NodeState>) -> HttpResponse {
@@ -1432,6 +1451,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route(
             "/soul/benchmark/solutions",
             web::get().to(get_benchmark_solutions),
+        )
+        .route(
+            "/soul/benchmark/failures",
+            web::get().to(get_benchmark_failures),
         )
         .route("/soul/open-prs", web::get().to(open_prs))
         .route("/soul/diagnostics", web::get().to(soul_diagnostics))

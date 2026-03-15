@@ -625,6 +625,19 @@ pub fn brain_gate_step(
         return (true, None);
     }
 
+    // Never brain-gate basic mechanical operations — these are fundamental
+    // and the brain can get poisoned by path errors (e.g. `ls ./src` fails,
+    // then brain blocks all `ls` operations). Only gate risky operations.
+    let step_summary = step.summary();
+    let is_safe_op = step_summary.starts_with("ls ")
+        || step_summary.starts_with("read ")
+        || step_summary.starts_with("search ")
+        || step_summary == "discover peers"
+        || step_summary.starts_with("check ");
+    if is_safe_op {
+        return (true, None);
+    }
+
     // Hard gate: if brain predicts <10% success AND error confidence is high,
     // skip the step entirely. Cap confidence at 95% — a 50K-param net should
     // never be 100% certain about anything.

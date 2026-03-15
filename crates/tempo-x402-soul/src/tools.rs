@@ -2710,6 +2710,24 @@ impl ToolExecutor {
                                                             parent_trimmed, slug
                                                         )),
                                                     );
+                                                    // Sanitize description — strip control characters that break JSON parsing
+                                                    if let Some(serde_json::Value::String(desc)) =
+                                                        obj.get("description")
+                                                    {
+                                                        let clean: String = desc
+                                                            .chars()
+                                                            .filter(|c| {
+                                                                !c.is_control()
+                                                                    || *c == '\n'
+                                                                    || *c == '\r'
+                                                                    || *c == '\t'
+                                                            })
+                                                            .collect();
+                                                        obj.insert(
+                                                            "description".to_string(),
+                                                            serde_json::Value::String(clean),
+                                                        );
+                                                    }
                                                 }
                                                 ep_clone
                                             })

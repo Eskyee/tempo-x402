@@ -382,6 +382,9 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
                         .iter()
                         .map(|(name, score)| serde_json::json!({"model": name, "pass_at_1": score}))
                         .collect::<Vec<_>>(),
+                    "multiagent": soul_db.get_state("benchmark_multiagent")
+                        .ok().flatten()
+                        .and_then(|v| serde_json::from_str::<serde_json::Value>(&v).ok()),
                 })
             })
         },

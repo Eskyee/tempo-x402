@@ -513,6 +513,9 @@ pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
             "unique_solved": collective_solved,
             "total_problems": collective_total,
         },
+        "multiagent": soul_db.get_state("benchmark_multiagent")
+            .ok().flatten()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
     }))
 }
 
@@ -936,6 +939,41 @@ async fn get_benchmark_failures(state: web::Data<NodeState>) -> HttpResponse {
         "failures": failures,
         "count": failures.len(),
     }))
+}
+
+/// POST /soul/benchmark/review — peer reviews a benchmark solution.
+/// Used by adversarial verification: agent A generates, agent B reviews.
+async fn review_benchmark_solution(
+    state: web::Data<NodeState>,
+    body: web::Json<x402_soul::benchmark::ReviewRequest>,
+) -> HttpResponse {
+    let config = match &state.soul_config {
+        Some(c) => c,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}));
+        }
+    };
+
+    let api_key = match &config.llm_api_key {
+        Some(k) => k.clone(),
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "no LLM key — dormant mode"}));
+        }
+    };
+
+    let llm = x402_soul::llm::LlmClient::new(
+        api_key,
+        config.llm_model_fast.clone(),
+        config.llm_model_think.clone(),
+    );
+
+    match x402_soul::benchmark::review_solution(&llm, &body).await {
+        Ok(review) => HttpResponse::Ok().json(review),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(serde_json::json!({"error": e})),
+    }
 }
 
 /// POST /soul/benchmark — request a benchmark run on the next cycle.
@@ -1455,6 +1493,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route(
             "/soul/benchmark/failures",
             web::get().to(get_benchmark_failures),
+        )
+        .route(
+            "/soul/benchmark/review",
+            web::post().to(review_benchmark_solution),
         )
         .route("/soul/open-prs", web::get().to(open_prs))
         .route("/soul/diagnostics", web::get().to(soul_diagnostics))

@@ -32,6 +32,9 @@ pub struct ExercismProblem {
     pub starter_code: String,
     /// Difficulty: "easy", "medium", "hard"
     pub difficulty: String,
+    /// The actual Cargo.toml from Exercism (has correct dependencies).
+    #[serde(default)]
+    pub cargo_toml: String,
 }
 
 /// Result of running a single benchmark problem.
@@ -298,6 +301,26 @@ async fn fetch_exercise(slug: &str) -> Result<ExercismProblem, String> {
         None => String::new(),
     };
 
+    // Fetch actual Cargo.toml (has correct dependencies)
+    let cargo_toml_url = format!("{EXERCISM_BASE}/{slug}/Cargo.toml");
+    let cargo_toml = client
+        .get(&cargo_toml_url)
+        .header("User-Agent", "tempo-x402-soul/1.8")
+        .send()
+        .await
+        .ok()
+        .and_then(|r| {
+            if r.status().is_success() {
+                Some(r)
+            } else {
+                None
+            }
+        });
+    let cargo_toml = match cargo_toml {
+        Some(r) => r.text().await.unwrap_or_default(),
+        None => String::new(),
+    };
+
     let difficulty = classify_difficulty(slug).to_string();
 
     Ok(ExercismProblem {
@@ -306,6 +329,7 @@ async fn fetch_exercise(slug: &str) -> Result<ExercismProblem, String> {
         test_code,
         starter_code,
         difficulty,
+        cargo_toml,
     })
 }
 
@@ -394,6 +418,22 @@ pub async fn generate_solution(
         ));
     }
 
+    // Show available dependencies so LLM knows what crates it can use
+    if !problem.cargo_toml.is_empty() && problem.cargo_toml.contains("[dependencies]") {
+        let deps_section: String = problem
+            .cargo_toml
+            .lines()
+            .skip_while(|l| !l.contains("[dependencies]"))
+            .take_while(|l| !l.starts_with('[') || l.contains("[dependencies]"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !deps_section.is_empty() {
+            prompt.push_str(&format!(
+                "## Available Dependencies (Cargo.toml)\n```toml\n{deps_section}\n```\n\n"
+            ));
+        }
+    }
+
     // Show test code so the LLM knows the expected API
     let test_preview: String = problem.test_code.chars().take(4000).collect();
     prompt.push_str(&format!(
@@ -430,14 +470,19 @@ pub async fn validate_solution(
         tokio::fs::create_dir_all(format!("{test_dir}/src")).await?;
         tokio::fs::create_dir_all(format!("{test_dir}/tests")).await?;
 
-        // Write Cargo.toml
-        let cargo_toml = format!(
-            "[package]\n\
-             name = \"exercism-bench-{slug}\"\n\
-             version = \"0.1.0\"\n\
-             edition = \"2021\"\n",
-            slug = problem.slug.replace('-', "_")
-        );
+        // Write Cargo.toml — use the actual one from Exercism (has correct deps),
+        // fall back to minimal if not available
+        let cargo_toml = if !problem.cargo_toml.is_empty() {
+            problem.cargo_toml.clone()
+        } else {
+            format!(
+                "[package]\n\
+                 name = \"exercism-bench-{slug}\"\n\
+                 version = \"0.1.0\"\n\
+                 edition = \"2021\"\n",
+                slug = problem.slug.replace('-', "_")
+            )
+        };
         tokio::fs::write(format!("{test_dir}/Cargo.toml"), &cargo_toml).await?;
 
         // Write solution as src/lib.rs
@@ -501,7 +546,11 @@ pub async fn validate_solution(
             }
         }
         Ok(Err(e)) => (false, format!("exec error: {e}")),
-        Err(_) => (false, "timeout (120s)".into()),
+        Err(_) => {
+            // Clean shared target dir on timeout to prevent cascade failures
+            let _ = tokio::fs::remove_dir_all(BENCHMARK_TARGET_DIR).await;
+            (false, "timeout (120s)".into())
+        }
     }
 }
 

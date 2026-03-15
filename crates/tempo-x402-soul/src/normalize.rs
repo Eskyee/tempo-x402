@@ -402,8 +402,28 @@ pub fn normalize_plan_json(json_str: &str) -> String {
                 }
             }
 
-            // Already has a valid "type" field — return with coerced values
-            if map.contains_key("type") {
+            // Remap common LLM type aliases to the canonical type names
+            if let Some(type_val) = map.get("type").and_then(|v| v.as_str()).map(String::from) {
+                let canonical = match type_val.as_str() {
+                    "shell" | "execute_shell" | "exec" | "execute" => "run_shell",
+                    "read" => "read_file",
+                    "write" | "write_file" => "generate_code",
+                    "search" | "grep" | "find_code" => "search_code",
+                    "list" | "ls" => "list_dir",
+                    "check" | "check_self_status" => "check_self",
+                    "peer" | "call" => "call_peer",
+                    "peers" | "find_peers" => "discover_peers",
+                    "clone" => "clone_self",
+                    _ => type_val.as_str(),
+                };
+                if canonical != type_val {
+                    tracing::debug!(
+                        original = %type_val,
+                        canonical = %canonical,
+                        "Remapped LLM type alias to canonical step type"
+                    );
+                    map.insert("type".to_string(), serde_json::json!(canonical));
+                }
                 return Some(obj);
             }
 

@@ -614,11 +614,14 @@ pub fn brain_gate_step(
     step: &PlanStep,
     prediction: &crate::brain::BrainPrediction,
 ) -> (bool, Option<String>) {
-    // Only gate when the brain has enough training data to be reliable.
-    // 100 steps is too low — brain needs substantial experience before we trust it
-    // to block execution. Small nets overfit quickly with limited data.
+    // Only gate when the brain has enough training data AND is actually learning.
+    // Two conditions must be met:
+    // 1. Enough training steps (at least 5000)
+    // 2. Loss must be reasonable (< 12.0) — high loss means the brain hasn't converged
+    //    and its predictions are unreliable. Soul-bot had 500K steps but 14.8 loss,
+    //    blocking everything including `ls`.
     let brain = crate::brain::load_brain(db);
-    if brain.train_steps < 5000 {
+    if brain.train_steps < 5000 || brain.running_loss > 12.0 {
         return (true, None);
     }
 

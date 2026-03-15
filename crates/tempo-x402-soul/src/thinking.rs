@@ -940,6 +940,46 @@ impl ThinkingLoop {
         };
 
         if state_changed {
+            // Emit events for specific state changes
+            if let Some(prev) = &pacer.prev_snapshot {
+                if snapshot.total_payments > prev.total_payments {
+                    let delta = snapshot.total_payments - prev.total_payments;
+                    crate::events::emit_event(
+                        &self.db,
+                        "info",
+                        "payment.received",
+                        &format!(
+                            "{} new payment(s) received (total: {})",
+                            delta, snapshot.total_payments
+                        ),
+                        crate::events::EventRefs {
+                            context: Some(
+                                [
+                                    ("delta".to_string(), delta.to_string()),
+                                    ("total".to_string(), snapshot.total_payments.to_string()),
+                                    ("revenue".to_string(), snapshot.total_revenue.to_string()),
+                                ]
+                                .into_iter()
+                                .collect(),
+                            ),
+                            ..Default::default()
+                        },
+                    );
+                }
+                if snapshot.endpoint_count != prev.endpoint_count {
+                    crate::events::emit_event(
+                        &self.db,
+                        "info",
+                        "endpoint.changed",
+                        &format!(
+                            "Endpoint count changed: {} → {}",
+                            prev.endpoint_count, snapshot.endpoint_count
+                        ),
+                        crate::events::EventRefs::default(),
+                    );
+                }
+            }
+
             // Record observation
             let obs_content = format!(
                 "Node state captured (uptime {}h, {} endpoints, {} payments)",

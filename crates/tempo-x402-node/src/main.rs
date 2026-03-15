@@ -584,6 +584,20 @@ async fn main() -> std::io::Result<()> {
                     let build_sha = env!("GIT_SHA");
                     if db.reset_deploy_counters(build_sha) {
                         tracing::info!(build = %build_sha, "Deploy counters reset for new build");
+                        x402_soul::emit_event(
+                            &db,
+                            "info",
+                            "system.deploy",
+                            &format!("New build deployed: {}", build_sha),
+                            x402_soul::EventRefs {
+                                context: Some(
+                                    [("build_sha".to_string(), build_sha.to_string())]
+                                        .into_iter()
+                                        .collect(),
+                                ),
+                                ..Default::default()
+                            },
+                        );
                     }
                     (
                         Some(db),

@@ -2665,6 +2665,76 @@ impl ToolExecutor {
                     }
                 }
 
+                // If we have a PARENT_URL and found no peers from siblings,
+                // treat the parent itself as a peer (the parent isn't in its
+                // own siblings list, so children can't discover it otherwise).
+                if enriched_peers.is_empty() {
+                    if let Ok(parent_env) = std::env::var("PARENT_URL") {
+                        let parent_trimmed = parent_env.trim_end_matches('/');
+                        let info_url = format!("{}/instance/info", parent_trimmed);
+                        if let Ok(r) = client.get(&info_url).send().await {
+                            if r.status().is_success() {
+                                if let Ok(info) = r.json::<serde_json::Value>().await {
+                                    let p_inst = info
+                                        .get("instance_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("parent");
+                                    let p_addr = info.get("address").and_then(|v| v.as_str());
+                                    let p_version = info.get("version").and_then(|v| v.as_str());
+                                    let p_endpoints = info
+                                        .get("endpoints")
+                                        .and_then(|v| v.as_array())
+                                        .cloned()
+                                        .unwrap_or_default();
+
+                                    // Skip if parent is actually us
+                                    let is_self = p_inst == self_instance_id
+                                        || p_addr
+                                            .map(|a| a.to_lowercase() == self_address)
+                                            .unwrap_or(false);
+
+                                    if !is_self {
+                                        let callable: Vec<serde_json::Value> = p_endpoints
+                                            .iter()
+                                            .map(|ep| {
+                                                let slug = ep
+                                                    .get("slug")
+                                                    .and_then(|s| s.as_str())
+                                                    .unwrap_or("");
+                                                let mut ep_clone = ep.clone();
+                                                if let Some(obj) = ep_clone.as_object_mut() {
+                                                    obj.insert(
+                                                        "callable_url".to_string(),
+                                                        serde_json::Value::String(format!(
+                                                            "{}/g/{}",
+                                                            parent_trimmed, slug
+                                                        )),
+                                                    );
+                                                }
+                                                ep_clone
+                                            })
+                                            .collect();
+
+                                        tracing::info!(
+                                            parent_id = %p_inst,
+                                            endpoints = callable.len(),
+                                            "Added parent as peer (no siblings found)"
+                                        );
+
+                                        enriched_peers.push(serde_json::json!({
+                                            "instance_id": p_inst,
+                                            "url": parent_trimmed,
+                                            "address": p_addr,
+                                            "version": p_version,
+                                            "endpoints": callable,
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Track successful peer discovery as coordination signal
                 if !enriched_peers.is_empty() {
                     if let Some(ref db) = self.db {

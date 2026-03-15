@@ -189,6 +189,7 @@ impl ThinkingLoop {
             coding_enabled = self.config.coding_enabled,
             "Soul plan-driven loop started"
         );
+        crate::events::emit_info(&self.db, "system.startup", "Soul thinking loop started");
 
         loop {
             // Heartbeat: signal that the soul loop is alive
@@ -506,6 +507,21 @@ impl ThinkingLoop {
             let stag_err =
                 format!("{cycles_since_commit} cycles without commit — global stagnation");
             feedback::record_outcome(&self.db, &plan, &goal_desc, Some(&stag_err));
+            crate::events::emit_event(
+                &self.db,
+                "error",
+                "system.stagnation",
+                &format!("Global stagnation: {stag_err}. {abandoned} goals abandoned."),
+                Some(serde_json::json!({
+                    "cycles_since_commit": cycles_since_commit,
+                    "goals_abandoned": abandoned,
+                })),
+                crate::events::EventRefs {
+                    plan_id: Some(plan.id.clone()),
+                    goal_id: Some(plan.goal_id.clone()),
+                    ..Default::default()
+                },
+            );
             let _ = self.db.insert_nudge(
                 "stagnation",
                 &format!("{cycles_since_commit} cycles without progress. All {abandoned} goals reset. Try a completely different approach."),
@@ -540,6 +556,21 @@ impl ThinkingLoop {
                 // Record outcome so agents learn from repeated goal failures
                 let retry_err = format!("Goal failed {} times — abandoned", goal.retry_count);
                 feedback::record_outcome(&self.db, &plan, &goal.description, Some(&retry_err));
+                crate::events::emit_event(
+                    &self.db,
+                    "warn",
+                    "goal.abandoned",
+                    &format!(
+                        "Goal abandoned after {} retries: {}",
+                        goal.retry_count, goal.description
+                    ),
+                    Some(serde_json::json!({"retry_count": goal.retry_count})),
+                    crate::events::EventRefs {
+                        plan_id: Some(plan.id.clone()),
+                        goal_id: Some(plan.goal_id.clone()),
+                        ..Default::default()
+                    },
+                );
                 let desc_preview: String = goal.description.chars().take(80).collect();
                 let _ = self.db.insert_nudge(
                     "stagnation",
@@ -662,6 +693,22 @@ impl ThinkingLoop {
             }
 
             if !should_execute {
+                crate::events::emit_event(
+                    &self.db,
+                    "warn",
+                    "brain.gate.blocked",
+                    &format!(
+                        "Brain gated step: {}",
+                        gate_reason.as_deref().unwrap_or("low confidence")
+                    ),
+                    Some(serde_json::json!({"step": step_summary})),
+                    crate::events::EventRefs {
+                        plan_id: Some(plan.id.clone()),
+                        goal_id: Some(plan.goal_id.clone()),
+                        step_index: Some(plan.current_step as i32),
+                        ..Default::default()
+                    },
+                );
                 // Record the gate event as a capability failure
                 capability::record_step_result(
                     &self.db,
@@ -1039,6 +1086,7 @@ impl ThinkingLoop {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let health_section = crate::events::format_health_for_prompt(&self.db);
         let prompt = prompts::planning_prompt(
             goal,
             &workspace_listing,
@@ -1049,6 +1097,7 @@ impl ThinkingLoop {
             &peer_catalog,
             &peer_prs,
             &role_guide,
+            &health_section,
         );
         let system =
             "You are a software engineering planner. Output ONLY a JSON array of plan steps.";
@@ -1311,6 +1360,7 @@ impl ThinkingLoop {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let health_section = crate::events::format_health_for_prompt(&self.db);
         let prompt = prompts::goal_creation_prompt(
             snapshot,
             &beliefs,
@@ -1325,6 +1375,7 @@ impl ThinkingLoop {
             &cap_with_benchmark,
             &peer_prs,
             &role_guide,
+            &health_section,
         );
         let system = "You are an autonomous agent. Output ONLY a JSON array of goal operations.";
 
@@ -1428,6 +1479,31 @@ impl ThinkingLoop {
         plan.status = PlanStatus::Completed;
         self.db.update_plan(plan)?;
         let _ = self.db.set_state("active_plan_id", "");
+        let _ = self.db.set_state(
+            "last_plan_completed_at",
+            &chrono::Utc::now().timestamp().to_string(),
+        );
+
+        // Emit structured event
+        crate::events::emit_event(
+            &self.db,
+            "info",
+            "plan.completed",
+            &format!(
+                "Plan completed: {} ({} steps)",
+                goal.description,
+                plan.steps.len()
+            ),
+            Some(serde_json::json!({
+                "steps": plan.steps.len(),
+                "replan_count": plan.replan_count,
+            })),
+            crate::events::EventRefs {
+                plan_id: Some(plan.id.clone()),
+                goal_id: Some(plan.goal_id.clone()),
+                ..Default::default()
+            },
+        );
 
         // Plan completion is progress — reset stagnation counter
         // (agents doing peer calls + research are productive without commits)
@@ -1460,6 +1536,19 @@ impl ThinkingLoop {
     ) -> Result<CycleResult, SoulError> {
         // Track error (goal retry only increments when plan fully fails, not per step)
         self.append_recent_error(error);
+        crate::events::emit_event(
+            &self.db,
+            "warn",
+            "plan.step.failed",
+            &format!("Step failed: {step_desc} — {error}"),
+            Some(serde_json::json!({"step": step_desc})),
+            crate::events::EventRefs {
+                plan_id: Some(plan.id.clone()),
+                goal_id: Some(plan.goal_id.clone()),
+                step_index: Some(plan.current_step as i32),
+                ..Default::default()
+            },
+        );
 
         // Short-circuit: some errors are unsolvable — replanning won't help
         let error_lower = error.to_lowercase();
@@ -1503,6 +1592,23 @@ impl ThinkingLoop {
                 &capability::Capability::PlanComplete,
                 false,
                 &format!("{}: {}", step_desc, error),
+            );
+            crate::events::emit_event(
+                &self.db,
+                "error",
+                "plan.failed",
+                &format!("Plan failed after {} replans: {}", plan.replan_count, error),
+                Some(serde_json::json!({
+                    "step": step_desc,
+                    "replan_count": plan.replan_count,
+                    "unsolvable": unsolvable,
+                })),
+                crate::events::EventRefs {
+                    plan_id: Some(plan.id.clone()),
+                    goal_id: Some(plan.goal_id.clone()),
+                    step_index: Some(plan.current_step as i32),
+                    ..Default::default()
+                },
             );
 
             // Extract and store durable behavioral rules from this failure

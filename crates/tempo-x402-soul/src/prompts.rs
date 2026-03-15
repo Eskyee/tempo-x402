@@ -115,6 +115,7 @@ pub fn goal_creation_prompt(
     capability_profile: &str,
     peer_open_prs: &str,
     role_guidance: &str,
+    health_section: &str,
 ) -> String {
     let mut sections = Vec::new();
 
@@ -230,6 +231,11 @@ pub fn goal_creation_prompt(
         sections.push(diag_lines.join("\n"));
     }
 
+    // Structured health summary from events system
+    if !health_section.is_empty() {
+        sections.push(health_section.to_string());
+    }
+
     // Show recently failed/abandoned goals so LLM doesn't repeat them
     if !recently_failed_goals.is_empty() {
         let mut failed_lines = vec![
@@ -342,6 +348,7 @@ pub fn planning_prompt(
     peer_endpoint_catalog: &str,
     peer_open_prs: &str,
     role_guidance: &str,
+    health_section: &str,
 ) -> String {
     let mut extra_context = String::new();
 
@@ -357,6 +364,12 @@ pub fn planning_prompt(
         for err in recent_errors.iter().take(3) {
             extra_context.push_str(&format!("- {err}\n"));
         }
+    }
+
+    // Structured health from events system
+    if !health_section.is_empty() {
+        extra_context.push_str("\n");
+        extra_context.push_str(health_section);
     }
 
     // Inject peer endpoint catalog so agents know what they can call

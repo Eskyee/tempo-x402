@@ -622,19 +622,155 @@ pub fn train_cycle(db: &SoulDatabase) -> (usize, f32) {
     (count, avg_loss)
 }
 
-/// Format brain status for prompt injection.
+/// Format brain predictions as actionable intelligence for planning prompts.
+///
+/// Instead of useless stats, this produces ranked step-type recommendations
+/// the LLM can use to build better plans. This is the core feedback loop:
+/// brain trains on outcomes → predictions shape plans → better plans → better outcomes.
 pub fn brain_summary(db: &SoulDatabase) -> String {
     let brain = load_brain(db);
-    if brain.train_steps == 0 {
+    if brain.train_steps < 100 {
         return String::new();
     }
 
-    format!(
-        "# Neural Brain Status\nParameters: {} | Training steps: {} | Running loss: {:.4}\nThe brain predicts step success probability and error categories from experience.",
-        brain.param_count(),
-        brain.train_steps,
-        brain.running_loss,
-    )
+    // Predict success for every step type with a neutral context
+    let base_ctx = StepContext {
+        plan_progress: 0.3,
+        overall_success_rate: 0.5,
+        capability_success_rate: 0.5,
+        ..Default::default()
+    };
+
+    let step_types: Vec<(&str, PlanStep)> = vec![
+        (
+            "read_file",
+            PlanStep::ReadFile {
+                path: String::new(),
+                store_as: None,
+            },
+        ),
+        (
+            "search_code",
+            PlanStep::SearchCode {
+                pattern: String::new(),
+                directory: None,
+                store_as: None,
+            },
+        ),
+        (
+            "list_dir",
+            PlanStep::ListDir {
+                path: String::new(),
+                store_as: None,
+            },
+        ),
+        (
+            "run_shell",
+            PlanStep::RunShell {
+                command: String::new(),
+                store_as: None,
+            },
+        ),
+        (
+            "commit",
+            PlanStep::Commit {
+                message: String::new(),
+            },
+        ),
+        (
+            "check_self",
+            PlanStep::CheckSelf {
+                endpoint: String::new(),
+                store_as: None,
+            },
+        ),
+        ("cargo_check", PlanStep::CargoCheck { store_as: None }),
+        (
+            "generate_code",
+            PlanStep::GenerateCode {
+                description: String::new(),
+                file_path: String::new(),
+                context_keys: vec![],
+            },
+        ),
+        (
+            "edit_code",
+            PlanStep::EditCode {
+                description: String::new(),
+                file_path: String::new(),
+                context_keys: vec![],
+            },
+        ),
+        (
+            "think",
+            PlanStep::Think {
+                question: String::new(),
+                store_as: None,
+            },
+        ),
+        ("discover_peers", PlanStep::DiscoverPeers { store_as: None }),
+    ];
+
+    let mut predictions: Vec<(&str, f32, ErrorCategory)> = step_types
+        .iter()
+        .map(|(name, step)| {
+            let features = encode_step(step, &base_ctx);
+            let pred = brain.predict(&features);
+            (*name, pred.success_prob, pred.likely_error)
+        })
+        .collect();
+
+    // Sort by success probability descending
+    predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut lines = Vec::new();
+    lines.push("# Brain Predictions (from experience)".to_string());
+    lines.push("Step types ranked by predicted success:".to_string());
+
+    let mut prefer = Vec::new();
+    let mut avoid = Vec::new();
+
+    for (name, prob, error) in &predictions {
+        let pct = (prob * 100.0) as u32;
+        let icon = if *prob >= 0.7 {
+            prefer.push(*name);
+            "OK"
+        } else if *prob >= 0.4 {
+            "RISKY"
+        } else {
+            avoid.push(*name);
+            "AVOID"
+        };
+        lines.push(format!(
+            "- {name}: {pct}% success [{icon}] (likely error: {error:?})"
+        ));
+    }
+
+    if !prefer.is_empty() {
+        lines.push(format!(
+            "\nPREFER these step types in plans: {}",
+            prefer.join(", ")
+        ));
+    }
+    if !avoid.is_empty() {
+        lines.push(format!(
+            "AVOID these step types (low success): {}",
+            avoid.join(", ")
+        ));
+    }
+
+    // Add top error patterns
+    let error_counts = db
+        .top_event_codes_since(chrono::Utc::now().timestamp() - 86400, 5)
+        .unwrap_or_default();
+    if !error_counts.is_empty() {
+        lines.push("\nTop error patterns (last 24h):".to_string());
+        for (code, count) in &error_counts {
+            lines.push(format!("- {code}: {count} occurrences"));
+        }
+    }
+
+    lines.join("\n")
 }
 
 /// Get a prediction for a step before executing it.
@@ -642,6 +778,53 @@ pub fn predict_step(db: &SoulDatabase, step: &PlanStep, context: &StepContext) -
     let brain = load_brain(db);
     let features = encode_step(step, context);
     brain.predict(&features)
+}
+
+/// Online learning: train the brain immediately after a step executes.
+/// This is the tight feedback loop — don't wait for batch training every 10 cycles.
+pub fn train_on_step(
+    db: &SoulDatabase,
+    step: &PlanStep,
+    success: bool,
+    error_category: Option<crate::feedback::ErrorCategory>,
+    context: &StepContext,
+) {
+    let mut brain = load_brain(db);
+    let features = encode_step(step, context);
+    let cap = step_to_capability(step);
+
+    let example = TrainingExample {
+        features,
+        success,
+        error_category,
+        capability: cap,
+    };
+
+    let loss = brain.train(&example);
+    // Only save if loss is reasonable (avoid NaN/Inf poisoning)
+    if loss.is_finite() {
+        save_brain(db, &brain);
+    }
+}
+
+/// Map a PlanStep to its Capability for training.
+fn step_to_capability(step: &PlanStep) -> Capability {
+    match step {
+        PlanStep::ReadFile { .. } => Capability::FileRead,
+        PlanStep::ListDir { .. } => Capability::FileRead,
+        PlanStep::SearchCode { .. } => Capability::CodeSearch,
+        PlanStep::RunShell { .. } => Capability::ShellExec,
+        PlanStep::Commit { .. } => Capability::GitOps,
+        PlanStep::GenerateCode { .. } => Capability::CodeGen,
+        PlanStep::EditCode { .. } => Capability::FileWrite,
+        PlanStep::CargoCheck { .. } => Capability::CodeCompile,
+        PlanStep::Think { .. } => Capability::PlanComplete,
+        PlanStep::CheckSelf { .. } => Capability::ShellExec,
+        PlanStep::DiscoverPeers { .. } => Capability::PeerCall,
+        PlanStep::CallPeer { .. } => Capability::PeerCall,
+        PlanStep::CreateScriptEndpoint { .. } => Capability::EndpointCreate,
+        _ => Capability::PlanComplete,
+    }
 }
 
 // ── Math utilities ───────────────────────────────────────────────────

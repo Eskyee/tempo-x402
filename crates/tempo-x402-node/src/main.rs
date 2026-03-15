@@ -589,14 +589,8 @@ async fn main() -> std::io::Result<()> {
                             "info",
                             "system.deploy",
                             &format!("New build deployed: {}", build_sha),
-                            x402_soul::EventRefs {
-                                context: Some(
-                                    [("build_sha".to_string(), build_sha.to_string())]
-                                        .into_iter()
-                                        .collect(),
-                                ),
-                                ..Default::default()
-                            },
+                            Some(serde_json::json!({"build_sha": build_sha})),
+                            x402_soul::EventRefs::default(),
                         );
                     }
                     (

@@ -773,6 +773,9 @@ impl ThinkingLoop {
                         "Step succeeded"
                     );
 
+                    // Online brain learning — immediate feedback, not just batch
+                    crate::brain::train_on_step(&self.db, &step, true, None, &brain_ctx);
+
                     consecutive_failures = 0; // reset on success
                     last_step_summary = step_summary;
                     last_was_llm = is_llm;
@@ -792,6 +795,9 @@ impl ThinkingLoop {
                     tracing::warn!(step = %step_summary, error = %error, consecutive_failures, "Step failed");
                     // Track capability failure
                     capability::record_step_result(&self.db, &step, false, &error);
+                    // Online brain learning — learn from failures immediately
+                    let err_cat = crate::feedback::classify_error(&error);
+                    crate::brain::train_on_step(&self.db, &step, false, Some(err_cat), &brain_ctx);
 
                     // Record failure chain for causal reasoning
                     let goal_desc = self
@@ -817,6 +823,9 @@ impl ThinkingLoop {
                     tracing::info!(step = %step_summary, reason = %reason, "Step needs replan");
                     // Track capability failure
                     capability::record_step_result(&self.db, &step, false, &reason);
+                    // Online brain learning
+                    let err_cat = crate::feedback::classify_error(&reason);
+                    crate::brain::train_on_step(&self.db, &step, false, Some(err_cat), &brain_ctx);
 
                     // Record failure chain for causal reasoning
                     let goal_desc = self
@@ -952,18 +961,12 @@ impl ThinkingLoop {
                             "{} new payment(s) received (total: {})",
                             delta, snapshot.total_payments
                         ),
-                        crate::events::EventRefs {
-                            context: Some(
-                                [
-                                    ("delta".to_string(), delta.to_string()),
-                                    ("total".to_string(), snapshot.total_payments.to_string()),
-                                    ("revenue".to_string(), snapshot.total_revenue.to_string()),
-                                ]
-                                .into_iter()
-                                .collect(),
-                            ),
-                            ..Default::default()
-                        },
+                        Some(serde_json::json!({
+                            "delta": delta,
+                            "total": snapshot.total_payments,
+                            "revenue": snapshot.total_revenue,
+                        })),
+                        crate::events::EventRefs::default(),
                     );
                 }
                 if snapshot.endpoint_count != prev.endpoint_count {
@@ -975,6 +978,7 @@ impl ThinkingLoop {
                             "Endpoint count changed: {} → {}",
                             prev.endpoint_count, snapshot.endpoint_count
                         ),
+                        None,
                         crate::events::EventRefs::default(),
                     );
                 }
@@ -1112,7 +1116,14 @@ impl ThinkingLoop {
             }
             exp
         };
-        let cap_guidance = capability::capability_guidance(&self.db);
+        let cap_guidance = {
+            let mut cg = capability::capability_guidance(&self.db);
+            let brain_intel = crate::brain::brain_summary(&self.db);
+            if !brain_intel.is_empty() {
+                cg = format!("{cg}\n\n{brain_intel}");
+            }
+            cg
+        };
         let role_guide = capability::role_guidance(&self.db);
         let peer_catalog = self
             .db

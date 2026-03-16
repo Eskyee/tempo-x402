@@ -632,12 +632,13 @@ pub async fn validate_solution(
         let cargo_toml = if !problem.cargo_toml.is_empty() {
             problem.cargo_toml.clone()
         } else {
+            // Use the exercise slug as the crate name — tests import `use {slug}::*`
             format!(
                 "[package]\n\
-                 name = \"exercism-bench-{slug}\"\n\
+                 name = \"{slug}\"\n\
                  version = \"0.1.0\"\n\
                  edition = \"2021\"\n",
-                slug = problem.slug.replace('-', "_")
+                slug = problem.slug
             )
         };
         tokio::fs::write(format!("{test_dir}/Cargo.toml"), &cargo_toml).await?;
@@ -773,9 +774,10 @@ pub async fn run_benchmark_session(
         "Starting Exercism Rust benchmark session"
     );
 
-    // Try to load cached problems, fetch if not cached
+    // Try to load cached problems, fetch if not cached.
+    // Invalidate cache if problems lack cargo_toml (old cache format).
     let problems = match load_cached_problems(db) {
-        Some(p) if p.len() >= 20 => p,
+        Some(p) if p.len() >= 20 && p.iter().any(|prob| !prob.cargo_toml.is_empty()) => p,
         _ => {
             let fetched = fetch_problems().await?;
             cache_problems(db, &fetched);

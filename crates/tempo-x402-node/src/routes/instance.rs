@@ -139,6 +139,7 @@ pub async fn info(state: web::Data<NodeState>) -> HttpResponse {
                 "evolution": f.evolution,
                 "coordination": f.coordination,
                 "introspection": f.introspection,
+                "prediction": f.prediction,
                 "measured_at": f.measured_at,
             })
         });

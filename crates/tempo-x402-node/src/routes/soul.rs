@@ -53,6 +53,24 @@ struct SoulStatus {
     /// Recent failure chains — causal analysis of why steps fail.
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_chains: Option<serde_json::Value>,
+    /// Cortex: predictive world model state — emotion, curiosity, prediction accuracy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cortex: Option<serde_json::Value>,
+    /// Genesis: evolved plan template gene pool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    genesis: Option<serde_json::Value>,
+    /// Hivemind: stigmergic swarm intelligence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hivemind: Option<serde_json::Value>,
+    /// Synthesis: metacognitive self-awareness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    synthesis: Option<serde_json::Value>,
+    /// Evaluation: rigorous measurement (Brier scores, calibration, ablation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evaluation: Option<serde_json::Value>,
+    /// Free energy: the unifying metric (lower = smarter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    free_energy: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -304,6 +322,7 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             "evolution": f.evolution,
             "coordination": f.coordination,
             "introspection": f.introspection,
+            "prediction": f.prediction,
             "measured_at": f.measured_at,
         })
     });
@@ -414,6 +433,171 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             .ok()
             .flatten()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+        cortex: {
+            let cortex = x402_soul::cortex::load_cortex(soul_db);
+            if cortex.total_experiences_processed > 0 {
+                Some(serde_json::json!({
+                    "total_experiences": cortex.total_experiences_processed,
+                    "prediction_accuracy": format!("{:.1}%", cortex.prediction_accuracy() * 100.0),
+                    "total_predictions": cortex.total_predictions,
+                    "emotion": {
+                        "valence": cortex.emotion.valence,
+                        "arousal": cortex.emotion.arousal,
+                        "confidence": cortex.emotion.confidence,
+                        "drive": cortex.emotion.dominant_drive.to_string(),
+                    },
+                    "global_curiosity": cortex.global_curiosity,
+                    "curiosity_frontier": cortex.curiosity_frontier(5),
+                    "experience_count": cortex.experiences.len(),
+                    "causal_edges": cortex.causal_edges.len(),
+                    "action_models": cortex.action_models.len(),
+                    "dream_cycles": cortex.dream_cycles,
+                    "insights_count": cortex.insights.len(),
+                    "recent_insights": cortex.insights.iter().rev().take(3)
+                        .map(|i| serde_json::json!({"pattern": i.pattern, "confidence": i.confidence}))
+                        .collect::<Vec<_>>(),
+                }))
+            } else {
+                None
+            }
+        },
+        genesis: {
+            let gene_pool = x402_soul::genesis::load_gene_pool(soul_db);
+            if !gene_pool.templates.is_empty() {
+                let top_templates: Vec<serde_json::Value> = gene_pool.templates.iter()
+                    .take(5)
+                    .map(|t| serde_json::json!({
+                        "id": t.id,
+                        "goal_summary": t.goal_summary,
+                        "steps": t.step_types.join(" -> "),
+                        "fitness": format!("{:.0}%", t.fitness * 100.0),
+                        "success_rate": format!("{:.0}%", t.success_rate() * 100.0),
+                        "uses": t.uses,
+                        "generation": t.generation,
+                        "tags": t.tags,
+                    }))
+                    .collect();
+                Some(serde_json::json!({
+                    "templates": gene_pool.templates.len(),
+                    "generation": gene_pool.generation,
+                    "total_created": gene_pool.total_created,
+                    "total_crossovers": gene_pool.total_crossovers,
+                    "total_mutations": gene_pool.total_mutations,
+                    "top_templates": top_templates,
+                }))
+            } else {
+                None
+            }
+        },
+        hivemind: {
+            let hive = x402_soul::hivemind::load_hivemind(soul_db);
+            if !hive.trails.is_empty() || hive.total_deposits > 0 {
+                let top_attractants: Vec<serde_json::Value> = hive
+                    .attractants(&x402_soul::hivemind::PheromoneCategory::Action, 5)
+                    .iter()
+                    .map(|t| serde_json::json!({
+                        "resource": t.resource,
+                        "valence": t.valence,
+                        "intensity": t.intensity,
+                        "reinforced": t.reinforcement_count,
+                    }))
+                    .collect();
+                let top_repellents: Vec<serde_json::Value> = hive
+                    .repellents(&x402_soul::hivemind::PheromoneCategory::Action, 5)
+                    .iter()
+                    .map(|t| serde_json::json!({
+                        "resource": t.resource,
+                        "valence": t.valence,
+                        "intensity": t.intensity,
+                        "reinforced": t.reinforcement_count,
+                    }))
+                    .collect();
+                Some(serde_json::json!({
+                    "total_trails": hive.trails.len(),
+                    "total_deposits": hive.total_deposits,
+                    "evaporation_cycles": hive.evaporation_cycles,
+                    "peer_activities": hive.peer_activities.len(),
+                    "reputations": hive.reputations.len(),
+                    "top_attractants": top_attractants,
+                    "top_repellents": top_repellents,
+                    "swarm_intel": hive.swarm_intel,
+                }))
+            } else {
+                None
+            }
+        },
+        synthesis: {
+            let synth = x402_soul::synthesis::load_synthesis(soul_db);
+            if synth.total_predictions > 0 {
+                Some(serde_json::json!({
+                    "state": synth.state.to_string(),
+                    "total_predictions": synth.total_predictions,
+                    "total_imagined": synth.total_imagined,
+                    "conflicts": synth.conflicts.len(),
+                    "weights": {
+                        "brain": format!("{:.0}%", synth.weights.brain * 100.0),
+                        "cortex": format!("{:.0}%", synth.weights.cortex * 100.0),
+                        "genesis": format!("{:.0}%", synth.weights.genesis * 100.0),
+                        "hivemind": format!("{:.0}%", synth.weights.hivemind * 100.0),
+                    },
+                    "self_model": {
+                        "most_accurate": synth.self_model.most_accurate,
+                        "most_creative": synth.self_model.most_creative,
+                        "bottleneck": synth.self_model.bottleneck,
+                        "narrative": synth.self_model.narrative,
+                    },
+                }))
+            } else {
+                None
+            }
+        },
+        evaluation: {
+            let eval = x402_soul::evaluation::load_evaluation(soul_db);
+            if !eval.records.is_empty() {
+                let metrics = eval.compute_all_metrics();
+                let system_metrics: Vec<serde_json::Value> = metrics.iter()
+                    .filter(|m| m.total_predictions >= 5)
+                    .map(|m| serde_json::json!({
+                        "system": m.system,
+                        "brier_score": format!("{:.3}", m.brier_overall),
+                        "brier_recent": format!("{:.3}", m.brier_recent),
+                        "accuracy": format!("{:.1}%", m.accuracy_overall * 100.0),
+                        "calibration": m.decomposition.reliability < 0.05,
+                        "predictions": m.total_predictions,
+                    }))
+                    .collect();
+                Some(serde_json::json!({
+                    "total_records": eval.records.len(),
+                    "systems": system_metrics,
+                    "imagination": eval.imagination,
+                    "colony_benefit": eval.colony,
+                    "ablation": eval.ablation,
+                }))
+            } else {
+                None
+            }
+        },
+        free_energy: {
+            x402_soul::free_energy::load_current(soul_db).map(|fe| {
+                let components: Vec<serde_json::Value> = fe.components.iter()
+                    .map(|c| serde_json::json!({
+                        "system": c.system,
+                        "surprise": format!("{:.3}", c.surprise),
+                        "weight": format!("{:.2}", c.weight),
+                        "contribution": format!("{:.4}", c.contribution),
+                        "method": c.method,
+                    }))
+                    .collect();
+                serde_json::json!({
+                    "F": format!("{:.4}", fe.total),
+                    "regime": fe.regime.to_string(),
+                    "trend": format!("{:+.4}", fe.trend),
+                    "complexity": format!("{:.4}", fe.complexity),
+                    "components": components,
+                    "timestamp": fe.timestamp,
+                })
+            })
+        },
     })
 }
 
@@ -519,6 +703,50 @@ pub async fn get_lessons(state: web::Data<NodeState>) -> HttpResponse {
         "multiagent": soul_db.get_state("benchmark_multiagent")
             .ok().flatten()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+    }))
+}
+
+// ── Cognitive architecture sharing endpoints ──
+
+/// GET /soul/cortex — export cortex snapshot for peer sharing.
+pub async fn get_cortex(state: web::Data<NodeState>) -> HttpResponse {
+    let Some(soul_db) = &state.soul_db else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "no soul"}));
+    };
+    let cortex = x402_soul::cortex::load_cortex(soul_db);
+    let instance_id = state
+        .identity
+        .as_ref()
+        .map(|i| i.instance_id.clone())
+        .unwrap_or_default();
+    let snapshot = cortex.export(&instance_id);
+    HttpResponse::Ok().json(snapshot)
+}
+
+/// GET /soul/genesis — export gene pool for peer sharing.
+pub async fn get_genesis(state: web::Data<NodeState>) -> HttpResponse {
+    let Some(soul_db) = &state.soul_db else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "no soul"}));
+    };
+    let pool = x402_soul::genesis::load_gene_pool(soul_db);
+    let instance_id = state
+        .identity
+        .as_ref()
+        .map(|i| i.instance_id.clone())
+        .unwrap_or_default();
+    let snapshot = pool.export(&instance_id);
+    HttpResponse::Ok().json(snapshot)
+}
+
+/// GET /soul/hivemind — export pheromone trails for peer sharing.
+pub async fn get_hivemind(state: web::Data<NodeState>) -> HttpResponse {
+    let Some(soul_db) = &state.soul_db else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "no soul"}));
+    };
+    let hive = x402_soul::hivemind::load_hivemind(soul_db);
+    HttpResponse::Ok().json(serde_json::json!({
+        "trails": hive.export_trails(50),
+        "peer_activities": hive.peer_activities,
     }))
 }
 
@@ -974,8 +1202,7 @@ async fn review_benchmark_solution(
 
     match x402_soul::benchmark::review_solution(&llm, &body).await {
         Ok(review) => HttpResponse::Ok().json(review),
-        Err(e) => HttpResponse::InternalServerError()
-            .json(serde_json::json!({"error": e})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": e})),
     }
 }
 
@@ -1505,5 +1732,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/soul/diagnostics", web::get().to(soul_diagnostics))
         .route("/soul/cleanup", web::post().to(soul_cleanup))
         .route("/soul/events", web::get().to(soul_events))
-        .route("/soul/health", web::get().to(soul_health));
+        .route("/soul/health", web::get().to(soul_health))
+        // Cognitive architecture sharing endpoints
+        .route("/soul/cortex", web::get().to(get_cortex))
+        .route("/soul/genesis", web::get().to(get_genesis))
+        .route("/soul/hivemind", web::get().to(get_hivemind));
 }

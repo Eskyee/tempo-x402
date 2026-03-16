@@ -458,7 +458,9 @@ pub async fn generate_solution(
         .filter(|f| f.task_id == task_id)
         .collect();
     if !relevant_failures.is_empty() {
-        prompt.push_str("## FAILED PREVIOUS ATTEMPTS (from peer agents — learn from these mistakes)\n\n");
+        prompt.push_str(
+            "## FAILED PREVIOUS ATTEMPTS (from peer agents — learn from these mistakes)\n\n",
+        );
         for (i, failure) in relevant_failures.iter().enumerate().take(2) {
             let sol_preview: String = failure.failed_solution.chars().take(1500).collect();
             let err_preview: String = failure.error_output.chars().take(500).collect();
@@ -583,22 +585,14 @@ pub async fn review_solution(
 
 /// Request peer review from a live peer agent.
 /// Returns the review response, or None if the peer is unreachable.
-pub async fn request_peer_review(
-    peer_url: &str,
-    req: &ReviewRequest,
-) -> Option<ReviewResponse> {
+pub async fn request_peer_review(peer_url: &str, req: &ReviewRequest) -> Option<ReviewResponse> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .ok()?;
 
     let url = format!("{}/soul/benchmark/review", peer_url.trim_end_matches('/'));
-    let resp = client
-        .post(&url)
-        .json(req)
-        .send()
-        .await
-        .ok()?;
+    let resp = client.post(&url).json(req).send().await.ok()?;
 
     if !resp.status().is_success() {
         return None;
@@ -796,10 +790,8 @@ pub async fn run_benchmark_session(
 
     // Load peer failures for collaborative solving
     let peer_failures = load_peer_failures(db);
-    let peer_failure_task_ids: std::collections::HashSet<&str> = peer_failures
-        .iter()
-        .map(|f| f.task_id.as_str())
-        .collect();
+    let peer_failure_task_ids: std::collections::HashSet<&str> =
+        peer_failures.iter().map(|f| f.task_id.as_str()).collect();
 
     // Get peer URL for adversarial review (if any peer is live)
     let peer_url = get_peer_url(db);
@@ -933,7 +925,14 @@ pub async fn run_benchmark_session(
             }
         }
 
-        record_run(db, problem, success, &final_solution, &error_output, elapsed_ms);
+        record_run(
+            db,
+            problem,
+            success,
+            &final_solution,
+            &error_output,
+            elapsed_ms,
+        );
     }
 
     // Weighted score: difficulty-adjusted pass rate
@@ -1263,13 +1262,15 @@ pub fn export_failures(db: &SoulDatabase) -> Vec<SharedFailure> {
     for r in &runs {
         if !r.passed && !r.generated_solution.is_empty() && !r.error_output.is_empty() {
             // Keep the most recent failure per task_id
-            let entry = failures.entry(r.task_id.clone()).or_insert_with(|| SharedFailure {
-                task_id: r.task_id.clone(),
-                entry_point: r.entry_point.clone(),
-                failed_solution: r.generated_solution.clone(),
-                error_output: r.error_output.clone(),
-                attempted_by: instance_id.clone(),
-            });
+            let entry = failures
+                .entry(r.task_id.clone())
+                .or_insert_with(|| SharedFailure {
+                    task_id: r.task_id.clone(),
+                    entry_point: r.entry_point.clone(),
+                    failed_solution: r.generated_solution.clone(),
+                    error_output: r.error_output.clone(),
+                    attempted_by: instance_id.clone(),
+                });
             // Update if this is a more recent failure
             if r.created_at > 0 {
                 entry.failed_solution = r.generated_solution.clone();
@@ -1301,8 +1302,10 @@ pub fn load_peer_failures(db: &SoulDatabase) -> Vec<SharedFailure> {
 /// Import peer failures for collaborative solving.
 pub fn import_failures(db: &SoulDatabase, peer_failures: Vec<SharedFailure>) -> u32 {
     let mut existing: Vec<SharedFailure> = load_peer_failures(db);
-    let existing_ids: std::collections::HashSet<String> =
-        existing.iter().map(|f| format!("{}:{}", f.task_id, f.attempted_by)).collect();
+    let existing_ids: std::collections::HashSet<String> = existing
+        .iter()
+        .map(|f| format!("{}:{}", f.task_id, f.attempted_by))
+        .collect();
 
     let mut imported = 0u32;
     for failure in peer_failures {

@@ -244,7 +244,17 @@ impl ThinkingLoop {
                 evol = format!("{:.2}", fitness.evolution),
                 coord = format!("{:.2}", fitness.coordination),
                 intro = format!("{:.2}", fitness.introspection),
+                pred = format!("{:.2}", fitness.prediction),
                 "Fitness score"
+            );
+
+            // Compute and store free energy — THE unifying metric
+            let fe = crate::free_energy::measure(&self.db);
+            tracing::info!(
+                F = format!("{:.3}", fe.total),
+                trend = format!("{:+.4}", fe.trend),
+                regime = %fe.regime,
+                "Free energy"
             );
 
             // Run Exercism Rust benchmark periodically (every 100 cycles)
@@ -308,6 +318,56 @@ impl ThinkingLoop {
                         "Brain training cycle"
                     );
                 }
+
+                // Cortex dream consolidation: extract patterns, prune, counterfactuals
+                let mut cortex = crate::cortex::load_cortex(&self.db);
+                let insights = cortex.dream();
+                if insights > 0 {
+                    tracing::info!(
+                        insights,
+                        experiences = cortex.experiences.len(),
+                        dream_cycles = cortex.dream_cycles,
+                        drive = %cortex.emotion.dominant_drive,
+                        "Cortex dream consolidation"
+                    );
+                }
+                crate::cortex::save_cortex(&self.db, &cortex);
+            }
+
+            // Synthesis: update self-model every cycle
+            {
+                let mut synth = crate::synthesis::load_synthesis(&self.db);
+                synth.update_self_model();
+                crate::synthesis::save_synthesis(&self.db, &synth);
+            }
+
+            // Hivemind: evaporate pheromone trails every cycle
+            {
+                let mut hive = crate::hivemind::load_hivemind(&self.db);
+                let pruned = hive.evaporate();
+                if pruned > 0 {
+                    tracing::debug!(pruned, trails = hive.trails.len(), "Pheromone evaporation");
+                }
+                crate::hivemind::save_hivemind(&self.db, &hive);
+            }
+
+            // Gene pool evolution every 20 cycles: crossover, mutation, selection
+            if cycle_count > 0 && cycle_count % 20 == 0 {
+                let mut gene_pool = crate::genesis::load_gene_pool(&self.db);
+                if !gene_pool.templates.is_empty() {
+                    let (crossovers, mutations, pruned) = gene_pool.evolve();
+                    if crossovers + mutations + pruned > 0 {
+                        tracing::info!(
+                            crossovers,
+                            mutations,
+                            pruned,
+                            population = gene_pool.templates.len(),
+                            generation = gene_pool.generation,
+                            "Gene pool evolution"
+                        );
+                    }
+                    crate::genesis::save_gene_pool(&self.db, &gene_pool);
+                }
             }
 
             // Automatic peer sync every 5 cycles — don't rely on LLM choosing to discover.
@@ -315,6 +375,14 @@ impl ThinkingLoop {
             // gateway endpoints, generating real economic activity mechanically.
             if cycle_count > 0 && cycle_count % 5 == 0 {
                 tracing::info!("Automatic peer sync with x402 paid calls (every 5 cycles)");
+
+                // Evaluation: snapshot accuracy BEFORE sync for colony benefit measurement
+                {
+                    let mut eval = crate::evaluation::load_evaluation(&self.db);
+                    eval.pre_sync_snapshot();
+                    crate::evaluation::save_evaluation(&self.db, &eval);
+                }
+
                 match self
                     .tool_executor
                     .execute("discover_peers", &serde_json::json!({}))
@@ -326,6 +394,29 @@ impl ThinkingLoop {
                                 output_len = result.stdout.len(),
                                 "Peer sync complete — paid calls made, brain weights merged, lessons fetched"
                             );
+
+                            // Cognitive architecture sync: share cortex, genesis, hivemind
+                            // with ALL known peers. This was previously DEAD CODE — now wired.
+                            let peer_urls = self.get_known_peer_urls();
+                            let http_client = reqwest::Client::builder()
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build()
+                                .unwrap_or_default();
+                            for (peer_id, peer_url) in &peer_urls {
+                                crate::autonomy::sync_cognitive_systems(
+                                    &self.db,
+                                    peer_url,
+                                    peer_id,
+                                    &http_client,
+                                )
+                                .await;
+                            }
+                            if !peer_urls.is_empty() {
+                                tracing::info!(
+                                    peers = peer_urls.len(),
+                                    "Cognitive sync complete — cortex/genesis/hivemind merged"
+                                );
+                            }
                         } else {
                             tracing::debug!(
                                 stderr = %result.stderr,
@@ -336,6 +427,13 @@ impl ThinkingLoop {
                     Err(e) => {
                         tracing::debug!(error = %e, "Peer sync failed (non-fatal)");
                     }
+                }
+
+                // Evaluation: measure accuracy AFTER sync for colony benefit
+                {
+                    let mut eval = crate::evaluation::load_evaluation(&self.db);
+                    eval.post_sync_measurement();
+                    crate::evaluation::save_evaluation(&self.db, &eval);
                 }
             }
 
@@ -434,8 +532,49 @@ impl ThinkingLoop {
         let mut plan = match self.db.get_active_plan()? {
             Some(plan) => plan,
             None => {
-                // No active plan — try to create one
-                match self.create_plan(llm, snapshot, &nudges).await? {
+                // No active plan — try autonomous compilation first (no LLM needed)
+                let autonomous_plan = {
+                    let top_goal = self
+                        .db
+                        .get_active_goals()
+                        .ok()
+                        .and_then(|goals| goals.into_iter().next());
+                    if let Some(goal) = top_goal {
+                        let instance_id = self.config.instance_id.as_deref().unwrap_or("unknown");
+                        match crate::autonomy::compile_autonomous_plan(
+                            &self.db,
+                            &goal.id,
+                            &goal.description,
+                            instance_id,
+                        ) {
+                            crate::autonomy::CompilationResult::Compiled(plan) => {
+                                self.db.insert_plan(&plan)?;
+                                let _ = self.db.set_state("active_plan_id", &plan.id);
+                                crate::events::emit_info(
+                                    &self.db,
+                                    "plan.autonomous",
+                                    &format!("Autonomous plan compiled for: {}", goal.description),
+                                );
+                                Some(plan)
+                            }
+                            crate::autonomy::CompilationResult::FallbackToLlm(reason) => {
+                                tracing::debug!(reason = %reason, "Autonomous planning fell back to LLM");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                // Use autonomous plan if compiled, otherwise fall back to LLM
+                let plan_source = if let Some(plan) = autonomous_plan {
+                    Some(plan)
+                } else {
+                    self.create_plan(llm, snapshot, &nudges).await?
+                };
+
+                match plan_source {
                     Some(plan) => {
                         // Mark nudges as processed after they've influenced plan creation
                         for nudge in &nudges {
@@ -776,6 +915,99 @@ impl ThinkingLoop {
                     // Online brain learning — immediate feedback, not just batch
                     crate::brain::train_on_step(&self.db, &step, true, None, &brain_ctx);
 
+                    // Synthesis: record outcome for metacognitive tracking
+                    // Evaluation: record per-system predictions with Brier scoring
+                    {
+                        let cortex = crate::cortex::load_cortex(&self.db);
+                        let gene_pool = crate::genesis::load_gene_pool(&self.db);
+                        let hivemind = crate::hivemind::load_hivemind(&self.db);
+                        let goal_desc = self
+                            .db
+                            .get_goal(&plan.goal_id)
+                            .ok()
+                            .flatten()
+                            .map(|g| g.description.clone())
+                            .unwrap_or_default();
+                        let mut synth = crate::synthesis::load_synthesis(&self.db);
+                        let unified = synth.predict_step(
+                            &step,
+                            &prediction,
+                            &cortex,
+                            &gene_pool,
+                            &hivemind,
+                            &goal_desc,
+                        );
+                        synth.record_outcome(&unified.votes, true);
+                        crate::synthesis::save_synthesis(&self.db, &synth);
+
+                        // Rigorous evaluation: per-system Brier score tracking
+                        let mut eval = crate::evaluation::load_evaluation(&self.db);
+                        for vote in &unified.votes {
+                            let prob = (vote.prediction + 1.0) / 2.0; // Map -1..+1 to 0..1
+                            eval.record_prediction(
+                                &vote.system,
+                                prob,
+                                vote.confidence,
+                                true,
+                                &step_summary,
+                            );
+                        }
+                        crate::evaluation::save_evaluation(&self.db, &eval);
+                    }
+
+                    // Cortex: record experience for world model
+                    {
+                        let goal_desc = self
+                            .db
+                            .get_goal(&plan.goal_id)
+                            .ok()
+                            .flatten()
+                            .map(|g| g.description.clone())
+                            .unwrap_or_default();
+                        let ctx_tags = crate::cortex::build_context_tags(
+                            &step,
+                            &goal_desc,
+                            if plan.steps.is_empty() {
+                                0.0
+                            } else {
+                                plan.current_step as f32 / plan.steps.len() as f32
+                            },
+                            cycle_count,
+                        );
+                        let mut cortex = crate::cortex::load_cortex(&self.db);
+                        cortex.record(
+                            &crate::cortex::step_to_action_name(&step),
+                            ctx_tags,
+                            true,
+                            1.0,
+                            None,
+                        );
+                        crate::cortex::save_cortex(&self.db, &cortex);
+
+                        // Hivemind: deposit positive pheromone on successful step
+                        let mut hive = crate::hivemind::load_hivemind(&self.db);
+                        let file_path = match &step {
+                            PlanStep::ReadFile { path, .. }
+                            | PlanStep::GenerateCode {
+                                file_path: path, ..
+                            }
+                            | PlanStep::EditCode {
+                                file_path: path, ..
+                            } => Some(path.as_str()),
+                            _ => None,
+                        };
+                        let instance_id = self.config.instance_id.as_deref().unwrap_or("unknown");
+                        let goal_kw = crate::genesis::extract_keywords_pub(&goal_desc);
+                        hive.deposit_from_step(
+                            &crate::cortex::step_to_action_name(&step),
+                            file_path,
+                            &goal_kw,
+                            true,
+                            instance_id,
+                        );
+                        crate::hivemind::save_hivemind(&self.db, &hive);
+                    }
+
                     consecutive_failures = 0; // reset on success
                     last_step_summary = step_summary;
                     last_was_llm = is_llm;
@@ -797,7 +1029,66 @@ impl ThinkingLoop {
                     capability::record_step_result(&self.db, &step, false, &error);
                     // Online brain learning — learn from failures immediately
                     let err_cat = crate::feedback::classify_error(&error);
-                    crate::brain::train_on_step(&self.db, &step, false, Some(err_cat), &brain_ctx);
+                    crate::brain::train_on_step(
+                        &self.db,
+                        &step,
+                        false,
+                        Some(err_cat.clone()),
+                        &brain_ctx,
+                    );
+
+                    // Cortex: record failure experience for world model
+                    {
+                        let goal_desc_for_cortex = self
+                            .db
+                            .get_goal(&plan.goal_id)
+                            .ok()
+                            .flatten()
+                            .map(|g| g.description.clone())
+                            .unwrap_or_default();
+                        let ctx_tags = crate::cortex::build_context_tags(
+                            &step,
+                            &goal_desc_for_cortex,
+                            if plan.steps.is_empty() {
+                                0.0
+                            } else {
+                                plan.current_step as f32 / plan.steps.len() as f32
+                            },
+                            cycle_count,
+                        );
+                        let mut cortex = crate::cortex::load_cortex(&self.db);
+                        cortex.record(
+                            &crate::cortex::step_to_action_name(&step),
+                            ctx_tags,
+                            false,
+                            -0.5,
+                            Some(format!("{:?}", err_cat)),
+                        );
+                        crate::cortex::save_cortex(&self.db, &cortex);
+
+                        // Hivemind: deposit negative pheromone on failed step
+                        let mut hive = crate::hivemind::load_hivemind(&self.db);
+                        let file_path_for_hive = match &step {
+                            PlanStep::ReadFile { path, .. }
+                            | PlanStep::GenerateCode {
+                                file_path: path, ..
+                            }
+                            | PlanStep::EditCode {
+                                file_path: path, ..
+                            } => Some(path.as_str()),
+                            _ => None,
+                        };
+                        let instance_id = self.config.instance_id.as_deref().unwrap_or("unknown");
+                        let goal_kw = crate::genesis::extract_keywords_pub(&goal_desc_for_cortex);
+                        hive.deposit_from_step(
+                            &crate::cortex::step_to_action_name(&step),
+                            file_path_for_hive,
+                            &goal_kw,
+                            false,
+                            instance_id,
+                        );
+                        crate::hivemind::save_hivemind(&self.db, &hive);
+                    }
 
                     // Record failure chain for causal reasoning
                     let goal_desc = self
@@ -825,7 +1116,43 @@ impl ThinkingLoop {
                     capability::record_step_result(&self.db, &step, false, &reason);
                     // Online brain learning
                     let err_cat = crate::feedback::classify_error(&reason);
-                    crate::brain::train_on_step(&self.db, &step, false, Some(err_cat), &brain_ctx);
+                    crate::brain::train_on_step(
+                        &self.db,
+                        &step,
+                        false,
+                        Some(err_cat.clone()),
+                        &brain_ctx,
+                    );
+
+                    // Cortex: record replan experience
+                    {
+                        let goal_desc_for_cortex = self
+                            .db
+                            .get_goal(&plan.goal_id)
+                            .ok()
+                            .flatten()
+                            .map(|g| g.description.clone())
+                            .unwrap_or_default();
+                        let ctx_tags = crate::cortex::build_context_tags(
+                            &step,
+                            &goal_desc_for_cortex,
+                            if plan.steps.is_empty() {
+                                0.0
+                            } else {
+                                plan.current_step as f32 / plan.steps.len() as f32
+                            },
+                            cycle_count,
+                        );
+                        let mut cortex = crate::cortex::load_cortex(&self.db);
+                        cortex.record(
+                            &crate::cortex::step_to_action_name(&step),
+                            ctx_tags,
+                            false,
+                            -0.3,
+                            Some(format!("{:?}", err_cat)),
+                        );
+                        crate::cortex::save_cortex(&self.db, &cortex);
+                    }
 
                     // Record failure chain for causal reasoning
                     let goal_desc = self
@@ -1150,6 +1477,55 @@ impl ThinkingLoop {
             &role_guide,
             &health_section,
         );
+
+        // Inject all cognitive systems into planning
+        let gene_pool = crate::genesis::load_gene_pool(&self.db);
+        let template_section = gene_pool.prompt_section(&goal.description);
+        let cortex = crate::cortex::load_cortex(&self.db);
+        let cortex_section = cortex.curiosity_report();
+        let hive = crate::hivemind::load_hivemind(&self.db);
+        let hive_section = hive.prompt_section();
+        let mut synth = crate::synthesis::load_synthesis(&self.db);
+        let synth_section = synth.prompt_section();
+
+        // Imagination: generate plans WITHOUT LLM from causal graph
+        let imagined = synth.imagine_plans(&cortex, &gene_pool, &goal.description);
+        let imagine_section = if imagined.is_empty() {
+            String::new()
+        } else {
+            let mut lines =
+                vec!["# Imagined Plans (generated from world model, no LLM)".to_string()];
+            for (i, plan) in imagined.iter().enumerate() {
+                lines.push(format!(
+                    "## Imagination {} ({:.0}% predicted success, novelty {:.0}%)",
+                    i + 1,
+                    plan.predicted_success * 100.0,
+                    plan.novelty * 100.0,
+                ));
+                lines.push(format!("Steps: {}", plan.steps.join(" → ")));
+                lines.push(format!("Reasoning: {}", plan.reasoning));
+            }
+            lines.join("\n")
+        };
+        crate::synthesis::save_synthesis(&self.db, &synth);
+
+        let extra = [
+            template_section,
+            cortex_section,
+            hive_section,
+            synth_section,
+            imagine_section,
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+        let prompt = if extra.is_empty() {
+            prompt
+        } else {
+            format!("{prompt}\n\n{extra}")
+        };
+
         let system =
             "You are a software engineering planner. Output ONLY a JSON array of plan steps.";
 
@@ -1212,6 +1588,39 @@ impl ThinkingLoop {
                             detail = %v.detail,
                             "Plan validation warning (soft)"
                         );
+                    }
+                }
+
+                // ── Cortex mental simulation ──
+                // Predict plan outcome before executing. Log predictions; block
+                // only if cortex is highly confident the plan will fail.
+                let cortex = crate::cortex::load_cortex(&self.db);
+                let simulation = cortex.simulate_plan(&steps);
+                if simulation.confidence > 0.5 {
+                    tracing::info!(
+                        predicted_success = format!("{:.1}%", simulation.predicted_success * 100.0),
+                        confidence = format!("{:.1}%", simulation.confidence * 100.0),
+                        novel_steps = ?simulation.novel_steps,
+                        risky_steps = ?simulation.risky_steps,
+                        "Cortex plan simulation"
+                    );
+                    // Block if cortex predicts near-certain failure with high confidence
+                    if simulation.predicted_success < 0.05 && simulation.confidence > 0.7 {
+                        tracing::warn!(
+                            "Cortex predicts plan will fail ({:.1}% success, {:.1}% confidence) — rejecting",
+                            simulation.predicted_success * 100.0,
+                            simulation.confidence * 100.0,
+                        );
+                        let _ = self.db.insert_nudge(
+                            "cortex",
+                            &format!(
+                                "Plan rejected by cortex simulation: {:.0}% predicted success. Risky steps: {:?}",
+                                simulation.predicted_success * 100.0,
+                                simulation.risky_steps,
+                            ),
+                            3,
+                        );
+                        return Ok(None);
                     }
                 }
 
@@ -1428,6 +1837,33 @@ impl ThinkingLoop {
             &role_guide,
             &health_section,
         );
+
+        // Inject all cognitive systems + recursive self-improvement into goal creation
+        let cortex = crate::cortex::load_cortex(&self.db);
+        let cortex_report = cortex.curiosity_report();
+        let hive = crate::hivemind::load_hivemind(&self.db);
+        let hive_report = hive.prompt_section();
+        let synth = crate::synthesis::load_synthesis(&self.db);
+        let synth_report = synth.prompt_section();
+        let improvement_report = crate::autonomy::improvement_prompt(&self.db);
+        let fe_report = crate::free_energy::prompt_section(&self.db);
+        let extra_intel = [
+            cortex_report,
+            hive_report,
+            synth_report,
+            improvement_report,
+            fe_report,
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+        let prompt = if extra_intel.is_empty() {
+            prompt
+        } else {
+            format!("{prompt}\n\n{extra_intel}")
+        };
+
         let system = "You are an autonomous agent. Output ONLY a JSON array of goal operations.";
 
         match llm.think(system, &prompt).await {
@@ -1568,6 +2004,19 @@ impl ThinkingLoop {
             true,
             &goal.description,
         );
+
+        // Genesis: record successful plan as an evolved template
+        {
+            let step_types: Vec<String> = plan
+                .steps
+                .iter()
+                .map(|s| crate::cortex::step_to_action_name(s))
+                .collect();
+            let instance_id = self.config.instance_id.as_deref().unwrap_or("unknown");
+            let mut gene_pool = crate::genesis::load_gene_pool(&self.db);
+            gene_pool.record_success(&goal.description, step_types, instance_id);
+            crate::genesis::save_gene_pool(&self.db, &gene_pool);
+        }
 
         self.increment_cycle_count()?;
         Ok(CycleResult {
@@ -1804,6 +2253,30 @@ impl ThinkingLoop {
 
     fn get_cycles_since_last_commit(&self) -> u64 {
         crate::housekeeping::get_cycles_since_last_commit(&self.db)
+    }
+
+    /// Get known peer URLs from the peer endpoint catalog stored by discover_peers.
+    fn get_known_peer_urls(&self) -> Vec<(String, String)> {
+        let catalog_json = self
+            .db
+            .get_state("peer_endpoint_catalog")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        // Parse peer catalog: [{"peer":"<id>","url":"<url>","slugs":[...]}]
+        let peers: Vec<serde_json::Value> = serde_json::from_str(&catalog_json).unwrap_or_default();
+        peers
+            .iter()
+            .filter_map(|p| {
+                let id = p.get("peer")?.as_str()?.to_string();
+                let url = p.get("url")?.as_str()?.to_string();
+                if url.is_empty() {
+                    None
+                } else {
+                    Some((id, url))
+                }
+            })
+            .collect()
     }
 
     /// Sync auto-beliefs from a snapshot: ground truth that doesn't need the LLM.

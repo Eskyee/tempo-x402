@@ -225,6 +225,7 @@ mod tests {
             instance_id: None,
             generation: 0,
             endpoints: vec![],
+            peers: vec![],
         }
     }
 

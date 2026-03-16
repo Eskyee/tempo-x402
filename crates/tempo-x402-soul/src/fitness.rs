@@ -34,6 +34,9 @@ pub struct FitnessScore {
     /// Introspection fitness: do your beliefs match reality?
     /// Fraction of auto-beliefs that are accurate.
     pub introspection: f64,
+    /// Prediction fitness: how accurate is the cortex world model?
+    /// High score = the agent understands cause and effect in its environment.
+    pub prediction: f64,
     /// Trend: derivative of total fitness over last N measurements.
     /// Positive = improving, negative = declining. THIS is the gradient.
     pub trend: f64,
@@ -45,11 +48,13 @@ pub struct FitnessScore {
 
 /// Component weights for the fitness function.
 /// Execution is king — plans that actually work matter most.
-const W_ECONOMIC: f64 = 0.25;
-const W_EXECUTION: f64 = 0.30;
-const W_EVOLUTION: f64 = 0.20;
-const W_COORDINATION: f64 = 0.15;
+/// Prediction (cortex) measures world model accuracy — the foundation of intelligence.
+const W_ECONOMIC: f64 = 0.20;
+const W_EXECUTION: f64 = 0.25;
+const W_EVOLUTION: f64 = 0.15;
+const W_COORDINATION: f64 = 0.10;
 const W_INTROSPECTION: f64 = 0.10;
+const W_PREDICTION: f64 = 0.20;
 
 /// How many historical scores to keep for trend calculation.
 const HISTORY_SIZE: usize = 50;
@@ -64,12 +69,14 @@ impl FitnessScore {
         let evolution = compute_evolution(db);
         let coordination = compute_coordination(db);
         let introspection = compute_introspection(snapshot, db);
+        let prediction = compute_prediction(db);
 
         let total = W_ECONOMIC * economic
             + W_EXECUTION * execution
             + W_EVOLUTION * evolution
             + W_COORDINATION * coordination
-            + W_INTROSPECTION * introspection;
+            + W_INTROSPECTION * introspection
+            + W_PREDICTION * prediction;
 
         // Compute trend from historical scores
         let trend = compute_trend(db, total);
@@ -81,6 +88,7 @@ impl FitnessScore {
             evolution,
             coordination,
             introspection,
+            prediction,
             trend,
             measured_at: now,
             generation: snapshot.generation,
@@ -264,6 +272,20 @@ fn compute_introspection(snapshot: &NodeSnapshot, db: &SoulDatabase) -> f64 {
         return 0.1 + 0.2 * sigmoid(belief_count, 10.0);
     }
     correct as f64 / total as f64
+}
+
+/// Prediction fitness: how accurate is the cortex world model?
+/// Accuracy above 50% (random baseline) is meaningful. Need 20+ predictions for full credit.
+fn compute_prediction(db: &SoulDatabase) -> f64 {
+    let cortex = crate::cortex::load_cortex(db);
+    let total = cortex.total_predictions;
+    if total < 5 {
+        return 0.1; // Not enough data
+    }
+    let accuracy = cortex.prediction_accuracy() as f64;
+    // Volume ramp: need 20+ predictions for full credit
+    let confidence = (total as f64 / 20.0).min(1.0);
+    0.1 * (1.0 - confidence) + accuracy * confidence
 }
 
 /// Compute trend (gradient) from historical fitness scores.

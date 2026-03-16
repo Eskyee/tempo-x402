@@ -51,6 +51,7 @@
 //!
 //! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 
+pub mod autonomy;
 pub mod benchmark;
 pub mod brain;
 pub mod capability;
@@ -58,14 +59,19 @@ pub mod chat;
 pub mod coding;
 pub mod computer_use;
 pub mod config;
+pub mod cortex;
 pub mod db;
 pub mod elo;
 pub mod error;
+pub mod evaluation;
 pub mod events;
 pub mod feedback;
 pub mod fitness;
+pub mod free_energy;
+pub mod genesis;
 pub mod git;
 pub mod guard;
+pub mod hivemind;
 pub mod housekeeping;
 pub mod llm;
 pub mod memory;
@@ -76,6 +82,7 @@ pub mod observer;
 pub mod persistent_memory;
 pub mod plan;
 pub mod prompts;
+pub mod synthesis;
 pub mod thinking;
 pub mod tool_decl;
 pub mod tool_registry;

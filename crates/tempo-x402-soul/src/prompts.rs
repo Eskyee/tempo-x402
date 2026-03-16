@@ -123,8 +123,8 @@ pub fn goal_creation_prompt(
         format!(
             "\n\
          - **Fitness**: {:.3} (trend: {:+.4})\n\
-         - Economic: {:.2} | Execution: {:.2} | Evolution: {:.2} | Coordination: {:.2} | Introspection: {:.2}",
-            f.total, f.trend, f.economic, f.execution, f.evolution, f.coordination, f.introspection
+         - Economic: {:.2} | Execution: {:.2} | Evolution: {:.2} | Coordination: {:.2} | Introspection: {:.2} | Prediction: {:.2}",
+            f.total, f.trend, f.economic, f.execution, f.evolution, f.coordination, f.introspection, f.prediction
         )
     } else {
         String::new()

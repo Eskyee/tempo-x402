@@ -713,7 +713,16 @@ pub async fn validate_solution(
 
 /// Get the URL of a live peer for adversarial review.
 /// Returns the first reachable peer URL, or None.
+/// Checks: discovered_peers, peer_endpoint_catalog, and PARENT_URL (for clones).
 pub fn get_peer_url(db: &SoulDatabase) -> Option<String> {
+    let self_url = std::env::var("RAILWAY_PUBLIC_DOMAIN")
+        .ok()
+        .map(|d| format!("https://{d}"))
+        .or_else(|| std::env::var("GATEWAY_URL").ok())
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string();
+
     // Check peer_endpoint_catalog for known peers
     let catalog: Vec<serde_json::Value> = db
         .get_state("peer_endpoint_catalog")
@@ -730,12 +739,21 @@ pub fn get_peer_url(db: &SoulDatabase) -> Option<String> {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    // Try to find a peer URL from either source
+    // Try to find a peer URL from either source (skip self)
     for peer in peers.iter().chain(catalog.iter()) {
         if let Some(url) = peer.get("url").and_then(|v| v.as_str()) {
-            if !url.is_empty() {
-                return Some(url.to_string());
+            let normalized = url.trim_end_matches('/');
+            if !normalized.is_empty() && normalized != self_url {
+                return Some(normalized.to_string());
             }
+        }
+    }
+
+    // Fallback: PARENT_URL is a valid peer for clones
+    if let Ok(parent_url) = std::env::var("PARENT_URL") {
+        let normalized = parent_url.trim_end_matches('/').to_string();
+        if !normalized.is_empty() && normalized != self_url {
+            return Some(normalized);
         }
     }
 

@@ -66,6 +66,13 @@ COPY --from=builder /app/target/release/x402-gateway /usr/local/bin/x402-gateway
 COPY --from=builder /app/target/release/x402-node /usr/local/bin/x402-node
 COPY --from=builder /app/crates/tempo-x402-app/dist /app/spa
 
+# Copy Rust toolchain from builder for benchmark (cargo test on Exercism problems)
+COPY --from=builder /usr/local/rustup /usr/local/rustup
+COPY --from=builder /usr/local/cargo /usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH="/usr/local/cargo/bin:${PATH}"
+
 RUN chown -R app:app /app
 
 # Entrypoint: fix volume permissions then drop to non-root

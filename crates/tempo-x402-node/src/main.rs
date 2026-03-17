@@ -156,6 +156,57 @@ async fn main() -> std::io::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // ── Runtime environment health check ───────────────────────────────
+    // Verify build dependencies are present so cargo check/test can work.
+    // This prevents silent failures that waste hundreds of agent cycles.
+    {
+        let checks: Vec<(&str, &str)> = vec![
+            (
+                "cargo",
+                "Rust toolchain missing — benchmark and coding won't work",
+            ),
+            ("gcc", "C compiler missing — native crates won't compile"),
+            (
+                "pkg-config",
+                "pkg-config missing — OpenSSL and other libs won't be found",
+            ),
+            ("git", "git missing — version control won't work"),
+            ("gh", "GitHub CLI missing — PR creation won't work"),
+        ];
+        let mut missing = Vec::new();
+        for (cmd, reason) in &checks {
+            let ok = std::process::Command::new("which")
+                .arg(cmd)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !ok {
+                missing.push(format!("{cmd}: {reason}"));
+            }
+        }
+        // Check libssl-dev specifically (the #1 silent killer)
+        let has_ssl = std::path::Path::new("/usr/include/openssl/ssl.h").exists()
+            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libssl.so").exists();
+        if !has_ssl {
+            missing.push(
+                "libssl-dev: OpenSSL headers missing — cargo check WILL FAIL on reqwest/tls crates"
+                    .to_string(),
+            );
+        }
+        if missing.is_empty() {
+            tracing::info!("Runtime environment OK — all build dependencies present");
+        } else {
+            for m in &missing {
+                tracing::error!("MISSING DEPENDENCY: {m}");
+            }
+            tracing::error!(
+                "Build environment incomplete ({} missing). Agents will NOT be able to compile code. \
+                 Fix the Dockerfile runtime stage.",
+                missing.len()
+            );
+        }
+    }
+
     // ── Identity bootstrap ──────────────────────────────────────────────
     // Must run BEFORE GatewayConfig::from_env() so that injected env vars
     // (EVM_ADDRESS, FACILITATOR_PRIVATE_KEY, FACILITATOR_SHARED_SECRET)

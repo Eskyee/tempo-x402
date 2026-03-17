@@ -42,6 +42,30 @@ pub async fn health(
         response["soul_status"] = serde_json::json!("not_spawned");
     }
 
+    // Check build environment (can agents compile code?)
+    let has_cargo = std::process::Command::new("which")
+        .arg("cargo")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let has_ssl = std::path::Path::new("/usr/include/openssl/ssl.h").exists()
+        || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libssl.so").exists();
+    let has_gcc = std::process::Command::new("which")
+        .arg("gcc")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let build_env_ok = has_cargo && has_ssl && has_gcc;
+    response["build_env"] = serde_json::json!({
+        "ok": build_env_ok,
+        "cargo": has_cargo,
+        "libssl": has_ssl,
+        "gcc": has_gcc,
+    });
+    if !build_env_ok {
+        response["status"] = serde_json::json!("degraded");
+    }
+
     if response["status"] == "degraded" {
         HttpResponse::ServiceUnavailable().json(response)
     } else {

@@ -1238,38 +1238,7 @@ fn DashboardPage() -> impl IntoView {
                                 }).collect::<Vec<_>>()}
                             </div>
 
-                            // Clone
-                            <div class="tmux-section">
-                                <button
-                                    class="btn clone-btn"
-                                    style="width: 100%; font-size: 11px; padding: 4px 8px;"
-                                    disabled=move || {
-                                        if !clone_available { return true; }
-                                        let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
-                                        wallet.get().mode == WalletMode::Disconnected || clone_loading.get()
-                                    }
-                                    on:click=move |_| {
-                                        if !clone_available { return; }
-                                        let (wallet, _) = expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
-                                        let w = wallet.get();
-                                        set_clone_loading.set(true);
-                                        set_clone_result.set(None);
-                                        spawn_local(async move {
-                                            let result = api::clone_instance(&w).await;
-                                            set_clone_result.set(Some(result));
-                                            set_clone_loading.set(false);
-                                        });
-                                    }
-                                >
-                                    {let cp = clone_price.clone(); move || if clone_loading.get() {
-                                        "Cloning...".to_string()
-                                    } else if clone_available {
-                                        format!("Clone ({})", cp)
-                                    } else {
-                                        "Clone N/A".to_string()
-                                    }}
-                                </button>
-                            </div>
+                            // Clone button removed — available on Demo page
                         </div>
 
                         // ─── CENTER PANE: SOUL ───
@@ -1435,9 +1404,7 @@ fn DashboardPage() -> impl IntoView {
                         </div>
 
                         </div> // end tmux-grid
-
-                        // OLD LAYOUT REMOVED — now in tmux grid above
-                        // (keeping marker for safe deletion)
+                        // Old layout sections removed — everything is in the tmux grid now
                         {if false {
                             Some(view! {
                                 <div class="fitness-panel">
@@ -1540,7 +1507,8 @@ fn DashboardPage() -> impl IntoView {
                             None
                         }}
 
-                        // Clone section
+                        // Clone section (hidden — moved to demo page)
+                        {if false { Some(view! {
                         <div class="clone-section">
                             <h2>"Clone Instance"</h2>
                             <button
@@ -1697,6 +1665,7 @@ fn DashboardPage() -> impl IntoView {
                                 }.into_view()
                             }}
                         </div>
+                    }) } else { None }}
                     }
                 }}
             </Show>

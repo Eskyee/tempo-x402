@@ -2755,3 +2755,15 @@ a.node-address:hover { text-decoration: underline; }
         font-size: 10px;
     }
 }
+
+/* Hide footer when tmux dashboard is active */
+.tmux ~ .footer,
+.tmux ~ .chat-widget {
+    display: none !important;
+}
+
+/* Override container padding for tmux */
+.container:has(.tmux) {
+    padding: 0;
+    max-width: none;
+}

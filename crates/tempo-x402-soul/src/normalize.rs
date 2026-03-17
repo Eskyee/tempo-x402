@@ -71,6 +71,47 @@ pub fn sanitize_plan_steps(steps: Vec<PlanStep>) -> Vec<PlanStep> {
                         command.as_str()
                     };
 
+                // Intercept tool names used as shell commands — LLM sometimes generates
+                // {"type":"run_shell","command":"edit_code file.rs ..."} instead of using EditCode
+                if command.starts_with("edit_code ") || command.starts_with("edit_file ") {
+                    let rest = command.split_once(' ').map(|x| x.1).unwrap_or("");
+                    tracing::info!(command = %command, "Converted RunShell(edit_code) → EditCode");
+                    sanitized.push(PlanStep::EditCode {
+                        file_path: rest.split_whitespace().next().unwrap_or("").to_string(),
+                        description: rest.to_string(),
+                        context_keys: vec![],
+                    });
+                    continue;
+                }
+                if command.starts_with("write_file ") || command.starts_with("generate_code ") {
+                    let rest = command.split_once(' ').map(|x| x.1).unwrap_or("");
+                    tracing::info!(command = %command, "Converted RunShell(write_file) → GenerateCode");
+                    sanitized.push(PlanStep::GenerateCode {
+                        file_path: rest.split_whitespace().next().unwrap_or("").to_string(),
+                        description: rest.to_string(),
+                        context_keys: vec![],
+                    });
+                    continue;
+                }
+                if command.starts_with("read_file ") || command.starts_with("cat ") {
+                    let path = command.split_whitespace().nth(1).unwrap_or("").to_string();
+                    if !path.is_empty() && !path.starts_with('-') {
+                        tracing::info!(command = %command, "Converted RunShell(read_file) → ReadFile");
+                        sanitized.push(PlanStep::ReadFile {
+                            path,
+                            store_as: store_as.clone(),
+                        });
+                        continue;
+                    }
+                }
+                if command == "cargo check" || command.starts_with("cargo check ") {
+                    tracing::info!(command = %command, "Converted RunShell(cargo check) → CargoCheck");
+                    sanitized.push(PlanStep::CargoCheck {
+                        store_as: store_as.clone(),
+                    });
+                    continue;
+                }
+
                 // Skip commands that are purely writing shell-variable placeholders to files
                 // e.g., `echo "$response" > file.json` or `echo '$info_call_result' > file`
                 let has_placeholder_var = command.contains("$soul_response")

@@ -201,7 +201,7 @@ impl Brain {
         let output = add_bias(&matmul(&h2, &self.w3, HIDDEN_SIZE, OUTPUT_SIZE), &self.b3);
 
         // ── Compute targets ──
-        let mut target = vec![0.0f32; OUTPUT_SIZE];
+        let mut target = [0.0f32; OUTPUT_SIZE];
         // Success target
         target[0] = if example.success { 1.0 } else { 0.0 };
         // Error category target (one-hot at index 1..12)
@@ -457,7 +457,7 @@ pub fn outcomes_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
 
         let success = outcome.status == "completed";
 
-        let error_category = outcome.error_category.as_ref().map(|c| c.clone());
+        let error_category = outcome.error_category.clone();
 
         // One example for each step type that was attempted
         for step_name in outcome
@@ -532,7 +532,7 @@ pub fn events_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
 /// Load brain from database (soul_state key: "brain_weights").
 pub fn load_brain(db: &SoulDatabase) -> Brain {
     match db.get_state("brain_weights").ok().flatten() {
-        Some(json) => Brain::from_json(&json).unwrap_or_else(Brain::new),
+        Some(json) => Brain::from_json(&json).unwrap_or_default(),
         None => Brain::new(),
     }
 }
@@ -545,7 +545,7 @@ pub fn save_brain(db: &SoulDatabase, brain: &Brain) {
     }
 
     // Save disk checkpoint every 50 training steps for recovery & analysis
-    if brain.train_steps > 0 && brain.train_steps % 50 == 0 {
+    if brain.train_steps > 0 && brain.train_steps.is_multiple_of(50) {
         save_checkpoint(brain);
     }
 }
@@ -934,7 +934,7 @@ fn vec_sub(a: &[f32], b: &[f32]) -> Vec<f32> {
 }
 
 /// Add scaled vector in-place: a += scale * b.
-fn vec_add_scaled(a: &mut Vec<f32>, b: &[f32], scale: f32) {
+fn vec_add_scaled(a: &mut [f32], b: &[f32], scale: f32) {
     for (x, y) in a.iter_mut().zip(b.iter()) {
         *x += scale * y;
     }

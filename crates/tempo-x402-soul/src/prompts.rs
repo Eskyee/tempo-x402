@@ -338,6 +338,7 @@ pub fn goal_creation_prompt(
 
 /// Prompt for creating a plan to achieve a goal.
 /// Focused: goal + workspace listing → ordered steps as JSON.
+#[allow(clippy::too_many_arguments)]
 pub fn planning_prompt(
     goal: &Goal,
     workspace_listing: &str,
@@ -368,7 +369,7 @@ pub fn planning_prompt(
 
     // Structured health from events system
     if !health_section.is_empty() {
-        extra_context.push_str("\n");
+        extra_context.push('\n');
         extra_context.push_str(health_section);
     }
 

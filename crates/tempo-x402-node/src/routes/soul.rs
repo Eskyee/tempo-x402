@@ -618,7 +618,7 @@ pub async fn get_brain_weights(state: web::Data<NodeState>) -> HttpResponse {
 
 /// POST /soul/brain/merge — merge weight delta from a peer.
 #[derive(Deserialize)]
-struct MergeDeltaRequest {
+pub(crate) struct MergeDeltaRequest {
     delta: String,
     merge_rate: Option<f32>,
 }

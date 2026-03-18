@@ -1049,7 +1049,7 @@ fn DashboardPage() -> impl IntoView {
                         .and_then(|a| a.get("total_payments"))
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
-                    let total_revenue_usd = analytics_data.as_ref()
+                    let _total_revenue_usd = analytics_data.as_ref()
                         .and_then(|a| a.get("total_revenue_usd"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("$0")
@@ -1059,7 +1059,7 @@ fn DashboardPage() -> impl IntoView {
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
-                    let active_endpoints = analytics_endpoints.len();
+                    let _active_endpoints = analytics_endpoints.len();
 
                     // Fitness data from instance info
                     let fitness = data.get("fitness");

@@ -1121,8 +1121,8 @@ fn strip_code_blocks(s: &str) -> String {
             s
         };
         let trimmed = without_start.trim();
-        if trimmed.ends_with("```") {
-            return trimmed[..trimmed.len() - 3].trim().to_string();
+        if let Some(stripped) = trimmed.strip_suffix("```") {
+            return stripped.trim().to_string();
         }
         return trimmed.to_string();
     }

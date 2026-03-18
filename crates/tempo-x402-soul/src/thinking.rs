@@ -309,7 +309,7 @@ impl ThinkingLoop {
                 .flatten()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            if cycle_count % 10 == 0 {
+            if cycle_count.is_multiple_of(10) {
                 let (examples, loss) = crate::brain::train_cycle(&self.db);
                 if examples > 0 {
                     tracing::info!(
@@ -369,7 +369,7 @@ impl ThinkingLoop {
             }
 
             // Gene pool evolution every 20 cycles: crossover, mutation, selection
-            if cycle_count > 0 && cycle_count % 20 == 0 {
+            if cycle_count > 0 && cycle_count.is_multiple_of(20) {
                 let mut gene_pool = crate::genesis::load_gene_pool(&self.db);
                 if !gene_pool.templates.is_empty() {
                     let (crossovers, mutations, pruned) = gene_pool.evolve();
@@ -390,7 +390,7 @@ impl ThinkingLoop {
             // Automatic peer sync every 5 cycles — don't rely on LLM choosing to discover.
             // discover_peers itself now makes x402 PAID calls to each peer's soul + info
             // gateway endpoints, generating real economic activity mechanically.
-            if cycle_count > 0 && cycle_count % 5 == 0 {
+            if cycle_count > 0 && cycle_count.is_multiple_of(5) {
                 tracing::info!("Automatic peer sync with x402 paid calls (every 5 cycles)");
 
                 // Evaluation: snapshot accuracy BEFORE sync for colony benefit measurement
@@ -818,7 +818,7 @@ impl ThinkingLoop {
                         .unwrap_or(0.5)
                 },
                 consecutive_failures,
-                cycle_count: cycle_count,
+                cycle_count,
                 ..Default::default()
             };
             let prediction = crate::brain::predict_step(&self.db, &step, &brain_ctx);
@@ -1548,7 +1548,7 @@ impl ThinkingLoop {
                 lines.push(format!("Reasoning: {}", best.reasoning));
             }
             // Also list alternatives compactly
-            for (i, plan) in imagined.iter().enumerate().skip(0).take(3) {
+            for (i, plan) in imagined.iter().enumerate().take(3) {
                 lines.push(format!(
                     "Alt {}: {} ({:.0}% success)",
                     i + 1,
@@ -2067,7 +2067,7 @@ impl ThinkingLoop {
             let step_types: Vec<String> = plan
                 .steps
                 .iter()
-                .map(|s| crate::cortex::step_to_action_name(s))
+                .map(crate::cortex::step_to_action_name)
                 .collect();
             let instance_id = self.config.instance_id.as_deref().unwrap_or("unknown");
             let mut gene_pool = crate::genesis::load_gene_pool(&self.db);

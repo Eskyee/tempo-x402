@@ -40,11 +40,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::brain::{self, BrainPrediction, StepContext};
-use crate::cortex::{self, Cortex, SimulationResult};
+use crate::brain::BrainPrediction;
+use crate::cortex::{self, Cortex};
 use crate::db::SoulDatabase;
-use crate::genesis::{self, GenePool};
-use crate::hivemind::{self, Hivemind, PheromoneCategory};
+use crate::genesis::GenePool;
+use crate::hivemind::{Hivemind, PheromoneCategory};
 use crate::plan::PlanStep;
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ pub struct AccuracyTracker {
 }
 
 impl AccuracyTracker {
-    fn accuracy(&self) -> f32 {
+    fn _accuracy(&self) -> f32 {
         if self.total == 0 {
             0.5
         } else {
@@ -842,7 +842,7 @@ impl Synthesis {
 
 pub fn load_synthesis(db: &SoulDatabase) -> Synthesis {
     match db.get_state("synthesis_state").ok().flatten() {
-        Some(json) => Synthesis::from_json(&json).unwrap_or_else(Synthesis::new),
+        Some(json) => Synthesis::from_json(&json).unwrap_or_default(),
         None => Synthesis::new(),
     }
 }

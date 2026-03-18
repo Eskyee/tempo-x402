@@ -2041,18 +2041,18 @@ impl SoulDatabase {
                 let steps_succeeded: String = row.get(5)?;
                 let steps_failed: String = row.get(6)?;
                 let error_category_str: Option<String> = row.get(7)?;
-                let error_category = error_category_str.and_then(|s| match s.as_str() {
-                    "compile_error" => Some(crate::feedback::ErrorCategory::CompileError),
-                    "test_failure" => Some(crate::feedback::ErrorCategory::TestFailure),
-                    "file_not_found" => Some(crate::feedback::ErrorCategory::FileNotFound),
-                    "shell_error" => Some(crate::feedback::ErrorCategory::ShellError),
-                    "network_error" => Some(crate::feedback::ErrorCategory::NetworkError),
-                    "protected_file" => Some(crate::feedback::ErrorCategory::ProtectedFile),
-                    "endpoint_error" => Some(crate::feedback::ErrorCategory::EndpointError),
-                    "git_error" => Some(crate::feedback::ErrorCategory::GitError),
-                    "llm_parse_error" => Some(crate::feedback::ErrorCategory::LlmParseError),
-                    "unsolvable" => Some(crate::feedback::ErrorCategory::Unsolvable),
-                    _ => Some(crate::feedback::ErrorCategory::Unknown),
+                let error_category = error_category_str.map(|s| match s.as_str() {
+                    "compile_error" => crate::feedback::ErrorCategory::CompileError,
+                    "test_failure" => crate::feedback::ErrorCategory::TestFailure,
+                    "file_not_found" => crate::feedback::ErrorCategory::FileNotFound,
+                    "shell_error" => crate::feedback::ErrorCategory::ShellError,
+                    "network_error" => crate::feedback::ErrorCategory::NetworkError,
+                    "protected_file" => crate::feedback::ErrorCategory::ProtectedFile,
+                    "endpoint_error" => crate::feedback::ErrorCategory::EndpointError,
+                    "git_error" => crate::feedback::ErrorCategory::GitError,
+                    "llm_parse_error" => crate::feedback::ErrorCategory::LlmParseError,
+                    "unsolvable" => crate::feedback::ErrorCategory::Unsolvable,
+                    _ => crate::feedback::ErrorCategory::Unknown,
                 });
 
                 Ok(crate::feedback::PlanOutcome {

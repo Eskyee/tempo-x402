@@ -1210,7 +1210,7 @@ impl Cortex {
         }
 
         // Remove old raw experiences that were consolidated (keep the newest 5 per action)
-        for (_action, indices) in &groups {
+        for indices in groups.values() {
             if indices.len() >= 10 {
                 let mut sorted_indices = indices.clone();
                 sorted_indices.sort_by(|&a, &b| {
@@ -1238,7 +1238,7 @@ impl Cortex {
 /// Load cortex from database.
 pub fn load_cortex(db: &SoulDatabase) -> Cortex {
     match db.get_state("cortex_state").ok().flatten() {
-        Some(json) => Cortex::from_json(&json).unwrap_or_else(Cortex::new),
+        Some(json) => Cortex::from_json(&json).unwrap_or_default(),
         None => Cortex::new(),
     }
 }

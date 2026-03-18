@@ -201,7 +201,7 @@ pub fn sanitize_plan_steps(steps: Vec<PlanStep>) -> Vec<PlanStep> {
                     || filename.ends_with("_response.json")
                     || filename.ends_with("_data.json")
                     || filename.ends_with("_output.json");
-                if bogus_files.iter().any(|&b| filename == b) || is_bogus_pattern {
+                if bogus_files.contains(&filename) || is_bogus_pattern {
                     tracing::debug!(
                         path = %path,
                         "Sanitized out ReadFile for non-existent plan artifact"

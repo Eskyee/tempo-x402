@@ -596,6 +596,7 @@ mod tests {
             parent_address: None,
             created_at: Utc::now(),
             agent_token_id: None,
+            facilitator_private_key: None,
         };
 
         let persisted = PersistedIdentity::from(&identity);

@@ -38,10 +38,11 @@ use std::collections::HashMap;
 
 use crate::cortex::{self, Cortex};
 use crate::db::SoulDatabase;
-use crate::genesis::{self, GenePool};
+use crate::genesis;
+
 use crate::hivemind::{self, Hivemind, PheromoneCategory};
 use crate::plan::{Plan, PlanStatus, PlanStep};
-use crate::synthesis::{self, CognitiveState, Synthesis};
+use crate::synthesis::{self, CognitiveState};
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ pub fn compile_autonomous_plan(
     db: &SoulDatabase,
     goal_id: &str,
     goal_description: &str,
-    instance_id: &str,
+    _instance_id: &str,
 ) -> CompilationResult {
     let cortex = cortex::load_cortex(db);
     let gene_pool = genesis::load_gene_pool(db);

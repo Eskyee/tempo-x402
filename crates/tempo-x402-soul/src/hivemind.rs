@@ -44,7 +44,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::cortex::{CortexSnapshot, Drive};
+use crate::cortex::CortexSnapshot;
 use crate::db::SoulDatabase;
 use crate::genesis::GenePoolSnapshot;
 
@@ -59,7 +59,7 @@ const PRUNE_THRESHOLD: f32 = 0.01;
 /// How much a single agent deposit affects intensity.
 const DEPOSIT_STRENGTH: f32 = 0.3;
 /// Reputation decay (toward 0.5 neutral) per cycle.
-const REPUTATION_DECAY: f32 = 0.99;
+const _REPUTATION_DECAY: f32 = 0.99;
 
 // ── Core Types ───────────────────────────────────────────────────────
 
@@ -455,7 +455,7 @@ impl Hivemind {
             signals.push(acc);
         }
         if let Some(fit) = rep.fitness {
-            signals.push(fit as f32);
+            signals.push(fit);
         }
 
         if !signals.is_empty() {
@@ -741,7 +741,7 @@ impl Hivemind {
 /// Load hivemind from database.
 pub fn load_hivemind(db: &SoulDatabase) -> Hivemind {
     match db.get_state("hivemind_state").ok().flatten() {
-        Some(json) => Hivemind::from_json(&json).unwrap_or_else(Hivemind::new),
+        Some(json) => Hivemind::from_json(&json).unwrap_or_default(),
         None => Hivemind::new(),
     }
 }

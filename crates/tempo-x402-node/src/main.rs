@@ -1094,7 +1094,7 @@ async fn main() -> std::io::Result<()> {
                 .build()
                 .unwrap_or_default();
 
-            let agent = match version_check_state.agent.as_ref() {
+            let _agent = match version_check_state.agent.as_ref() {
                 Some(a) => a,
                 None => {
                     tracing::warn!("Health probe: no agent available, exiting");

@@ -628,7 +628,7 @@ impl Evaluation {
         correct as f32 / preds.len() as f32
     }
 
-    fn compute_overall_accuracy(&self) -> f32 {
+    fn _compute_overall_accuracy(&self) -> f32 {
         if self.records.is_empty() {
             return 0.5;
         }
@@ -652,7 +652,7 @@ impl Evaluation {
         let mut total_brier = 0.0f32;
         let mut count = 0u32;
 
-        for (_, group) in &grouped {
+        for group in grouped.values() {
             // Get predictions from each system
             let mut weighted_pred = 0.0f32;
             let mut weight_sum = 0.0f32;
@@ -698,7 +698,7 @@ impl Evaluation {
 
 pub fn load_evaluation(db: &SoulDatabase) -> Evaluation {
     match db.get_state("evaluation_state").ok().flatten() {
-        Some(json) => Evaluation::from_json(&json).unwrap_or_else(Evaluation::new),
+        Some(json) => Evaluation::from_json(&json).unwrap_or_default(),
         None => Evaluation::new(),
     }
 }

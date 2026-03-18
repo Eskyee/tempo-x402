@@ -24,7 +24,7 @@ fn require_local_or_hmac(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|token| {
-            hmac_secret.map_or(false, |secret| {
+            hmac_secret.is_some_and(|secret| {
                 x402::security::constant_time_eq(token.as_bytes(), secret)
             })
         })
@@ -551,7 +551,7 @@ pub async fn clone_self(
 
 /// Request body for spawning a specialist clone.
 #[derive(serde::Deserialize)]
-struct SpawnSpecialistRequest {
+pub(crate) struct SpawnSpecialistRequest {
     /// What this specialist focuses on: "solver", "reviewer", "tool-builder",
     /// "researcher", "coordinator", or a custom description.
     specialization: String,

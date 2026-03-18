@@ -40,8 +40,6 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
 use crate::db::SoulDatabase;
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -683,7 +681,7 @@ impl GenePool {
 /// Load gene pool from database.
 pub fn load_gene_pool(db: &SoulDatabase) -> GenePool {
     match db.get_state("gene_pool").ok().flatten() {
-        Some(json) => GenePool::from_json(&json).unwrap_or_else(GenePool::new),
+        Some(json) => GenePool::from_json(&json).unwrap_or_default(),
         None => GenePool::new(),
     }
 }

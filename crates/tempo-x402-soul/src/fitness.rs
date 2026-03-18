@@ -153,8 +153,8 @@ fn compute_economic(snapshot: &NodeSnapshot) -> f64 {
 /// Execution fitness: plan success rate.
 /// No data = 0.15 (you haven't proven anything). Need 5+ plans for full credit.
 fn compute_execution(db: &SoulDatabase) -> f64 {
-    let completed = db.count_plans_by_status("Completed").unwrap_or(0).max(0) as f64;
-    let failed = db.count_plans_by_status("Failed").unwrap_or(0).max(0) as f64;
+    let completed = db.count_plans_by_status("Completed").unwrap_or(0) as f64;
+    let failed = db.count_plans_by_status("Failed").unwrap_or(0) as f64;
     let total = completed + failed;
     if total < 1.0 {
         return 0.15; // no data — you haven't proven anything

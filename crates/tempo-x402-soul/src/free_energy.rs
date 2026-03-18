@@ -395,7 +395,7 @@ pub fn prompt_section(db: &SoulDatabase) -> String {
     lines.push("Surprise decomposition:".to_string());
     for comp in &sorted {
         let bar_len = (comp.surprise * 20.0) as usize;
-        let bar: String = std::iter::repeat('#').take(bar_len).collect();
+        let bar: String = "#".repeat(bar_len);
         lines.push(format!(
             "  {:<10} {:.2} × {:.2} = {:.3}  [{}] {}",
             comp.system, comp.surprise, comp.weight, comp.contribution, bar, comp.method

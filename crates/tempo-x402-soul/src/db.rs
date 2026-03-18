@@ -736,13 +736,13 @@ impl SoulDatabase {
             params![fingerprint, now],
         )?;
 
-        let count: u64 = conn.query_row(
+        let count: i64 = conn.query_row(
             "SELECT count FROM pattern_counts WHERE fingerprint = ?1",
             params![fingerprint],
             |row| row.get(0),
         )?;
 
-        Ok(count)
+        Ok(count as u64)
     }
 
     /// Get pattern counts for multiple fingerprints.
@@ -780,8 +780,8 @@ impl SoulDatabase {
         let mut result = HashMap::new();
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             let fp: String = row.get(0)?;
-            let count: u64 = row.get(1)?;
-            Ok((fp, count))
+            let count: i64 = row.get(1)?;
+            Ok((fp, count as u64))
         })?;
         for row in rows {
             let (fp, count) = row?;
@@ -1292,12 +1292,12 @@ impl SoulDatabase {
                 "lock poisoned".into(),
             ))
         })?;
-        let count: u64 = conn.query_row(
+        let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM plans WHERE status = ?1",
             params![status],
             |row| row.get(0),
         )?;
-        Ok(count)
+        Ok(count as u64)
     }
 
     /// Force a WAL checkpoint to reclaim disk space.
@@ -1695,8 +1695,8 @@ impl SoulDatabase {
                 "lock poisoned".into(),
             ))
         })?;
-        let count: u64 = conn.query_row("SELECT COUNT(*) FROM goals", [], |row| row.get(0))?;
-        Ok(count)
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM goals", [], |row| row.get(0))?;
+        Ok(count as u64)
     }
 
     /// Get recently abandoned/failed goals (for retread detection).
@@ -2102,12 +2102,12 @@ impl SoulDatabase {
                 "lock poisoned".into(),
             ))
         })?;
-        let count: u64 = conn.query_row(
+        let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM plan_outcomes WHERE status = ?1",
             params![status],
             |row| row.get(0),
         )?;
-        Ok(count)
+        Ok(count as u64)
     }
 
     // ── Capability event operations ──

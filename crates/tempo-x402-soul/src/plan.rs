@@ -395,6 +395,31 @@ impl PlanStep {
         }
     }
 
+    /// Whether this step modifies state (code, endpoints, git, peers).
+    /// Read-only steps (ReadFile, ListDir, SearchCode, Think, CheckSelf, etc.) are NOT substantive.
+    pub fn is_substantive(&self) -> bool {
+        matches!(
+            self,
+            PlanStep::EditCode { .. }
+                | PlanStep::GenerateCode { .. }
+                | PlanStep::Commit { .. }
+                | PlanStep::RunShell { .. }
+                | PlanStep::CreateScriptEndpoint { .. }
+                | PlanStep::CargoCheck { .. }
+                | PlanStep::CallPeer { .. }
+                | PlanStep::CallPaidEndpoint { .. }
+                | PlanStep::DeleteEndpoint { .. }
+                | PlanStep::CreateGithubRepo { .. }
+                | PlanStep::ForkGithubRepo { .. }
+                | PlanStep::ReviewPeerPR { .. }
+                | PlanStep::CloneSelf { .. }
+                | PlanStep::SpawnSpecialist { .. }
+                | PlanStep::DelegateTask { .. }
+                | PlanStep::ScreenClick { .. }
+                | PlanStep::ScreenType { .. }
+        )
+    }
+
     /// Get the target file of a step, if any.
     pub fn target_file(&self) -> Option<&str> {
         match self {
@@ -420,6 +445,17 @@ pub struct Plan {
     pub replan_count: u32,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl Plan {
+    /// Whether any executed step in this plan was substantive (modified state).
+    /// Returns false if the plan only did reads/thinks/lists.
+    pub fn executed_substantive(&self) -> bool {
+        let executed_count = self.current_step.min(self.steps.len());
+        self.steps[..executed_count]
+            .iter()
+            .any(|s| s.is_substantive())
+    }
 }
 
 /// Result of executing a single step.

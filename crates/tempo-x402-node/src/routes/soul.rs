@@ -1699,6 +1699,34 @@ async fn soul_health(state: web::Data<NodeState>) -> HttpResponse {
     HttpResponse::Ok().json(health)
 }
 
+/// POST /soul/rules/reset — clear durable rules and optionally failure chains.
+/// Query param: ?reset_failure_chains=true to also clear failure chains.
+async fn soul_rules_reset(
+    state: web::Data<NodeState>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let soul_db = match state.soul_db.as_ref() {
+        Some(db) => db,
+        None => return HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": "soul not active"})),
+    };
+
+    // Clear durable rules
+    let _ = soul_db.set_state("durable_rules", "[]");
+
+    // Optionally clear failure chains
+    let cleared_chains = if query.get("reset_failure_chains").map(|v| v == "true").unwrap_or(false) {
+        let _ = soul_db.set_state("failure_chains", "[]");
+        true
+    } else {
+        false
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "durable_rules": "cleared",
+        "failure_chains": if cleared_chains { "cleared" } else { "unchanged" },
+    }))
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/soul/status", web::get().to(soul_status))
         .route("/soul/chat", web::post().to(soul_chat))
@@ -1731,6 +1759,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/soul/open-prs", web::get().to(open_prs))
         .route("/soul/diagnostics", web::get().to(soul_diagnostics))
         .route("/soul/cleanup", web::post().to(soul_cleanup))
+        .route("/soul/rules/reset", web::post().to(soul_rules_reset))
         .route("/soul/events", web::get().to(soul_events))
         .route("/soul/health", web::get().to(soul_health))
         // Cognitive architecture sharing endpoints

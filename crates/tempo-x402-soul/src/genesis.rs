@@ -90,6 +90,13 @@ pub struct PlanTemplate {
     pub created_at: i64,
     /// Tags: metadata about what domain this template covers.
     pub tags: Vec<String>,
+    /// Whether this template includes substantive (state-modifying) steps.
+    #[serde(default = "default_substantive")]
+    pub substantive: bool,
+}
+
+fn default_substantive() -> bool {
+    true // Backward compat: existing templates assumed substantive
 }
 
 impl PlanTemplate {
@@ -103,12 +110,18 @@ impl PlanTemplate {
     }
 
     /// Compute fitness: success rate weighted by recency and generation.
+    /// Non-substantive templates are capped at 0.3 — read-only plans aren't real success.
     pub fn compute_fitness(&self, now: i64) -> f32 {
         let success = self.success_rate();
         let age_hours = ((now - self.created_at) as f32 / 3600.0).max(1.0);
         let recency = 1.0 / (1.0 + age_hours / 168.0); // Half-life: 1 week
         let gen_bonus = 1.0 + (self.generation as f32 * 0.05).min(0.5); // Evolved templates get slight bonus
-        success * recency * gen_bonus
+        let raw = success * recency * gen_bonus;
+        if !self.substantive {
+            raw.min(0.3) // Cap trivial templates
+        } else {
+            raw
+        }
     }
 }
 
@@ -165,11 +178,23 @@ impl GenePool {
     // ── Recording ────────────────────────────────────────────────────
 
     /// Record a successful plan as a new template.
+    /// `is_substantive` indicates whether the plan included state-modifying steps.
     pub fn record_success(
         &mut self,
         goal_description: &str,
         step_types: Vec<String>,
         source_agent: &str,
+    ) {
+        self.record_success_with_substantive(goal_description, step_types, source_agent, true)
+    }
+
+    /// Record a successful plan as a new template with explicit substantiveness flag.
+    pub fn record_success_with_substantive(
+        &mut self,
+        goal_description: &str,
+        step_types: Vec<String>,
+        source_agent: &str,
+        is_substantive: bool,
     ) {
         let now = chrono::Utc::now().timestamp();
         let keywords = extract_keywords(goal_description);
@@ -196,7 +221,7 @@ impl GenePool {
             goal_summary: goal_description.chars().take(100).collect(),
             step_count: step_types.len(),
             step_types,
-            fitness: 0.5, // Neutral starting fitness
+            fitness: if is_substantive { 0.5 } else { 0.2 },
             uses: 1,
             successes: 1,
             source_agent: source_agent.to_string(),
@@ -204,6 +229,7 @@ impl GenePool {
             parents: vec![],
             created_at: now,
             tags,
+            substantive: is_substantive,
         };
 
         self.next_id += 1;
@@ -457,6 +483,7 @@ impl GenePool {
             parents: vec![parent_a.id, parent_b.id],
             created_at: now,
             tags: extract_tags(&child_steps),
+            substantive: parent_a.substantive || parent_b.substantive,
         })
     }
 
@@ -533,6 +560,7 @@ impl GenePool {
             parents: vec![parent.id],
             created_at: now,
             tags: extract_tags(&steps),
+            substantive: parent.substantive,
         })
     }
 
@@ -692,6 +720,67 @@ pub fn save_gene_pool(db: &SoulDatabase, pool: &GenePool) {
     if let Err(e) = db.set_state("gene_pool", &json) {
         tracing::warn!(error = %e, "Failed to save gene pool");
     }
+}
+
+/// Enforce diversity: collapse duplicate step sequences to max 2 copies.
+pub fn enforce_diversity(pool: &mut GenePool) {
+    let mut seen: std::collections::HashMap<Vec<String>, usize> = std::collections::HashMap::new();
+    pool.templates.retain(|t| {
+        let count = seen.entry(t.step_types.clone()).or_insert(0);
+        *count += 1;
+        *count <= 2 // Keep at most 2 templates with identical step sequences
+    });
+}
+
+/// Inject seed templates when the pool has no substantive templates.
+/// These are known-good code-modification workflows.
+pub fn inject_seed_templates(pool: &mut GenePool, source_agent: &str) {
+    let has_substantive = pool.templates.iter().any(|t| t.substantive);
+    if has_substantive {
+        return;
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let seeds = vec![
+        (
+            "Fix a compile error in existing code",
+            vec!["read_file", "search_code", "edit_code", "cargo_check", "commit"],
+        ),
+        (
+            "Create a new script endpoint with tests",
+            vec!["think", "create_script_endpoint", "test_script_endpoint"],
+        ),
+        (
+            "Improve code quality in a module",
+            vec!["read_file", "search_code", "edit_code", "cargo_check", "edit_code", "cargo_check", "commit"],
+        ),
+    ];
+
+    for (goal, steps) in seeds {
+        let step_types: Vec<String> = steps.iter().map(|s| s.to_string()).collect();
+        let keywords = extract_keywords(goal);
+        let tags = extract_tags(&step_types);
+        let id = pool.next_id;
+        pool.next_id += 1;
+        pool.total_created += 1;
+        pool.templates.push(PlanTemplate {
+            id,
+            goal_keywords: keywords,
+            goal_summary: format!("[seed] {}", goal),
+            step_count: step_types.len(),
+            step_types,
+            fitness: 0.5,
+            uses: 0,
+            successes: 0,
+            source_agent: source_agent.to_string(),
+            generation: 0,
+            parents: vec![],
+            created_at: now,
+            tags,
+            substantive: true,
+        });
+    }
+    tracing::info!("Injected 3 seed templates into empty/trivial gene pool");
 }
 
 // ── Utility functions ────────────────────────────────────────────────
@@ -1012,6 +1101,7 @@ mod tests {
             parents: vec![],
             created_at: now,
             tags: vec![],
+            substantive: true,
         });
         pool.templates.push(PlanTemplate {
             id: 1,
@@ -1027,6 +1117,7 @@ mod tests {
             parents: vec![],
             created_at: now - 604800, // 1 week old
             tags: vec![],
+            substantive: true,
         });
         pool.next_id = 2;
 

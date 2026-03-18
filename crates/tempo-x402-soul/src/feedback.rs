@@ -167,12 +167,21 @@ pub fn extract_lesson(plan: &Plan, goal_desc: &str, error: Option<&str>) -> Stri
     match &plan.status {
         PlanStatus::Completed => {
             let step_types: Vec<String> = plan.steps.iter().map(|s| s.summary()).collect();
-            format!(
-                "SUCCESS: '{}' completed in {} steps ({}). Approach worked.",
-                truncate(goal_desc, 80),
-                plan.steps.len(),
-                step_types.join(" → ")
-            )
+            if plan.executed_substantive() {
+                format!(
+                    "SUCCESS: '{}' completed in {} steps ({}). Approach worked.",
+                    truncate(goal_desc, 80),
+                    plan.steps.len(),
+                    step_types.join(" → ")
+                )
+            } else {
+                format!(
+                    "COMPLETED_TRIVIAL: '{}' completed but only did reads/thinks ({}). \
+                     Next time include concrete actions: edit code, create endpoints, commit changes.",
+                    truncate(goal_desc, 80),
+                    step_types.join(" → ")
+                )
+            }
         }
         PlanStatus::Failed => {
             let category = error.map(classify_error).unwrap_or(ErrorCategory::Unknown);
@@ -218,12 +227,19 @@ pub fn record_outcome(db: &SoulDatabase, plan: &Plan, goal_desc: &str, error: Op
 
     let error_category = error.map(classify_error);
 
+    // Distinguish trivial completions from substantive ones
+    let status = if matches!(plan.status, PlanStatus::Completed) && !plan.executed_substantive() {
+        "completed_trivial".to_string()
+    } else {
+        plan.status.as_str().to_string()
+    };
+
     let outcome = PlanOutcome {
         id: uuid::Uuid::new_v4().to_string(),
         plan_id: plan.id.clone(),
         goal_id: plan.goal_id.clone(),
         goal_description: goal_desc.to_string(),
-        status: plan.status.as_str().to_string(),
+        status,
         steps_succeeded,
         steps_failed,
         error_category,
@@ -463,7 +479,8 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_lesson_completed() {
+    fn test_extract_lesson_completed_trivial() {
+        // A read-only plan should be classified as trivial
         let plan = Plan {
             id: "p1".into(),
             goal_id: "g1".into(),
@@ -472,6 +489,35 @@ mod tests {
                 store_as: Some("src".into()),
             }],
             current_step: 1,
+            status: PlanStatus::Completed,
+            context: Default::default(),
+            replan_count: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let lesson = extract_lesson(&plan, "improve error handling", None);
+        assert!(lesson.starts_with("COMPLETED_TRIVIAL:"));
+        assert!(lesson.contains("improve error handling"));
+    }
+
+    #[test]
+    fn test_extract_lesson_completed_substantive() {
+        // A plan with code edits should be classified as success
+        let plan = Plan {
+            id: "p1".into(),
+            goal_id: "g1".into(),
+            steps: vec![
+                PlanStep::ReadFile {
+                    path: "foo.rs".into(),
+                    store_as: Some("src".into()),
+                },
+                PlanStep::EditCode {
+                    file_path: "foo.rs".into(),
+                    description: "fix bug".into(),
+                    context_keys: vec![],
+                },
+            ],
+            current_step: 2,
             status: PlanStatus::Completed,
             context: Default::default(),
             replan_count: 0,

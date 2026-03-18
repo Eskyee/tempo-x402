@@ -39,6 +39,15 @@ pub struct ToolExecutor {
 /// Max output size per stream (stdout/stderr) to stay within LLM context limits.
 const MAX_OUTPUT_BYTES: usize = 4096;
 
+/// Strip control characters from a string before JSON parsing.
+/// Keeps \n, \r, \t which are valid in JSON strings but removes all other
+/// control chars (0x00-0x1F, 0x7F) that cause serde_json parse failures.
+fn sanitize_json_body(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
+        .collect()
+}
+
 /// Max file size for read_file (256KB — large enough for even thinking.rs at 85KB).
 const MAX_READ_BYTES: usize = 262144;
 
@@ -2269,6 +2278,9 @@ impl ToolExecutor {
                         duration_ms,
                     });
                 }
+
+                // Sanitize entire response body — strip control characters that break JSON parsing
+                let body = sanitize_json_body(&body);
 
                 // Parse siblings and enrich each with /instance/info
                 let siblings_json: serde_json::Value = match serde_json::from_str(&body) {

@@ -105,7 +105,7 @@ pub fn validate_plan(
     check_capability_feasibility(steps, db, &mut violations);
 
     // ── Rule 8: Minimum plan quality ──
-    check_plan_quality(steps, &mut violations);
+    check_plan_quality(steps, db, &mut violations);
 
     // ── Rule 9: Block plans for goals with excessive failure chains ──
     check_failure_chain_saturation(db, goal_description, &mut violations);
@@ -326,14 +326,37 @@ fn check_durable_rules(steps: &[PlanStep], db: &SoulDatabase, violations: &mut V
     };
 
     for rule in &rules {
+        // Skip expired rules (TTL in cycles, based on creation timestamp approximation)
+        // We use cycle count as a proxy — each cycle is ~30-120s
+        if rule.ttl_cycles > 0 {
+            // Approximate: rule was created at some cycle; if it's been > ttl_cycles since then, skip
+            // Since we don't store creation cycle, use time-based approximation (1 cycle ≈ 60s)
+            let age_secs = chrono::Utc::now().timestamp() - rule.created_at;
+            let approx_age_cycles = (age_secs / 60) as u64;
+            if approx_age_cycles > rule.ttl_cycles {
+                continue; // Expired
+            }
+        }
+
+        // Skip rules with unresolved template variables (e.g. ${variable})
+        if rule.pattern.contains("${") {
+            continue;
+        }
+
         if rule.check_type == "step_type_blocked" {
-            // Warn about step types that have been problematic
+            // Only match step_type:error_category pairs, not bare step types
+            // This prevents blocking core tools like "ls", "read", "shell:"
+            if !rule.pattern.contains(':') {
+                continue; // Skip bare step type blocks — too aggressive
+            }
             for (i, step) in steps.iter().enumerate() {
                 let summary = step.summary().to_lowercase();
-                if summary.contains(&rule.pattern) {
+                // Pattern is "step_type:error_category" — only match the step_type part
+                let step_type_part = rule.pattern.split(':').next().unwrap_or(&rule.pattern);
+                if summary.contains(step_type_part) {
                     violations.push(PlanViolation {
                         rule: "durable-rule",
-                        severity: Severity::Soft, // Warn — LLM-extracted rules shouldn't hard-block
+                        severity: Severity::Soft,
                         detail: format!("Durable rule '{}': {}", rule.name, rule.reason),
                         step_index: Some(i),
                     });
@@ -353,7 +376,7 @@ fn check_durable_rules(steps: &[PlanStep], db: &SoulDatabase, violations: &mut V
                     if p.contains(&rule.pattern) {
                         violations.push(PlanViolation {
                             rule: "durable-rule-file",
-                            severity: Severity::Soft, // Warn — LLM-extracted rules shouldn't hard-block
+                            severity: Severity::Soft,
                             detail: format!(
                                 "Durable rule '{}': {} (file: {})",
                                 rule.name, rule.reason, p
@@ -403,7 +426,7 @@ fn check_capability_feasibility(
 }
 
 /// Rule 8: Basic plan quality checks.
-fn check_plan_quality(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+fn check_plan_quality(steps: &[PlanStep], db: &SoulDatabase, violations: &mut Vec<PlanViolation>) {
     // Empty plans
     if steps.is_empty() {
         violations.push(PlanViolation {
@@ -440,10 +463,23 @@ fn check_plan_quality(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
         )
     });
     if reads_only && steps.len() > 3 {
+        // Escalate to Hard after 10+ trivial completions — agent is stuck in read-only loop
+        let trivial_count = db
+            .count_plan_outcomes_by_status("completed_trivial")
+            .unwrap_or(0);
+        let severity = if trivial_count >= 10 {
+            Severity::Hard
+        } else {
+            Severity::Soft
+        };
         violations.push(PlanViolation {
             rule: "not-just-reads",
-            severity: Severity::Soft,
-            detail: "Plan only reads/searches with no concrete actions. Consider what you'll actually DO with the information.".to_string(),
+            severity,
+            detail: format!(
+                "Plan only reads/searches with no concrete actions ({} trivial completions so far). \
+                 Include at least one substantive step: edit_code, generate_code, create_script_endpoint, commit, etc.",
+                trivial_count
+            ),
             step_index: None,
         });
     }
@@ -524,6 +560,13 @@ pub struct DurableRule {
     pub trigger_count: u64,
     /// Timestamp when rule was created.
     pub created_at: i64,
+    /// TTL in cycles — rule auto-expires after this many cycles. 0 = no expiry.
+    #[serde(default = "default_ttl")]
+    pub ttl_cycles: u64,
+}
+
+fn default_ttl() -> u64 {
+    200
 }
 
 /// Extract durable rules from a plan outcome and failure chain history.
@@ -557,11 +600,12 @@ pub fn extract_durable_rules(outcome: &PlanOutcome, db: &SoulDatabase) -> Vec<Du
                 ),
                 trigger_count: 0,
                 created_at: now,
+                ttl_cycles: 200,
             });
         }
     }
 
-    // Rule: if the same step_type has failed 3+ times, block it
+    // Rule: if the same step_type:error_category has failed 3+ times, block it
     let chains: Vec<FailureChain> = db
         .get_state("failure_chains")
         .ok()
@@ -569,36 +613,38 @@ pub fn extract_durable_rules(outcome: &PlanOutcome, db: &SoulDatabase) -> Vec<Du
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    // Group unresolved failures by a normalized step key
+    // Group unresolved failures by step_type:error_category pairs (not bare step types)
     let mut step_fail_counts: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
     for chain in &chains {
         if chain.resolved {
             continue;
         }
-        // Normalize: take first word of step_type (e.g. "ls -R" → "ls", "shell: foo" → "shell:")
-        let key = chain
+        // Key on step_type:error_category — never block a bare step type like "ls" or "shell:"
+        let step_part = chain
             .step_type
             .split_whitespace()
             .next()
             .unwrap_or(&chain.step_type)
             .to_lowercase();
+        let key = format!("{}:{}", step_part, chain.error_category);
         *step_fail_counts.entry(key).or_insert(0) += 1;
     }
 
     for (step_key, count) in &step_fail_counts {
         if *count >= 3 {
-            let rule_name = format!("block-step-{}", step_key.replace('/', "-"));
+            let rule_name = format!("block-step-{}", step_key.replace(['/', ':'], "-"));
             rules.push(DurableRule {
                 name: rule_name,
                 check_type: "step_type_blocked".to_string(),
                 pattern: step_key.clone(),
                 reason: format!(
-                    "Step type '{}' has failed {} times without resolution. Avoid this approach.",
+                    "Step+error '{}' has failed {} times without resolution. Avoid this approach.",
                     step_key, count
                 ),
                 trigger_count: 0,
                 created_at: now,
+                ttl_cycles: 200,
             });
         }
     }
@@ -629,6 +675,7 @@ pub fn extract_durable_rules(outcome: &PlanOutcome, db: &SoulDatabase) -> Vec<Du
                 ),
                 trigger_count: 0,
                 created_at: now,
+                ttl_cycles: 200,
             });
         }
     }

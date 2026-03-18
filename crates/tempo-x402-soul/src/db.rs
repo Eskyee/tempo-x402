@@ -2077,6 +2077,39 @@ impl SoulDatabase {
         Ok(outcomes)
     }
 
+    /// Update a plan outcome's status (e.g., reclassify "completed" → "completed_trivial").
+    pub fn update_plan_outcome_status(
+        &self,
+        outcome_id: &str,
+        new_status: &str,
+    ) -> Result<(), SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        conn.execute(
+            "UPDATE plan_outcomes SET status = ?2 WHERE id = ?1",
+            params![outcome_id, new_status],
+        )?;
+        Ok(())
+    }
+
+    /// Count plan outcomes by status (e.g., "completed", "completed_trivial", "failed").
+    pub fn count_plan_outcomes_by_status(&self, status: &str) -> Result<u64, SoulError> {
+        let conn = self.conn.lock().map_err(|_| {
+            SoulError::Database(rusqlite::Error::InvalidParameterName(
+                "lock poisoned".into(),
+            ))
+        })?;
+        let count: u64 = conn.query_row(
+            "SELECT COUNT(*) FROM plan_outcomes WHERE status = ?1",
+            params![status],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
     // ── Capability event operations ──
 
     /// Insert a capability event.

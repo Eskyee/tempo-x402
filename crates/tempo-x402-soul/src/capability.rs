@@ -288,6 +288,24 @@ pub fn capability_guidance(db: &SoulDatabase) -> String {
         }
     }
 
+    // Highlight capabilities with 0 attempts — the agent doesn't know what it hasn't tried
+    let unexplored: Vec<&CapabilityScore> = profile
+        .capabilities
+        .iter()
+        .filter(|s| s.attempts == 0)
+        .collect();
+
+    if !unexplored.is_empty() {
+        lines.push("## UNEXPLORED CAPABILITIES (never attempted — try these!)".to_string());
+        for s in &unexplored {
+            lines.push(format!("- {} — 0 attempts, unknown potential", s.display_name));
+        }
+        lines.push(
+            "Pick one of these unexplored capabilities and include it in your next plan."
+                .to_string(),
+        );
+    }
+
     lines.join("\n")
 }
 

@@ -152,14 +152,19 @@ fn compute_economic(snapshot: &NodeSnapshot) -> f64 {
 
 /// Execution fitness: plan success rate.
 /// No data = 0.15 (you haven't proven anything). Need 5+ plans for full credit.
+/// Trivial completions (read-only plans) count at only 10% weight.
+/// Uses plan_outcomes table (which has reclassified statuses) instead of plans table.
 fn compute_execution(db: &SoulDatabase) -> f64 {
-    let completed = db.count_plans_by_status("Completed").unwrap_or(0) as f64;
-    let failed = db.count_plans_by_status("Failed").unwrap_or(0) as f64;
-    let total = completed + failed;
+    let completed = db.count_plan_outcomes_by_status("completed").unwrap_or(0) as f64;
+    let completed_trivial = db.count_plan_outcomes_by_status("completed_trivial").unwrap_or(0) as f64;
+    let failed = db.count_plan_outcomes_by_status("failed").unwrap_or(0) as f64;
+    // Trivial completions count at 10% — they're not real successes
+    let effective_completed = completed + completed_trivial * 0.1;
+    let total = completed + completed_trivial + failed;
     if total < 1.0 {
         return 0.15; // no data — you haven't proven anything
     }
-    let raw_rate = completed / total;
+    let raw_rate = effective_completed / total;
     // Ramp: need at least 5 plans for full credit, otherwise blended toward 0.15
     let confidence = (total / 5.0).min(1.0);
     0.15 * (1.0 - confidence) + raw_rate * confidence

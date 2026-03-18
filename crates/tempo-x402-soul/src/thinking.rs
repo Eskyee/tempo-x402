@@ -183,6 +183,10 @@ impl ThinkingLoop {
         // Reset stagnation counter on startup — redeploy is not stagnation
         self.reset_commit_counter();
 
+        // ── Deploy-time migration: fix degenerate behavior ──
+        // Run once after deploy to clean corrupted data from the trivial plan loop
+        self.run_trivial_plans_migration();
+
         tracing::info!(
             dormant = self.llm.is_none(),
             tools_enabled = self.config.tools_enabled,
@@ -2063,7 +2067,9 @@ impl ThinkingLoop {
         );
 
         // Genesis: record successful plan + close template feedback loop
+        // Only record substantive plans — trivial read-only plans pollute the gene pool
         {
+            let is_substantive = plan.executed_substantive();
             let step_types: Vec<String> = plan
                 .steps
                 .iter()
@@ -2071,8 +2077,15 @@ impl ThinkingLoop {
                 .collect();
             let instance_id = self.config.instance_id.as_deref().unwrap_or("unknown");
             let mut gene_pool = crate::genesis::load_gene_pool(&self.db);
-            gene_pool.record_success(&goal.description, step_types, instance_id);
-            // Feedback: if this plan was influenced by a template, record its success
+            if is_substantive {
+                gene_pool.record_success(&goal.description, step_types, instance_id);
+            } else {
+                tracing::info!(
+                    plan_id = %plan.id,
+                    "Skipping genesis recording — plan was trivial (read-only)"
+                );
+            }
+            // Feedback: if this plan was influenced by a template, record its success/failure
             if let Some(tid_str) = self
                 .db
                 .get_state("active_genesis_template_id")
@@ -2080,10 +2093,19 @@ impl ThinkingLoop {
                 .flatten()
             {
                 if let Ok(tid) = tid_str.parse::<u64>() {
-                    gene_pool.record_template_success(tid);
-                    tracing::info!(template_id = tid, "Genesis template feedback: SUCCESS");
+                    if is_substantive {
+                        gene_pool.record_template_success(tid);
+                        tracing::info!(template_id = tid, "Genesis template feedback: SUCCESS");
+                    } else {
+                        gene_pool.record_failure(tid);
+                        tracing::info!(template_id = tid, "Genesis template feedback: TRIVIAL (counted as failure)");
+                    }
                 }
             }
+            // Inject seed templates if pool has no substantive templates
+            crate::genesis::inject_seed_templates(&mut gene_pool, instance_id);
+            // Enforce diversity
+            crate::genesis::enforce_diversity(&mut gene_pool);
             crate::genesis::save_gene_pool(&self.db, &gene_pool);
         }
 
@@ -2336,6 +2358,87 @@ impl ThinkingLoop {
 
     fn get_cycles_since_last_commit(&self) -> u64 {
         crate::housekeeping::get_cycles_since_last_commit(&self.db)
+    }
+
+    /// One-time migration to fix degenerate behavior from trivial plan loop.
+    /// Reclassifies historical "completed" outcomes that were actually trivial,
+    /// clears corrupted gene pool and durable rules.
+    fn run_trivial_plans_migration(&self) {
+        let migration_key = "migration_trivial_plans_v1";
+        if let Ok(Some(_)) = self.db.get_state(migration_key) {
+            return; // Already migrated
+        }
+
+        tracing::info!("Running trivial plans migration v1...");
+
+        // 1. Reclassify historical plan_outcomes: check step types for substantiveness
+        let read_only_types = ["read", "ls", "search", "think", "check", "discover"];
+        if let Ok(outcomes) = self.db.get_recent_plan_outcomes(100) {
+            let mut reclassified = 0u32;
+            for outcome in &outcomes {
+                if outcome.status != "completed" {
+                    continue;
+                }
+                // Check if all succeeded steps are non-substantive
+                let all_trivial = outcome.steps_succeeded.iter().all(|step| {
+                    let lower = step.to_lowercase();
+                    read_only_types.iter().any(|t| lower.starts_with(t))
+                });
+                if all_trivial && !outcome.steps_succeeded.is_empty() {
+                    // Update status in DB
+                    if let Err(e) = self.db.update_plan_outcome_status(&outcome.id, "completed_trivial") {
+                        tracing::warn!(error = %e, id = %outcome.id, "Failed to reclassify outcome");
+                    } else {
+                        reclassified += 1;
+                    }
+                }
+            }
+            tracing::info!(reclassified, "Reclassified trivial plan outcomes");
+        }
+
+        // 2. Clear corrupted gene pool (all trivial templates)
+        let gene_pool = crate::genesis::load_gene_pool(&self.db);
+        let substantive_count = gene_pool.templates.iter().filter(|t| {
+            t.step_types.iter().any(|s| {
+                let lower = s.to_lowercase();
+                lower.contains("edit") || lower.contains("generate") || lower.contains("commit")
+                    || lower.contains("create") || lower.contains("shell")
+            })
+        }).count();
+        if substantive_count == 0 && !gene_pool.templates.is_empty() {
+            tracing::info!(
+                templates = gene_pool.templates.len(),
+                "Clearing corrupted gene pool (no substantive templates)"
+            );
+            let fresh = crate::genesis::GenePool::new();
+            crate::genesis::save_gene_pool(&self.db, &fresh);
+        }
+
+        // 3. Clear corrupted durable rules (bare step type blocks like "ls", "read", "shell:")
+        if let Ok(Some(rules_json)) = self.db.get_state("durable_rules") {
+            if let Ok(rules) = serde_json::from_str::<Vec<validation::DurableRule>>(&rules_json) {
+                let clean: Vec<&validation::DurableRule> = rules.iter().filter(|r| {
+                    // Keep rules that use step_type:error_category format
+                    // Drop rules with bare step types or template variables
+                    if r.check_type == "step_type_blocked" {
+                        r.pattern.contains(':') && !r.pattern.contains("${")
+                    } else {
+                        !r.pattern.contains("${")
+                    }
+                }).collect();
+                let dropped = rules.len() - clean.len();
+                if dropped > 0 {
+                    tracing::info!(dropped, kept = clean.len(), "Pruned corrupted durable rules");
+                    if let Ok(json) = serde_json::to_string(&clean) {
+                        let _ = self.db.set_state("durable_rules", &json);
+                    }
+                }
+            }
+        }
+
+        // Set migration flag
+        let _ = self.db.set_state(migration_key, "done");
+        tracing::info!("Trivial plans migration v1 complete");
     }
 
     /// Get known peer URLs from the peer endpoint catalog stored by discover_peers.

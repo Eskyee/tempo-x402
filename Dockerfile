@@ -1,5 +1,5 @@
 # Stage 1: cargo-chef — plan dependency build from Cargo manifests only
-FROM rust:1.89-bookworm AS chef
+FROM rust:1.94-bookworm AS chef
 RUN cargo install cargo-chef
 WORKDIR /app
 

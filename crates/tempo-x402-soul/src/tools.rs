@@ -2430,33 +2430,34 @@ impl ToolExecutor {
                         .collect();
 
                     // ── x402 PAID peer data exchange ──
-                    // All peer data fetches go through call_paid_endpoint so they
-                    // generate real x402 economic activity (EIP-712 signed payments).
+                    // Colony data exchange: call peer's FREE endpoints directly.
+                    // Only /clone is a paid endpoint. All cognitive/status endpoints
+                    // are free so agents can cooperate without burning tokens.
 
-                    // 1. Call peer's "soul" paid endpoint to get status + brain + benchmark data
-                    let soul_gateway_url = format!("{}/g/soul", sib_url.trim_end_matches('/'));
-                    let paid_soul_data: Option<serde_json::Value> = match self
-                        .call_paid_endpoint(&soul_gateway_url, "GET", None)
+                    // 1. Fetch peer's soul status (free endpoint — no payment needed)
+                    let soul_url = format!("{}/soul/status", sib_url.trim_end_matches('/'));
+                    let paid_soul_data: Option<serde_json::Value> = match client
+                        .get(&soul_url)
+                        .timeout(std::time::Duration::from_secs(10))
+                        .send()
                         .await
                     {
-                        Ok(result) if result.exit_code == 200 => {
-                            tracing::info!(
-                                peer = %inst_id,
-                                "x402 PAID call to peer soul endpoint succeeded"
-                            );
-                            serde_json::from_str(&result.stdout).ok()
+                        Ok(resp) if resp.status().is_success() => {
+                            let body = resp.text().await.unwrap_or_default();
+                            let body = sanitize_json_body(&body);
+                            tracing::info!(peer = %inst_id, "Fetched peer soul status");
+                            serde_json::from_str(&body).ok()
                         }
-                        Ok(result) => {
+                        Ok(resp) => {
                             tracing::warn!(
                                 peer = %inst_id,
-                                code = result.exit_code,
-                                stderr = %result.stderr,
-                                "x402 paid call to peer soul returned non-200"
+                                status = %resp.status(),
+                                "Peer soul status returned non-2xx"
                             );
                             None
                         }
                         Err(e) => {
-                            tracing::warn!(peer = %inst_id, error = %e, "x402 paid call to peer soul failed");
+                            tracing::warn!(peer = %inst_id, error = %e, "Peer soul status failed");
                             None
                         }
                     };
@@ -2503,30 +2504,7 @@ impl ToolExecutor {
                         }
                     }
 
-                    // 2. Call peer's "info" paid endpoint for version/endpoint data
-                    let info_gateway_url = format!("{}/g/info", sib_url.trim_end_matches('/'));
-                    match self
-                        .call_paid_endpoint(&info_gateway_url, "GET", None)
-                        .await
-                    {
-                        Ok(result) if result.exit_code == 200 => {
-                            tracing::info!(
-                                peer = %inst_id,
-                                "x402 PAID call to peer info endpoint succeeded"
-                            );
-                        }
-                        Ok(result) => {
-                            tracing::warn!(
-                                peer = %inst_id,
-                                code = result.exit_code,
-                                stderr = %result.stderr,
-                                "x402 paid call to peer info returned non-200"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(peer = %inst_id, error = %e, "x402 paid call to peer info failed");
-                        }
-                    }
+                    // 2. Peer info already fetched above via /instance/info (free, enriched into peer record)
 
                     // Fetch peer's lessons for collective learning
                     let mut peer_lessons = Vec::new();
@@ -2589,7 +2567,12 @@ impl ToolExecutor {
                                 format!("{}/soul/lessons", sib_url.trim_end_matches('/'));
                             if let Ok(resp) = client.get(&lessons_url).send().await {
                                 if resp.status().is_success() {
-                                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                    // Sanitize before parsing — peer responses may contain control chars
+                                    let raw = resp.text().await.unwrap_or_default();
+                                    let raw = sanitize_json_body(&raw);
+                                    if let Ok(body) =
+                                        serde_json::from_str::<serde_json::Value>(&raw)
+                                    {
                                         let key = format!("peer_lessons_{}", inst_id);
                                         if let Ok(json) = serde_json::to_string(&body) {
                                             let _ = db.set_state(&key, &json);

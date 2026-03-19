@@ -332,82 +332,21 @@ async fn main() -> std::io::Result<()> {
     // ── Auto-register node endpoints ────────────────────────────────────
     let owner = std::env::var("EVM_ADDRESS").unwrap_or_default();
     if !owner.is_empty() {
+        // Only clone is a paid gateway endpoint. All other endpoints (soul, info,
+        // chat, etc.) are served directly at their /soul/* and /instance/* paths
+        // without payment. Colony agents need free access to each other's cognitive
+        // data for peer sync, fitness comparison, and collective intelligence.
         let default_clone_price = "$1.00".to_string();
         let default_clone_amount = "1000000".to_string();
-        let endpoints: Vec<(&str, String, &str, &str, &str)> = vec![
-            (
-                "chat",
-                format!("{}/soul/chat", self_url),
-                "$0.01",
-                "10000",
-                "Interactive chat with the node's soul",
-            ),
-            (
-                "soul",
-                format!("{}/soul/status", self_url),
-                "$0.0001",
-                "100",
-                "Soul status and recent thoughts",
-            ),
-            (
-                "chat-sessions",
-                format!("{}/soul/chat/sessions", self_url),
-                "$0.0001",
-                "100",
-                "List soul chat sessions",
-            ),
-            (
-                "session-messages",
-                format!("{}/soul/chat/sessions/{{id}}", self_url),
-                "$0.0001",
-                "100",
-                "View session messages",
-            ),
-            (
-                "pending-plan",
-                format!("{}/soul/plan/pending", self_url),
-                "$0.0001",
-                "100",
-                "Get pending plan needing approval",
-            ),
-            (
-                "nudges",
-                format!("{}/soul/nudges", self_url),
-                "$0.0001",
-                "100",
-                "List unprocessed nudges",
-            ),
-            (
-                "info",
-                format!("{}/instance/info", self_url),
-                "$0.0001",
-                "100",
-                "Node identity, version, uptime",
-            ),
-            (
-                "events",
-                format!("{}/soul/events", self_url),
-                "$0.0001",
-                "100",
-                "Structured event log with filtering",
-            ),
-            (
-                "health",
-                format!("{}/soul/health", self_url),
-                "$0.0001",
-                "100",
-                "Computed health summary",
-            ),
-            (
-                "clone",
-                format!("{}/clone", self_url),
-                clone_price.as_deref().unwrap_or(&default_clone_price),
-                clone_price_amount
-                    .as_deref()
-                    .unwrap_or(&default_clone_amount),
-                "Spawn a new x402-node instance",
-            ),
-        ];
+        let endpoints: Vec<(&str, String, &str, &str, &str)> = vec![(
+            "clone",
+            format!("{}/clone", self_url),
+            clone_price.as_deref().unwrap_or(&default_clone_price),
+            clone_price_amount
+                .as_deref()
+                .unwrap_or(&default_clone_amount),
+            "Spawn a new x402-node instance",
+        )];
         for (slug, target, price, amount, desc) in &endpoints {
             match gateway_db.create_endpoint(slug, &owner, target, price, amount, Some(desc)) {
                 Ok(_) => tracing::info!(slug, "Auto-registered endpoint"),

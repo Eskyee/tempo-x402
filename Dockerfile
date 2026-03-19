@@ -72,18 +72,18 @@ COPY --from=builder /app/crates/tempo-x402-app/dist /app/spa
 COPY --from=builder /usr/local/rustup /usr/local/rustup
 COPY --from=builder /usr/local/cargo /usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
-# CARGO_HOME points to /data/cargo at runtime so cargo check can write to the
-# registry/index. The Docker-layer /usr/local/cargo has the binaries (cargo, rustc)
-# but its registry is read-only. We put cargo bin on PATH separately.
-ENV CARGO_HOME=/data/cargo
+ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="/usr/local/cargo/bin:${PATH}"
-RUN chmod -R a+rX /usr/local/rustup /usr/local/cargo
+# Make cargo registry WRITABLE so cargo check can update the index at runtime.
+# The Docker layer has the full registry from the build stage — no cold download.
+# Build artifacts go to /data/workspace/target (on the volume, cleaned by housekeeping).
+RUN chmod -R a+rwX /usr/local/cargo/registry /usr/local/rustup
 
 RUN chown -R app:app /app
 
-# Entrypoint: fix volume permissions then drop to non-root
+# Entrypoint: fix volume + cargo permissions then drop to non-root
 # Use X402_BINARY env var to select binary (default: x402-node)
-RUN printf '#!/bin/sh\nchown -R app:app /data 2>/dev/null || true\nBIN=${X402_BINARY:-x402-node}\nexec gosu app "$BIN" "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN printf '#!/bin/sh\nchown -R app:app /data 2>/dev/null || true\nchown -R app:app /usr/local/cargo/registry 2>/dev/null || true\nBIN=${X402_BINARY:-x402-node}\nexec gosu app "$BIN" "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENV SPA_DIR=/app/spa
 ENV PORT=4023

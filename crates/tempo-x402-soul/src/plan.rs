@@ -608,10 +608,17 @@ impl<'a> PlanExecutor<'a> {
                 };
 
                 // Step 2: Find the callable_url for the target slug
-                // Strip control characters (ANSI codes, etc.) that may leak from peer responses
+                // Aggressively strip ALL control characters including inside JSON strings.
+                // JSON spec forbids raw 0x00-0x1F in string values. Replace with space.
                 let clean_json: String = peers_json
                     .chars()
-                    .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
+                    .map(|c| {
+                        if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
+                            ' ' // Replace control chars with space (safe in JSON)
+                        } else {
+                            c
+                        }
+                    })
                     .collect();
                 let peers: serde_json::Value = match serde_json::from_str(&clean_json) {
                     Ok(v) => v,

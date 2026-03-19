@@ -458,9 +458,10 @@ pub fn normalize_plan_json(json_str: &str) -> String {
                     "shell" | "execute_shell" | "exec" | "execute" => "run_shell",
                     "read" => "read_file",
                     "write" | "write_file" => "generate_code",
+                    "edit" | "edit_file" | "modify" => "edit_code",
                     "search" | "grep" | "find_code" => "search_code",
                     "list" | "ls" => "list_dir",
-                    "check" | "check_self_status" => "check_self",
+                    "check" | "check_self_status" | "cargo_check" => "check_self",
                     "peer" | "call" => "call_peer",
                     "peers" | "find_peers" => "discover_peers",
                     "clone" => "clone_self",
@@ -621,6 +622,26 @@ pub fn normalize_plan_json(json_str: &str) -> String {
                     }
                     step.insert("type".to_string(), serde_json::json!("run_shell"));
                     step.insert("command".to_string(), serde_json::json!(actual_cmd));
+                } else if action_lower.starts_with("edit_code")
+                    || action_lower.starts_with("edit_file")
+                    || action_lower.starts_with("edit ")
+                {
+                    // LLM used "edit_code file.rs ..." as action — convert to EditCode step
+                    let rest = action_str.split_once(' ').map(|x| x.1).unwrap_or("");
+                    let file_path = rest.split_whitespace().next().unwrap_or("").to_string();
+                    step.insert("type".to_string(), serde_json::json!("edit_code"));
+                    step.insert("file_path".to_string(), serde_json::json!(file_path));
+                    step.insert("description".to_string(), serde_json::json!(rest));
+                } else if action_lower.starts_with("generate_code")
+                    || action_lower.starts_with("write_file")
+                    || action_lower.starts_with("write ")
+                {
+                    // LLM used "generate_code file.rs ..." as action — convert to GenerateCode step
+                    let rest = action_str.split_once(' ').map(|x| x.1).unwrap_or("");
+                    let file_path = rest.split_whitespace().next().unwrap_or("").to_string();
+                    step.insert("type".to_string(), serde_json::json!("generate_code"));
+                    step.insert("file_path".to_string(), serde_json::json!(file_path));
+                    step.insert("description".to_string(), serde_json::json!(rest));
                 } else if action_lower.starts_with("think") {
                     // LLM used "think: ..." or "think about ..." as action
                     let question = action_str

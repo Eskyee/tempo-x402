@@ -72,7 +72,10 @@ COPY --from=builder /app/crates/tempo-x402-app/dist /app/spa
 COPY --from=builder /usr/local/rustup /usr/local/rustup
 COPY --from=builder /usr/local/cargo /usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
-ENV CARGO_HOME=/usr/local/cargo
+# CARGO_HOME points to /data/cargo at runtime so cargo check can write to the
+# registry/index. The Docker-layer /usr/local/cargo has the binaries (cargo, rustc)
+# but its registry is read-only. We put cargo bin on PATH separately.
+ENV CARGO_HOME=/data/cargo
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 RUN chmod -R a+rX /usr/local/rustup /usr/local/cargo
 

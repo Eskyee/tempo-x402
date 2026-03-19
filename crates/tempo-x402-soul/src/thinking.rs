@@ -416,7 +416,8 @@ impl ThinkingLoop {
                     .await
                 {
                     Ok(result) => {
-                        if result.exit_code == 0 {
+                        // discover_peers returns HTTP status as exit_code (200, not 0)
+                        if result.exit_code == 0 || (200..300).contains(&result.exit_code) {
                             tracing::info!(
                                 output_len = result.stdout.len(),
                                 "Peer sync complete — paid calls made, brain weights merged, lessons fetched"

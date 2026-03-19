@@ -1794,8 +1794,8 @@ async fn get_model_status(state: web::Data<NodeState>) -> HttpResponse {
         .flatten()
         .filter(|s| !s.is_empty());
 
-    let default_fast =
-        std::env::var("GEMINI_MODEL_FAST").unwrap_or_else(|_| "gemini-3-flash-preview".to_string());
+    let default_fast = std::env::var("GEMINI_MODEL_FAST")
+        .unwrap_or_else(|_| "gemini-3.1-flash-lite-preview".to_string());
     let default_think =
         std::env::var("GEMINI_MODEL_THINK").unwrap_or_else(|_| default_fast.clone());
 

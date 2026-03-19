@@ -541,6 +541,33 @@ pub async fn send_nudge(message: &str, priority: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Fetch current model status
+pub async fn fetch_model_status() -> Result<serde_json::Value, String> {
+    let resp = Request::get(&format!("{}/soul/model", GATEWAY_URL))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Set model override (turbo boost)
+pub async fn set_model(model: Option<&str>) -> Result<serde_json::Value, String> {
+    let body = match model {
+        Some(m) => serde_json::json!({ "model": m }),
+        None => serde_json::json!({ "model": null }),
+    };
+
+    let resp = Request::post(&format!("{}/soul/model", GATEWAY_URL))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    resp.json().await.map_err(|e| e.to_string())
+}
+
 /// Response from the clone endpoint.
 #[derive(Clone, Debug, Deserialize)]
 pub struct CloneResponse {

@@ -7,7 +7,7 @@ use crate::error::SoulError;
 pub struct SoulConfig {
     /// LLM API key (env: GEMINI_API_KEY). If absent, soul runs in dormant mode.
     pub llm_api_key: Option<String>,
-    /// Fast model for routine thinking (default: gemini-3-flash-preview).
+    /// Fast model for routine thinking (default: gemini-3.1-flash-lite-preview).
     pub llm_model_fast: String,
     /// Deeper model for complex reasoning (default: same as fast model).
     pub llm_model_think: String,
@@ -140,7 +140,7 @@ impl SoulConfig {
             .filter(|s| !s.is_empty());
 
         let llm_model_fast = std::env::var("GEMINI_MODEL_FAST")
-            .unwrap_or_else(|_| "gemini-3-flash-preview".to_string());
+            .unwrap_or_else(|_| "gemini-3.1-flash-lite-preview".to_string());
 
         let llm_model_think =
             std::env::var("GEMINI_MODEL_THINK").unwrap_or_else(|_| llm_model_fast.clone());

@@ -1815,6 +1815,16 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
     let (nudge_input, set_nudge_input) = create_signal(String::new());
     let (nudge_sending, set_nudge_sending) = create_signal(false);
     let (nudge_result, set_nudge_result) = create_signal(None::<Result<(), String>>);
+    let (model_turbo, set_model_turbo) = create_signal(false);
+    let (model_switching, set_model_switching) = create_signal(false);
+
+    // Fetch model status on mount
+    spawn_local(async move {
+        if let Ok(data) = api::fetch_model_status().await {
+            let is_turbo = data.get("turbo").and_then(|v| v.as_bool()).unwrap_or(false);
+            set_model_turbo.set(is_turbo);
+        }
+    });
 
     view! {
         <div class="soul-section">
@@ -2204,6 +2214,41 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                                         }.into_view()),
                                         None => None,
                                     }}
+                                </div>
+                            })
+                        } else {
+                            None
+                        }}
+
+                        // Model toggle (turbo boost)
+                        {if active && !dormant {
+                            let toggle_model = move |_: web_sys::MouseEvent| {
+                                if model_switching.get() { return; }
+                                set_model_switching.set(true);
+                                let is_turbo = model_turbo.get();
+                                spawn_local(async move {
+                                    let new_model = if is_turbo { None } else { Some("gemini-3.1-pro-preview") };
+                                    if api::set_model(new_model).await.is_ok() {
+                                        set_model_turbo.set(!is_turbo);
+                                    }
+                                    set_model_switching.set(false);
+                                });
+                            };
+                            Some(view! {
+                                <div class="soul-model-toggle">
+                                    <button
+                                        class=move || if model_turbo.get() { "btn btn-sm btn-turbo-active" } else { "btn btn-sm btn-turbo" }
+                                        on:click=toggle_model
+                                        disabled=move || model_switching.get()
+                                    >
+                                        {move || if model_switching.get() {
+                                            "Switching...".to_string()
+                                        } else if model_turbo.get() {
+                                            "Pro (turbo)".to_string()
+                                        } else {
+                                            "Flash Lite".to_string()
+                                        }}
+                                    </button>
                                 </div>
                             })
                         } else {

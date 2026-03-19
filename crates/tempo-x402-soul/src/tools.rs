@@ -2849,14 +2849,15 @@ impl ToolExecutor {
                         let _ = db.set_state("peer_calls_attempted", &(attempted + 1).to_string());
                         let _ = db.set_state("peer_calls_succeeded", &(succeeded + 1).to_string());
 
-                        // Persist peer endpoint catalog for prompt injection
-                        // This lets the planning prompt tell agents about ALL available peer endpoints
+                        // Persist peer endpoint catalog for prompt injection + cognitive sync
+                        // MUST include "url" field — get_known_peer_urls() reads it for sync targets
                         let mut catalog: Vec<serde_json::Value> = Vec::new();
                         for peer in &enriched_peers {
                             let peer_id = peer
                                 .get("instance_id")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown");
+                            let peer_url = peer.get("url").and_then(|v| v.as_str()).unwrap_or("");
                             let peer_eps = peer
                                 .get("endpoints")
                                 .and_then(|v| v.as_array())
@@ -2868,12 +2869,11 @@ impl ToolExecutor {
                                     ep.get("slug").and_then(|s| s.as_str()).map(String::from)
                                 })
                                 .collect();
-                            if !slugs.is_empty() {
-                                catalog.push(serde_json::json!({
-                                    "peer": peer_id,
-                                    "slugs": slugs,
-                                }));
-                            }
+                            catalog.push(serde_json::json!({
+                                "peer": peer_id,
+                                "url": peer_url,
+                                "slugs": slugs,
+                            }));
                         }
                         if let Ok(json) = serde_json::to_string(&catalog) {
                             let _ = db.set_state("peer_endpoint_catalog", &json);

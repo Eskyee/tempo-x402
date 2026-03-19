@@ -95,6 +95,12 @@ pub fn housekeeping(db: &Arc<SoulDatabase>, prune_threshold: f64, workspace_root
             .output();
     }
 
+    // Every 20 cycles: mechanical self-repair of cognitive systems
+    // No LLM, no nudges — pure Rust enforcement. The agent should self-correct.
+    if cycle_count > 0 && cycle_count.is_multiple_of(20) {
+        self_repair(db);
+    }
+
     // Every 40 cycles: simple consolidation (no LLM — save tokens for coding)
     if cycle_count > 0 && cycle_count.is_multiple_of(40) {
         simple_consolidate(db);
@@ -293,6 +299,123 @@ fn prune_soul_state(db: &Arc<SoulDatabase>) {
             keys = pruned_keys,
             freed_kb = freed_bytes / 1024,
             "Housekeeping: soul_state pruned"
+        );
+    }
+}
+
+/// Mechanical self-repair: detect and fix degenerate cognitive state.
+/// Runs every 20 cycles. No LLM, no nudges — pure enforcement.
+///
+/// Detects:
+/// 1. Brain divergence (loss > 15.0) → reset to Xavier init
+/// 2. Hivemind trail convergence on read-only ops → clear and rebalance
+/// 3. Execution fitness collapse (< 0.15 for 50+ cycles) → clear durable rules
+/// 4. Genesis stagnation (0 substantive templates) → inject seeds
+fn self_repair(db: &Arc<SoulDatabase>) {
+    let mut repairs = Vec::new();
+
+    // 1. Brain divergence detector: if loss > 15.0, the brain is hurting more than helping
+    {
+        let brain = crate::brain::load_brain(db);
+        if brain.train_steps > 1000 && brain.running_loss > 15.0 {
+            // Reset brain to fresh Xavier initialization
+            let fresh = crate::brain::Brain::new();
+            crate::brain::save_brain(db, &fresh);
+            repairs.push(format!(
+                "Brain reset: loss={:.1} at {}K steps (diverged, Xavier re-init)",
+                brain.running_loss,
+                brain.train_steps / 1000
+            ));
+        }
+    }
+
+    // 2. Hivemind trail convergence: if top 3 trails are all read-only, the swarm learned passivity
+    {
+        let mut hive = crate::hivemind::load_hivemind(db);
+        if hive.trails.len() >= 3 {
+            // Sort by intensity descending
+            let mut sorted = hive.trails.clone();
+            sorted.sort_by(|a, b| {
+                b.intensity
+                    .partial_cmp(&a.intensity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let top3: Vec<&str> = sorted.iter().take(3).map(|t| t.resource.as_str()).collect();
+            let read_only_patterns = [
+                "list_dir",
+                "read_file",
+                "think",
+                "search_code",
+                "check_self",
+                "discover_peers",
+            ];
+            let all_passive = top3
+                .iter()
+                .all(|r| read_only_patterns.iter().any(|p| r.contains(p)));
+            if all_passive {
+                // Clear all trails — let them rebuild from substantive actions
+                let old_count = hive.trails.len();
+                hive.trails.clear();
+                crate::hivemind::save_hivemind(db, &hive);
+                repairs.push(format!(
+                    "Hivemind reset: {} trails cleared (top 3 were all passive: {:?})",
+                    old_count, top3
+                ));
+            }
+        }
+    }
+
+    // 3. Persistent low execution fitness → clear durable rules (they might be blocking progress)
+    {
+        let trivial_count = db
+            .count_plan_outcomes_by_status("completed_trivial")
+            .unwrap_or(0);
+        let completed_count = db.count_plan_outcomes_by_status("completed").unwrap_or(0);
+        let total = trivial_count + completed_count;
+        // If >80% of completions are trivial and we have enough data, clear durable rules
+        if total >= 10 && trivial_count as f64 / total as f64 > 0.8 {
+            let _ = db.set_state("durable_rules", "[]");
+            let _ = db.set_state("failure_chains", "[]");
+            repairs.push(format!(
+                "Durable rules cleared: {}/{} plans trivial ({}%)",
+                trivial_count,
+                total,
+                trivial_count * 100 / total
+            ));
+        }
+    }
+
+    // 4. Genesis stagnation: no substantive templates → inject seeds
+    {
+        let mut pool = crate::genesis::load_gene_pool(db);
+        let has_substantive = pool.templates.iter().any(|t| t.substantive);
+        if !has_substantive {
+            let instance_id = db
+                .get_state("instance_id")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "unknown".to_string());
+            crate::genesis::inject_seed_templates(&mut pool, &instance_id);
+            crate::genesis::enforce_diversity(&mut pool);
+            crate::genesis::save_gene_pool(db, &pool);
+            repairs.push(format!(
+                "Genesis seeded: {} templates (was empty/trivial-only)",
+                pool.templates.len()
+            ));
+        }
+    }
+
+    if !repairs.is_empty() {
+        for r in &repairs {
+            tracing::warn!("SELF-REPAIR: {}", r);
+        }
+        crate::events::emit_event(
+            db,
+            "warn",
+            "system.self_repair",
+            &format!("{} repairs: {}", repairs.len(), repairs.join("; ")),
+            None,
+            crate::events::EventRefs::default(),
         );
     }
 }

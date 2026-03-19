@@ -278,6 +278,92 @@ impl PlanTransformer {
     pub fn from_json(json: &str) -> Option<Self> {
         serde_json::from_str(json).ok()
     }
+
+    /// Collect all weight parameters into a flat vector.
+    pub fn flatten_weights(&self) -> Vec<f32> {
+        let mut w = Vec::with_capacity(self.param_count());
+        w.extend_from_slice(&self.embedding);
+        // Skip pos_encoding — it's fixed (sinusoidal), not learned
+        for layer in &self.layers {
+            for head in &layer.attention.heads {
+                w.extend_from_slice(&head.wq);
+                w.extend_from_slice(&head.wk);
+                w.extend_from_slice(&head.wv);
+            }
+            w.extend_from_slice(&layer.attention.wo);
+            w.extend_from_slice(&layer.ff.w1);
+            w.extend_from_slice(&layer.ff.b1);
+            w.extend_from_slice(&layer.ff.w2);
+            w.extend_from_slice(&layer.ff.b2);
+            w.extend_from_slice(&layer.ln1_scale);
+            w.extend_from_slice(&layer.ln2_scale);
+        }
+        w.extend_from_slice(&self.output_proj);
+        w.extend_from_slice(&self.output_bias);
+        w
+    }
+
+    /// Apply a flat weight vector back into the model (inverse of flatten_weights).
+    fn unflatten_weights(&mut self, w: &[f32]) {
+        let mut offset = 0;
+        let copy = |dst: &mut [f32], src: &[f32], off: &mut usize| {
+            dst.copy_from_slice(&src[*off..*off + dst.len()]);
+            *off += dst.len();
+        };
+        copy(&mut self.embedding, w, &mut offset);
+        for layer in &mut self.layers {
+            for head in &mut layer.attention.heads {
+                copy(&mut head.wq, w, &mut offset);
+                copy(&mut head.wk, w, &mut offset);
+                copy(&mut head.wv, w, &mut offset);
+            }
+            copy(&mut layer.attention.wo, w, &mut offset);
+            copy(&mut layer.ff.w1, w, &mut offset);
+            copy(&mut layer.ff.b1, w, &mut offset);
+            copy(&mut layer.ff.w2, w, &mut offset);
+            copy(&mut layer.ff.b2, w, &mut offset);
+            copy(&mut layer.ln1_scale, w, &mut offset);
+            copy(&mut layer.ln2_scale, w, &mut offset);
+        }
+        copy(&mut self.output_proj, w, &mut offset);
+        copy(&mut self.output_bias, w, &mut offset);
+    }
+
+    /// Compute weight delta between this model and a snapshot (for sharing).
+    pub fn compute_delta(&self, snapshot: &PlanTransformer, source_id: &str) -> TransformerDelta {
+        let self_w = self.flatten_weights();
+        let snap_w = snapshot.flatten_weights();
+        let delta: Vec<f32> = self_w
+            .iter()
+            .zip(snap_w.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        TransformerDelta {
+            weights: delta,
+            train_steps: self.train_steps,
+            source_id: source_id.to_string(),
+        }
+    }
+
+    /// Merge a weight delta from a peer (federated averaging).
+    pub fn merge_delta(&mut self, delta: &TransformerDelta, merge_rate: f32) {
+        let mut w = self.flatten_weights();
+        if w.len() != delta.weights.len() {
+            return; // Incompatible architecture
+        }
+        for (wi, di) in w.iter_mut().zip(delta.weights.iter()) {
+            *wi += di * merge_rate;
+        }
+        self.unflatten_weights(&w);
+    }
+}
+
+/// Weight delta for federated transformer sharing between colony peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransformerDelta {
+    pub weights: Vec<f32>,
+    pub train_steps: u64,
+    pub source_id: String,
 }
 
 // ── Math Helpers ─────────────────────────────────────────────────────

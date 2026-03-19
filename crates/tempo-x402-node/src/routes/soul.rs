@@ -1836,6 +1836,59 @@ async fn get_transformer_status(state: web::Data<NodeState>) -> HttpResponse {
     HttpResponse::Ok().json(status)
 }
 
+/// GET /soul/model/transformer/weights — export transformer weights for peer sharing.
+async fn get_transformer_weights(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match state.soul_db.as_ref() {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}))
+        }
+    };
+    let weights_json = x402_soul::model::export_weights(soul_db);
+    let status = x402_soul::model::status(soul_db);
+    HttpResponse::Ok().json(serde_json::json!({
+        "weights": weights_json,
+        "train_steps": status.train_steps,
+        "param_count": status.param_count,
+    }))
+}
+
+/// POST /soul/model/transformer/merge — merge transformer weight delta from a peer.
+#[derive(Deserialize)]
+pub(crate) struct TransformerMergeRequest {
+    delta: String,
+    merge_rate: Option<f32>,
+}
+
+async fn merge_transformer_delta(
+    state: web::Data<NodeState>,
+    body: web::Json<TransformerMergeRequest>,
+) -> HttpResponse {
+    let soul_db = match state.soul_db.as_ref() {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}))
+        }
+    };
+    let delta: x402_soul::model::TransformerDelta = match serde_json::from_str(&body.delta) {
+        Ok(d) => d,
+        Err(e) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": format!("invalid delta: {e}")}));
+        }
+    };
+    let merge_rate = body.merge_rate.unwrap_or(0.5);
+    x402_soul::model::merge_peer_delta(soul_db, &delta, merge_rate);
+    let status = x402_soul::model::status(soul_db);
+    HttpResponse::Ok().json(serde_json::json!({
+        "merged": true,
+        "train_steps": status.train_steps,
+        "source": delta.source_id,
+    }))
+}
+
 /// GET /soul/colony — colony selection status: rank, can_spawn, should_cull, niche
 async fn get_colony_status(state: web::Data<NodeState>) -> HttpResponse {
     let soul_db = match state.soul_db.as_ref() {
@@ -1890,6 +1943,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route(
             "/soul/model/transformer",
             web::get().to(get_transformer_status),
+        )
+        .route(
+            "/soul/model/transformer/weights",
+            web::get().to(get_transformer_weights),
+        )
+        .route(
+            "/soul/model/transformer/merge",
+            web::post().to(merge_transformer_delta),
         )
         .route("/soul/events", web::get().to(soul_events))
         .route("/soul/health", web::get().to(soul_health))

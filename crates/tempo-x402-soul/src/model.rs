@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::SoulDatabase;
 
+// Re-export for node routes
+pub use x402_model::TransformerDelta;
+
 /// Model status for the API/dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStatus {
@@ -208,6 +211,19 @@ pub fn status(db: &SoulDatabase) -> ModelStatus {
         plans_generated,
         last_train_loss,
     }
+}
+
+/// Export transformer weights for peer sharing.
+pub fn export_weights(db: &SoulDatabase) -> String {
+    let model = load_model(db);
+    model.to_json()
+}
+
+/// Merge a transformer weight delta from a peer.
+pub fn merge_peer_delta(db: &SoulDatabase, delta: &x402_model::TransformerDelta, merge_rate: f32) {
+    let mut model = load_model(db);
+    model.merge_delta(delta, merge_rate);
+    save_model(db, &model);
 }
 
 /// Convert a step summary (e.g., "read foo.rs", "edit crates/...") to a step type name.

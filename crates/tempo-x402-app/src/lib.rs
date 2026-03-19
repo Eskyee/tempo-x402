@@ -2255,6 +2255,112 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                             None
                         }}
 
+                        // Plan Transformer (284K param model)
+                        {
+                            let tfm = data.get("transformer");
+                            if let Some(t) = tfm {
+                                let param_count = t.get("param_count")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let train_steps = t.get("train_steps")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let running_loss = t.get("running_loss")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let last_train_loss = t.get("last_train_loss")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let vocab_size = t.get("vocab_size")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let templates_trained = t.get("templates_trained_on")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let plans_generated = t.get("plans_generated")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let status_label = if train_steps >= 50 {
+                                    "generating"
+                                } else if train_steps > 0 {
+                                    "learning"
+                                } else {
+                                    "untrained"
+                                };
+                                let status_class = if train_steps >= 50 {
+                                    "transformer-status--active"
+                                } else if train_steps > 0 {
+                                    "transformer-status--learning"
+                                } else {
+                                    "transformer-status--idle"
+                                };
+                                Some(view! {
+                                    <div class="transformer-panel">
+                                        <h3>
+                                            "Plan Transformer "
+                                            <span class={format!("transformer-status {}", status_class)}>
+                                                {status_label}
+                                            </span>
+                                        </h3>
+                                        <div class="transformer-stats">
+                                            <div class="transformer-stat">
+                                                <span class="transformer-stat-label">"params"</span>
+                                                <span class="transformer-stat-value">
+                                                    {format!("{}K", param_count / 1000)}
+                                                </span>
+                                            </div>
+                                            <div class="transformer-stat">
+                                                <span class="transformer-stat-label">"train steps"</span>
+                                                <span class="transformer-stat-value">
+                                                    {train_steps.to_string()}
+                                                </span>
+                                            </div>
+                                            <div class="transformer-stat">
+                                                <span class="transformer-stat-label">"loss"</span>
+                                                <span class="transformer-stat-value">
+                                                    {format!("{:.3}", last_train_loss)}
+                                                </span>
+                                            </div>
+                                            <div class="transformer-stat">
+                                                <span class="transformer-stat-label">"vocab"</span>
+                                                <span class="transformer-stat-value">
+                                                    {vocab_size.to_string()}
+                                                </span>
+                                            </div>
+                                            <div class="transformer-stat">
+                                                <span class="transformer-stat-label">"trained on"</span>
+                                                <span class="transformer-stat-value">
+                                                    {format!("{} templates", templates_trained)}
+                                                </span>
+                                            </div>
+                                            <div class="transformer-stat">
+                                                <span class="transformer-stat-label">"generated"</span>
+                                                <span class="transformer-stat-value">
+                                                    {format!("{} plans", plans_generated)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        {if running_loss > 0.0 {
+                                            Some(view! {
+                                                <div class="transformer-loss-bar">
+                                                    <div class="transformer-loss-fill"
+                                                        style=format!("width: {}%", (100.0 - (running_loss * 25.0).min(100.0)).max(5.0))>
+                                                    </div>
+                                                    <span class="transformer-loss-label">
+                                                        {format!("running loss: {:.3}", running_loss)}
+                                                    </span>
+                                                </div>
+                                            })
+                                        } else {
+                                            None
+                                        }}
+                                    </div>
+                                }.into_view())
+                            } else {
+                                None
+                            }
+                        }
+
                         // Capability profile
                         {
                             let cap_profile = data.get("capability_profile");

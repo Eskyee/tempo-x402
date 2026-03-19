@@ -33,5 +33,5 @@ pub mod vocab;
 
 pub use inference::generate_plan;
 pub use trainer::{train_batch, TrainingExample};
-pub use transformer::PlanTransformer;
+pub use transformer::{PlanTransformer, TransformerDelta};
 pub use vocab::Vocab;

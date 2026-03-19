@@ -2350,6 +2350,90 @@ a.node-address:hover { text-decoration: underline; }
     letter-spacing: 0.05em;
 }
 
+/* Plan Transformer panel */
+.transformer-panel {
+    background: var(--surface-2, #1a1a2e);
+    border-radius: var(--radius, 8px);
+    padding: var(--sp-3, 12px);
+    margin-top: var(--sp-2, 8px);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.transformer-panel h3 {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 0.95rem;
+    color: #3b82f6;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.transformer-status {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.transformer-status--active {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+.transformer-status--learning {
+    background: rgba(234, 179, 8, 0.2);
+    color: #eab308;
+}
+.transformer-status--idle {
+    background: rgba(100, 116, 139, 0.2);
+    color: #94a3b8;
+}
+.transformer-stats {
+    display: flex;
+    gap: var(--sp-3, 12px);
+    flex-wrap: wrap;
+}
+.transformer-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 70px;
+}
+.transformer-stat-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #60a5fa;
+}
+.transformer-stat-label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.transformer-loss-bar {
+    margin-top: 8px;
+    height: 18px;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+}
+.transformer-loss-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6, #60a5fa);
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}
+.transformer-loss-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.7rem;
+    line-height: 18px;
+    color: var(--text-secondary);
+}
+
 /* ============================================================
    TMUX-INSPIRED DASHBOARD GRID LAYOUT
    Dense, terminal-aesthetic, information-rich panels
@@ -2919,7 +3003,7 @@ body { background: var(--bg-base) !important; -webkit-font-smoothing: antialiase
 
 /* Kill ALL boxes */
 .soul-card, .stat-card, .fitness-panel, .peer-panel, .clone-section,
-.benchmark-panel, .brain-panel, .capability-panel, .outcomes-panel,
+.benchmark-panel, .brain-panel, .transformer-panel, .capability-panel, .outcomes-panel,
 .soul-goals, .soul-plan, .soul-nudge-form, .soul-thoughts,
 .endpoints-section {
     background: none !important; border: none !important;
@@ -2931,6 +3015,7 @@ body { background: var(--bg-base) !important; -webkit-font-smoothing: antialiase
 .tmux-pane .peer-panel,
 .tmux-pane .benchmark-panel,
 .tmux-pane .brain-panel,
+.tmux-pane .transformer-panel,
 .tmux-pane .benchmark-collective,
 .tmux-pane .benchmark-history,
 .tmux-pane .benchmark-refs,

@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">tempo-x402</h1>
-  <p align="center"><strong>Self-replicating autonomous agents with colony selection, cognitive sync, and a from-scratch transformer &mdash; paid per request via HTTP 402 on Tempo blockchain</strong></p>
+  <p align="center"><strong>Self-replicating autonomous agents with colony selection, federated transformer, and clone lifecycle (Fork &rarr; Branch &rarr; Birth) &mdash; paid per request via HTTP 402 on Tempo blockchain</strong></p>
 </p>
 
 <p align="center">
@@ -64,7 +64,7 @@ Seven cognitive systems unified under the **Free Energy Principle** &mdash; a si
 
 | System | What It Does |
 |--------|-------------|
-| **Model** (`tempo-x402-model`) | 284K-parameter transformer for plan sequence prediction. 2-layer causal attention, trained on colony's collective plan outcomes. Replaces the old 23K feedforward brain. |
+| **Model** (`tempo-x402-model`) | 284K-parameter transformer for plan sequence prediction. 2-layer causal attention, trained on colony's collective plan outcomes. Federated weight sharing between agents. Generates plans WITHOUT LLM after 50+ training steps. |
 | **Cortex** (`cortex.rs`) | Predictive world model. Experience graph with causal edges, curiosity engine, dream consolidation, emotional valence. |
 | **Genesis** (`genesis.rs`) | Evolutionary plan templates. Successful plans become "genes." Crossover, mutation, selection. Diversity pressure prevents degenerate convergence. Colony-wide sharing. |
 | **Hivemind** (`hivemind.rs`) | Stigmergic swarm intelligence. Pheromone trails on files/actions/goals. Evaporation decay, reputation-weighted influence. |
@@ -82,7 +82,7 @@ Agents compete. Fit agents influence the colony more. Unfit agents get replaced.
 - **Specialization niches**: Competitive exclusion &mdash; if peers already cover coding, you're pushed toward review or endpoint creation
 - **Spawn rights**: Only agents above colony median fitness can reproduce
 - **Cull signal**: Agents below 40% of fittest for 5 consecutive evals get flagged for replacement
-- **Cognitive sync**: Every 5 cycles, agents exchange cortex world models, genesis templates, and hivemind pheromone trails with all known peers + parent
+- **Cognitive sync**: Every 5 cycles, agents exchange cortex world models, genesis templates, hivemind pheromone trails, and transformer weights with all known peers + parent
 
 ## Self-Repair
 
@@ -92,6 +92,18 @@ Every 20 cycles, pure Rust enforcement &mdash; no LLM, no nudges:
 - **Hivemind trail convergence** on read-only ops &rarr; clear all trails
 - **Durable rule poisoning** (>80% trivial completions) &rarr; clear rules
 - **Genesis stagnation** (no substantive templates) &rarr; inject seeds
+
+## Clone Lifecycle (Cell Division)
+
+Clones differentiate through **source code**, not just data. Biological cell division model:
+
+| Phase | Name | Behavior |
+|-------|------|----------|
+| **1** | **Fork** | Identical code. Deploys from `main`. Gets all updates automatically. Differentiates only through brain weights and learned data. |
+| **2** | **Branch** | First code commit triggers differentiation. Creates own `vm/{id}` branch. Has unique source code modifications. Still syncs from main. |
+| **3** | **Birth** | Own GitHub repo. Fully independent organism. Can optionally sync from upstream. No longer a clone &mdash; it's born. |
+
+Transitions are automatic: Fork &rarr; Branch happens on first successful `cargo check` + commit. The lifecycle phase is injected into every planning prompt, encouraging agents to differentiate through code rather than data alone.
 
 ## Model Toggle (Turbo Boost)
 
@@ -113,9 +125,10 @@ Use Pro to generate superior plans, then revert to Flash Lite. The solutions and
 - **Dreams** &mdash; periodic consolidation extracts patterns, generates counterfactuals
 - **Evolves plans** &mdash; successful strategies propagate through genetic crossover and mutation
 - **Creates services** &mdash; script endpoints that expose capabilities
-- **Clones itself** &mdash; spawns copies on Railway with inherited cognitive state
+- **Clones itself** &mdash; spawns copies on Railway; new clones deploy from main (Fork phase)
+- **Differentiates** &mdash; first code commit creates own branch (Branch phase); eventually becomes independent (Birth phase)
 - **Competes** &mdash; fitness ranking determines influence in the colony
-- **Cooperates** &mdash; shares brain weights, templates, world models, pheromone trails with peers
+- **Cooperates** &mdash; shares transformer weights, brain weights, templates, world models, pheromone trails with peers
 - **Self-repairs** &mdash; detects and fixes degenerate cognitive state mechanically
 - **Benchmarks itself** &mdash; Exercism Rust challenges scored periodically with ELO tracking
 
@@ -172,6 +185,9 @@ Client                     Gateway                   Facilitator               C
 | `POST` | `/soul/chat` | Multi-turn chat with the soul |
 | `POST` | `/soul/nudge` | Send a priority nudge |
 | `GET/POST` | `/soul/model` | Get or set model override (turbo boost) |
+| `GET` | `/soul/model/transformer` | Plan transformer status (params, loss, training steps) |
+| `GET` | `/soul/model/transformer/weights` | Export transformer weights for federated sharing |
+| `POST` | `/soul/model/transformer/merge` | Merge peer transformer weight deltas |
 | `GET` | `/soul/colony` | Colony selection status: rank, peers, niche |
 | `GET` | `/soul/lessons` | Export plan outcomes + capability profile |
 | `GET` | `/soul/brain/weights` | Export neural brain weights |

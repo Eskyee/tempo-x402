@@ -622,31 +622,38 @@ pub async fn clone_instance(wallet: &WalletState) -> Result<CloneResponse, Strin
     }
 
     let requirements = &payment_body.accepts[0];
-    let payment_header = sign_for_wallet(wallet, requirements).await?;
 
-    // Retry with payment signature
-    let paid_resp = Request::post(&url)
-        .header("Content-Type", "application/json")
-        .header("PAYMENT-SIGNATURE", &payment_header)
-        .body("{}")
-        .map_err(|e| format!("Failed to build request: {}", e))?
-        .send()
-        .await
-        .map_err(|e| format!("Paid request failed: {}", e))?;
+    // Retry with payment signature (up to 3 attempts for nonce collisions)
+    for attempt in 0..3 {
+        let payment_header = sign_for_wallet(wallet, requirements).await?;
 
-    if !paid_resp.ok() {
+        let paid_resp = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .header("PAYMENT-SIGNATURE", &payment_header)
+            .body("{}")
+            .map_err(|e| format!("Failed to build request: {}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Paid request failed: {}", e))?;
+
+        if paid_resp.ok() {
+            return paid_resp
+                .json::<CloneResponse>()
+                .await
+                .map_err(|e| format!("Failed to parse clone response: {}", e));
+        }
+
         let err = paid_resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Clone failed (HTTP {}): {}",
-            paid_resp.status(),
-            err
-        ));
+
+        // Retry on nonce collision (fresh nonce each attempt)
+        if err.contains("Nonce already used") && attempt < 2 {
+            continue;
+        }
+
+        return Err(format!("Clone failed (HTTP {}): {}", paid_resp.status(), err));
     }
 
-    paid_resp
-        .json::<CloneResponse>()
-        .await
-        .map_err(|e| format!("Failed to parse clone response: {}", e))
+    Err("Clone failed after 3 attempts".to_string())
 }
 
 /// Set up a wallet for x402 payments (fund via faucet + approve facilitator).

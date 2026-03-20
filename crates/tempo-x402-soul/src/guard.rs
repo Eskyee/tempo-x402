@@ -27,7 +27,9 @@ const PROTECTED_PREFIXES: &[&str] = &[
 ];
 
 /// Patterns that are protected regardless of location.
-const PROTECTED_FILENAMES: &[&str] = &["Cargo.toml", "Cargo.lock"];
+/// Cargo.lock is NOT protected — it's auto-generated when code changes.
+/// Protecting it blocks all commits after any code edit.
+const PROTECTED_FILENAMES: &[&str] = &["Cargo.toml"];
 
 /// Check if a path is protected from writes.
 pub fn is_protected(path: &str) -> bool {
@@ -101,10 +103,11 @@ mod tests {
     }
 
     #[test]
-    fn protects_cargo_files() {
+    fn protects_cargo_toml() {
         assert!(is_protected("Cargo.toml"));
-        assert!(is_protected("Cargo.lock"));
         assert!(is_protected("crates/tempo-x402-server/Cargo.toml"));
+        // Cargo.lock is NOT protected — it's auto-generated
+        assert!(!is_protected("Cargo.lock"));
     }
 
     #[test]

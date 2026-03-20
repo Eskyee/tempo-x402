@@ -970,11 +970,23 @@ impl Cortex {
             }
         }
 
-        // Import peer's dream insights (low confidence — it's secondhand)
+        // Import peer's dream insights (low confidence — it's secondhand).
+        // Strip existing "[from peer ...]" prefixes to prevent recursive nesting
+        // that bloats insight strings on every sync cycle.
         let now = chrono::Utc::now().timestamp();
+        let peer_prefix_re = "[from peer ";
         for insight in &peer.insights {
+            // Strip all existing "[from peer ...] " prefixes
+            let mut pattern = insight.pattern.as_str();
+            while pattern.starts_with(peer_prefix_re) {
+                if let Some(end) = pattern.find("] ") {
+                    pattern = &pattern[end + 2..];
+                } else {
+                    break;
+                }
+            }
             self.insights.push(DreamInsight {
-                pattern: format!("[from peer {}] {}", peer.source_id, insight.pattern),
+                pattern: format!("[from peer {}] {}", peer.source_id, pattern),
                 confidence: insight.confidence * 0.5, // Halve confidence for imported
                 timestamp: now,
             });

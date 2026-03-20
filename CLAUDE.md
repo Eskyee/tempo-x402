@@ -73,7 +73,7 @@ Each crate has its own `CLAUDE.md` with local context. Read that first when work
 | `ALLOWED_ORIGINS` | server, facilitator | Comma-separated CORS origins |
 | `RATE_LIMIT_RPM` | server, facilitator | Rate limit per minute |
 | `GEMINI_API_KEY` | node | Gemini API key for soul (dormant without it) |
-| `SOUL_CODING_ENABLED` | node | Enable soul write/edit/commit tools (default: false) |
+| `SOUL_CODING_ENABLED` | node | Enable soul write/edit/commit tools (default: true) |
 | `SOUL_DYNAMIC_TOOLS_ENABLED` | node | Enable dynamic tool registry (default: false) |
 | `HEALTH_PROBE_INTERVAL_SECS` | node | Health probe interval in seconds (default: 300) |
 | `SOUL_FORK_REPO` | node | Fork repo for soul push (e.g. `compusophy-bot/tempo-x402`) |

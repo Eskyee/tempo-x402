@@ -31,7 +31,7 @@ pub struct SoulConfig {
     pub workspace_root: String,
     /// GitHub token for git push/PR operations (env: GITHUB_TOKEN).
     pub github_token: Option<String>,
-    /// Master switch for coding capabilities (env: SOUL_CODING_ENABLED, default: false).
+    /// Master switch for coding capabilities (env: SOUL_CODING_ENABLED, default: true).
     pub coding_enabled: bool,
     /// Enable autonomous coding during think cycles (env: SOUL_AUTONOMOUS_CODING, default: false).
     pub autonomous_coding: bool,
@@ -186,12 +186,12 @@ impl SoulConfig {
         let github_token = std::env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty());
 
         let coding_enabled = std::env::var("SOUL_CODING_ENABLED")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
 
         let autonomous_coding = std::env::var("SOUL_AUTONOMOUS_CODING")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
 
         let auto_propose_to_main = std::env::var("SOUL_AUTO_PROPOSE_TO_MAIN")
             .map(|v| v == "true" || v == "1")

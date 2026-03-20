@@ -1147,6 +1147,7 @@ fn DashboardPage() -> impl IntoView {
                     let synthesis_data = soul_data.get("synthesis");
                     let bench_data = soul_data.get("benchmark");
                     let brain_data = soul_data.get("brain");
+                    let transformer_data = soul_data.get("transformer");
                     let eval_data = soul_data.get("evaluation");
                     let total_cycles = soul_data.get("total_cycles").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -1293,7 +1294,7 @@ fn DashboardPage() -> impl IntoView {
                                 }
                             })}
 
-                            // Brain
+                            // Brain (feedforward, 23K params)
                             {brain_data.map(|b| {
                                 let params = b.get("parameters").and_then(|v| v.as_u64()).unwrap_or(0);
                                 let steps = b.get("train_steps").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -1304,6 +1305,30 @@ fn DashboardPage() -> impl IntoView {
                                         <div class="tmux-kv"><span class="tmux-kv-label">"params"</span><span class="tmux-kv-value">{format!("{}K", params/1000)}</span></div>
                                         <div class="tmux-kv"><span class="tmux-kv-label">"steps"</span><span class="tmux-kv-value">{steps.to_string()}</span></div>
                                         <div class="tmux-kv"><span class="tmux-kv-label">"loss"</span><span class="tmux-kv-value">{format!("{:.4}", loss)}</span></div>
+                                    </div>
+                                }
+                            })}
+
+                            // Plan Transformer (284K params)
+                            {transformer_data.map(|t| {
+                                let params = t.get("param_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let steps = t.get("train_steps").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let loss = t.get("last_train_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let generated = t.get("plans_generated").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let trained_on = t.get("templates_trained_on").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let status_label = if steps >= 50 { "generating" } else if steps > 0 { "learning" } else { "idle" };
+                                let status_class = if steps >= 50 { "green" } else if steps > 0 { "yellow" } else { "purple" };
+                                view! {
+                                    <div class="tmux-section">
+                                        <div class="tmux-section-title">
+                                            "Transformer "
+                                            <span class={format!("tmux-tag tmux-tag--{}", status_class)}>{status_label}</span>
+                                        </div>
+                                        <div class="tmux-kv"><span class="tmux-kv-label">"params"</span><span class="tmux-kv-value">{format!("{}K", params/1000)}</span></div>
+                                        <div class="tmux-kv"><span class="tmux-kv-label">"steps"</span><span class="tmux-kv-value">{steps.to_string()}</span></div>
+                                        <div class="tmux-kv"><span class="tmux-kv-label">"loss"</span><span class="tmux-kv-value">{format!("{:.4}", loss)}</span></div>
+                                        <div class="tmux-kv"><span class="tmux-kv-label">"trained on"</span><span class="tmux-kv-value">{format!("{} templates", trained_on)}</span></div>
+                                        <div class="tmux-kv"><span class="tmux-kv-label">"generated"</span><span class="tmux-kv-value">{format!("{} plans", generated)}</span></div>
                                     </div>
                                 }
                             })}

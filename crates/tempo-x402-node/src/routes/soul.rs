@@ -1870,6 +1870,183 @@ async fn soul_history(
     }))
 }
 
+/// GET /soul/dev-report — structured diagnostic for Claude Code to consume.
+/// Answers: "What went wrong since last deploy? What code should I fix?"
+async fn soul_dev_report(state: web::Data<NodeState>) -> HttpResponse {
+    let soul_db = match &state.soul_db {
+        Some(db) => db,
+        None => {
+            return HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({"error": "soul not active"}));
+        }
+    };
+
+    // 1. Repeated failure patterns — what keeps failing and why
+    let outcomes = soul_db.get_recent_plan_outcomes(50).unwrap_or_default();
+    let mut failure_patterns: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for o in &outcomes {
+        if o.status == "failed" {
+            let cat = o.error_category.as_ref().map(|c| c.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
+            failure_patterns.entry(cat).or_default().push(o.lesson.clone());
+        }
+    }
+    let top_failures: Vec<serde_json::Value> = failure_patterns
+        .iter()
+        .map(|(cat, lessons)| {
+            serde_json::json!({
+                "error_category": cat,
+                "count": lessons.len(),
+                "examples": lessons.iter().take(3).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    // 2. Durable rules blocking progress
+    let durable_rules: Vec<serde_json::Value> = soul_db
+        .get_state("durable_rules")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let high_trigger_rules: Vec<&serde_json::Value> = durable_rules
+        .iter()
+        .filter(|r| r.get("trigger_count").and_then(|v| v.as_u64()).unwrap_or(0) > 5)
+        .collect();
+
+    // 3. Capability regressions — skills that dropped
+    let profile = x402_soul::capability::compute_profile(soul_db);
+    let weak_capabilities: Vec<serde_json::Value> = profile
+        .capabilities
+        .iter()
+        .filter(|c| c.success_rate < 0.3 && c.attempts > 5)
+        .map(|c| {
+            serde_json::json!({
+                "capability": c.capability,
+                "success_rate": format!("{:.0}%", c.success_rate * 100.0),
+                "attempts": c.attempts,
+            })
+        })
+        .collect();
+
+    // 4. Oscillator health — any that haven't fired when overdue
+    let temporal: Option<x402_soul::temporal::TemporalBinding> = soul_db
+        .get_state("temporal_binding")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok());
+    let overdue_oscillators: Vec<serde_json::Value> = temporal
+        .as_ref()
+        .map(|tb| {
+            tb.oscillators
+                .iter()
+                .filter(|o| o.cycles_since_fire > o.natural_period * 3)
+                .map(|o| {
+                    serde_json::json!({
+                        "name": o.name,
+                        "cycles_since_fire": o.cycles_since_fire,
+                        "natural_period": o.natural_period,
+                        "overdue_by": o.cycles_since_fire as i64 - o.natural_period as i64 * 2,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 5. Stuck goals — active goals with retries
+    let goals = soul_db.get_active_goals().unwrap_or_default();
+    let stuck_goals: Vec<serde_json::Value> = goals
+        .iter()
+        .filter(|g| g.retry_count > 0)
+        .map(|g| {
+            serde_json::json!({
+                "description": g.description,
+                "retry_count": g.retry_count,
+                "age_hours": (chrono::Utc::now().timestamp() - g.created_at).max(0) / 3600,
+            })
+        })
+        .collect();
+
+    // 6. ELO trend — are we improving?
+    let elo_history: Vec<serde_json::Value> = soul_db
+        .get_state("elo_history")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let elo_trend = if elo_history.len() >= 2 {
+        let last = elo_history.last().and_then(|e| e.get("rating")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let prev = elo_history[elo_history.len() - 2].get("rating").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        last - prev
+    } else {
+        0.0
+    };
+    let current_elo = elo_history.last().and_then(|e| e.get("rating")).and_then(|v| v.as_f64());
+    let current_pass1 = elo_history.last().and_then(|e| e.get("pass_at_1")).and_then(|v| v.as_f64());
+
+    // 7. Free energy regime — what state is the agent in?
+    let fe = x402_soul::free_energy::load_current(soul_db);
+    let regime = fe.as_ref().map(|f| f.regime.to_string()).unwrap_or_else(|| "unknown".to_string());
+    let fe_total = fe.as_ref().map(|f| f.total).unwrap_or(0.0);
+    let fe_trend = fe.as_ref().map(|f| f.trend).unwrap_or(0.0);
+
+    // 8. Coding health
+    let coding_enabled: bool = soul_db
+        .get_state("last_cycle_entered_code")
+        .ok()
+        .flatten()
+        .map(|s| s == "true")
+        .unwrap_or(false);
+    let total_code_entries: u64 = soul_db
+        .get_state("total_code_entries")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // 9. Actionable recommendations
+    let mut recommendations: Vec<String> = Vec::new();
+    if !high_trigger_rules.is_empty() {
+        recommendations.push(format!(
+            "Clear {} high-trigger durable rules that may be blocking valid approaches",
+            high_trigger_rules.len()
+        ));
+    }
+    if !weak_capabilities.is_empty() {
+        let weak_names: Vec<String> = weak_capabilities.iter()
+            .filter_map(|c| c.get("capability").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .collect();
+        recommendations.push(format!("Fix weak capabilities: {}", weak_names.join(", ")));
+    }
+    if !overdue_oscillators.is_empty() {
+        recommendations.push("Check temporal binding — oscillators overdue".to_string());
+    }
+    if current_elo.unwrap_or(0.0) < 1100.0 {
+        recommendations.push("ELO critically low — benchmark performance needs investigation".to_string());
+    }
+    if total_code_entries == 0 {
+        recommendations.push("Agent has NEVER entered code mode — check SOUL_CODING_ENABLED and INSTANCE_ID".to_string());
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "summary": {
+            "elo": current_elo,
+            "pass_at_1": current_pass1,
+            "elo_trend": elo_trend,
+            "free_energy": fe_total,
+            "fe_trend": fe_trend,
+            "regime": regime,
+            "coding_active": coding_enabled,
+            "total_code_entries": total_code_entries,
+        },
+        "failure_patterns": top_failures,
+        "blocking_rules": high_trigger_rules,
+        "weak_capabilities": weak_capabilities,
+        "overdue_oscillators": overdue_oscillators,
+        "stuck_goals": stuck_goals,
+        "recommendations": recommendations,
+    }))
+}
+
 /// GET /soul/health — computed health summary from events.
 async fn soul_health(state: web::Data<NodeState>) -> HttpResponse {
     let soul_db = match &state.soul_db {
@@ -2101,6 +2278,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         )
         .route("/soul/open-prs", web::get().to(open_prs))
         .route("/soul/diagnostics", web::get().to(soul_diagnostics))
+        .route("/soul/dev-report", web::get().to(soul_dev_report))
         .route("/soul/cleanup", web::post().to(soul_cleanup))
         .route("/soul/rules/reset", web::post().to(soul_rules_reset))
         .route("/soul/colony", web::get().to(get_colony_status))

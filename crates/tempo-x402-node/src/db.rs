@@ -25,12 +25,6 @@ pub struct ChildInstance {
     pub updated_at: i64,
 }
 
-/// Ordinal designations for drones. Queen is the parent, drones are numbered.
-const DESIGNATIONS: &[&str] = &[
-    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
-    "eighteen", "nineteen", "twenty",
-];
 
 const CHILDREN_SCHEMA: &str = r#"
     CREATE TABLE IF NOT EXISTS children (
@@ -111,9 +105,15 @@ pub fn init_children_schema(db: &Database) -> Result<(), GatewayError> {
     Ok(())
 }
 
-/// Get the next available ordinal designation ("one", "two", ...).
-/// Counts all non-failed children to determine the next number.
+/// Get the next lineage-based designation.
+/// Parent is "borg-0", children are "borg-0-1", "borg-0-2", etc.
+/// A child of "borg-0-1" would spawn "borg-0-1-1", "borg-0-1-2", etc.
 pub fn next_designation(db: &Database) -> Result<String, GatewayError> {
+    let parent_designation = std::env::var("DRONE_DESIGNATION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "borg-0".to_string());
+
     db.with_connection(|conn| {
         let count: u32 = conn
             .query_row(
@@ -123,13 +123,8 @@ pub fn next_designation(db: &Database) -> Result<String, GatewayError> {
             )
             .map_err(|e| GatewayError::Internal(format!("count query failed: {e}")))?;
 
-        let idx = count as usize;
-        let name = if idx < DESIGNATIONS.len() {
-            DESIGNATIONS[idx].to_string()
-        } else {
-            format!("drone-{}", idx + 1)
-        };
-        Ok(name)
+        let child_number = count + 1;
+        Ok(format!("{}-{}", parent_designation, child_number))
     })
 }
 

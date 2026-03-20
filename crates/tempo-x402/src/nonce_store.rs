@@ -196,11 +196,23 @@ impl NonceStore for SqliteNonceStore {
         let now = unix_now();
         // INSERT will fail on PRIMARY KEY constraint if nonce exists.
         // This is atomic at the database level, safe across processes.
-        conn.execute(
+        match conn.execute(
             "INSERT INTO used_nonces (nonce, recorded_at) VALUES (?1, ?2)",
             rusqlite::params![nonce.as_slice(), now],
-        )
-        .is_ok()
+        ) {
+            Ok(_) => true, // Successfully claimed
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ffi::ErrorCode::ConstraintViolation =>
+            {
+                false // Actual duplicate nonce — reject
+            }
+            Err(e) => {
+                // Infrastructure error (disk full, etc.) — log but allow the payment.
+                // Better to risk a theoretical replay than to block ALL payments.
+                tracing::error!(error = %e, "Nonce store write failed — allowing payment to proceed");
+                true
+            }
+        }
     }
 
     fn release(&self, nonce: &FixedBytes<32>) {

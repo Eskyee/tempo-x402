@@ -819,6 +819,30 @@ async fn main() -> std::io::Result<()> {
             }
         });
 
+        // Fund the embedded facilitator with gas (native tokens) so it can call transferFrom.
+        // The facilitator has its own private key and needs gas for on-chain settlement.
+        if let Some(ref fk) = facilitator_private_key {
+            let rpc = rpc_url.clone();
+            let fk = fk.clone();
+            tokio::spawn(async move {
+                let fk_trimmed = fk.strip_prefix("0x").unwrap_or(&fk);
+                let Ok(fac_signer) = fk_trimmed.parse::<alloy::signers::local::PrivateKeySigner>()
+                else {
+                    return;
+                };
+                let fac_addr = fac_signer.address();
+                if let Err(e) = x402_identity::request_faucet_funds(&rpc, fac_addr).await {
+                    tracing::warn!(
+                        facilitator = %fac_addr,
+                        error = %e,
+                        "Facilitator faucet funding failed (non-fatal)"
+                    );
+                } else {
+                    tracing::info!(facilitator = %fac_addr, "Facilitator funded with gas via faucet");
+                }
+            });
+        }
+
         // Auto-approve the embedded facilitator for pathUSD (needed for x402 payments).
         // The wallet (identity key) must approve the facilitator address as spender,
         // so that transferFrom works during settlement.

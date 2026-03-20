@@ -74,6 +74,9 @@ struct SoulStatus {
     /// Free energy: the unifying metric (lower = smarter).
     #[serde(skip_serializing_if = "Option::is_none")]
     free_energy: Option<serde_json::Value>,
+    /// Lifecycle: Fork → Branch → Birth differentiation phase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -613,6 +616,16 @@ async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
                     "timestamp": fe.timestamp,
                 })
             })
+        },
+        lifecycle: {
+            let ls = x402_soul::lifecycle::status(soul_db);
+            Some(serde_json::json!({
+                "phase": ls.phase,
+                "own_commits": ls.own_commits,
+                "branch": ls.branch,
+                "own_repo": ls.own_repo,
+                "lines_diverged": ls.lines_diverged,
+            }))
         },
     })
 }

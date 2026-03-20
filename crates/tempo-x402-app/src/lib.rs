@@ -1933,6 +1933,28 @@ fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView {
                                 <span class={format!("soul-status-badge {}", badge_class)}>
                                     {badge_label}
                                 </span>
+                                // Lifecycle phase badge
+                                {
+                                    let lifecycle = data.get("lifecycle");
+                                    let phase = lifecycle
+                                        .and_then(|l| l.get("phase"))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("fork");
+                                    let own_commits = lifecycle
+                                        .and_then(|l| l.get("own_commits"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
+                                    let (phase_class, phase_label) = match phase {
+                                        "birth" => ("lifecycle-badge--birth", format!("born ({own_commits} commits)")),
+                                        "branch" => ("lifecycle-badge--branch", format!("branching ({own_commits} commits)")),
+                                        _ => ("lifecycle-badge--fork", "fork".to_string()),
+                                    };
+                                    view! {
+                                        <span class={format!("lifecycle-badge {}", phase_class)}>
+                                            {phase_label}
+                                        </span>
+                                    }
+                                }
                             </div>
                         </div>
 

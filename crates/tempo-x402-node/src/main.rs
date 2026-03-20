@@ -498,24 +498,34 @@ async fn main() -> std::io::Result<()> {
                     child_env_vars.insert("ERC8004_REPUTATION_ENABLED".into(), "true".into());
                 }
 
-                // Source-based clones get coding-specific env vars
-                if source_repo.is_some() {
-                    if let Some(ref repo) = source_repo {
-                        child_env_vars.insert("SOUL_FORK_REPO".into(), repo.clone());
-                        child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), repo.clone());
-                    }
-                    child_env_vars.insert("SOUL_DIRECT_PUSH".into(), "false".into());
-                    if let Some(ref gh_token) = github_token {
-                        child_env_vars.insert("GITHUB_TOKEN".into(), gh_token.clone());
-                    }
-                } else {
-                    if let Ok(fork) = std::env::var("SOUL_FORK_REPO") {
-                        child_env_vars.insert("SOUL_FORK_REPO".into(), fork);
-                    }
-                    if let Ok(upstream) = std::env::var("SOUL_UPSTREAM_REPO") {
-                        child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), upstream);
-                    }
+                // Git workflow for clones:
+                // SOUL_FORK_REPO = the fork clones push to (agent colony fork)
+                // SOUL_UPSTREAM_REPO = the canonical repo (for cross-fork PRs)
+                // Phase 1 clones deploy from main and use SOUL_DIRECT_PUSH=true
+                // to push directly to the fork's main branch. When they differentiate
+                // (Phase 2), they'll create their own branch automatically.
+                if let Some(ref gh_token) = github_token {
+                    child_env_vars.insert("GITHUB_TOKEN".into(), gh_token.clone());
                 }
+                // Fork repo: prefer explicit SOUL_FORK_REPO, else use source_repo
+                let fork_repo = std::env::var("SOUL_FORK_REPO")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| source_repo.clone());
+                if let Some(ref fork) = fork_repo {
+                    child_env_vars.insert("SOUL_FORK_REPO".into(), fork.clone());
+                }
+                // Upstream repo: prefer explicit, else canonical repo
+                let upstream_repo = std::env::var("SOUL_UPSTREAM_REPO")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+                if let Some(ref upstream) = upstream_repo {
+                    child_env_vars.insert("SOUL_UPSTREAM_REPO".into(), upstream.clone());
+                }
+                // Phase 1 clones push directly to fork's main (they're identical)
+                child_env_vars.insert("SOUL_DIRECT_PUSH".into(), "true".into());
+                // Differentiation lifecycle starts at "fork" phase
+                child_env_vars.insert("SOUL_LIFECYCLE_PHASE".into(), "fork".into());
 
                 // Forward specialization env vars if set (for specialist clones creating sub-specialists)
                 if let Ok(spec) = std::env::var("SOUL_SPECIALIZATION") {

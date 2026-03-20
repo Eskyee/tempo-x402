@@ -1050,6 +1050,23 @@ impl ToolExecutor {
         };
         let _ = db.insert_mutation(&mutation);
 
+        // Lifecycle: track own commits and trigger Fork → Branch transition
+        if result.success {
+            let phase = crate::lifecycle::current_phase(db);
+            if phase == crate::lifecycle::LifecyclePhase::Fork {
+                // First code commit: differentiate! Create own branch.
+                let instance_id = git.instance_id();
+                if let Some(new_branch) = crate::lifecycle::differentiate(db, instance_id) {
+                    tracing::info!(
+                        branch = %new_branch,
+                        "Lifecycle: Fork → Branch — clone is now differentiating"
+                    );
+                }
+            } else {
+                crate::lifecycle::record_own_commit(db);
+            }
+        }
+
         let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             stdout: result.message,

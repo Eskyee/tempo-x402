@@ -169,23 +169,16 @@ impl CloneOrchestrator {
         // 2. Get default environment
         let env_id = self.railway.get_default_environment().await?;
 
-        // Determine deployment mode: source-based (branch) or Docker
+        // Determine deployment mode: source-based or Docker.
+        // Phase 1 ("Fork"): deploy from main — clone is identical to parent.
+        // The clone's own branch (clone/{id}) is only created later when the
+        // soul starts making code changes (Phase 2: "Differentiate").
         let use_source = self.config.source_repo.is_some();
         let branch_name = if use_source {
-            Some(format!("clone/{}", &instance_id[..8]))
+            Some("main".to_string())
         } else {
             None
         };
-
-        // 3. Create branch on GitHub (source-based only)
-        if let (Some(ref repo), Some(ref branch), Some(ref token)) = (
-            &self.config.source_repo,
-            &branch_name,
-            &self.config.github_token,
-        ) {
-            create_github_branch(token, repo, branch).await?;
-            tracing::info!(repo = %repo, branch = %branch, "GitHub branch created");
-        }
 
         // 4. Set environment variables
         let mut env_map = serde_json::Map::new();

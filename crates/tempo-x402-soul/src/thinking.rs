@@ -1707,6 +1707,9 @@ impl ThinkingLoop {
                 None => String::new(),
             };
 
+        // Lifecycle: tell the agent what phase it's in and encourage differentiation
+        let lifecycle_section = crate::lifecycle::prompt_section(&self.db);
+
         let extra = [
             template_section,
             cortex_section,
@@ -1716,6 +1719,7 @@ impl ThinkingLoop {
             colony_section,
             imagine_section,
             transformer_section,
+            lifecycle_section,
         ]
         .into_iter()
         .filter(|s| !s.is_empty())

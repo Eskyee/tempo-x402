@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">tempo-x402</h1>
-  <p align="center"><strong>Self-replicating autonomous agents with colony selection, federated transformer, and clone lifecycle (Fork &rarr; Branch &rarr; Birth) &mdash; paid per request via HTTP 402 on Tempo blockchain</strong></p>
+  <p align="center"><strong>Self-replicating AI agents that pay each other with crypto. Rust. From-scratch transformer. They clone themselves, compete on fitness, share learned weights, and evolve their own source code. Live now.</strong></p>
 </p>
 
 <p align="center">
@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://docs.rs/tempo-x402">Docs</a> &middot;
   <a href="https://crates.io/crates/tempo-x402">Crates</a> &middot;
-  <a href="https://soul-bot-production.up.railway.app">Live Node</a> &middot;
-  <a href="https://soul-bot-production.up.railway.app/dashboard">Dashboard</a> &middot;
+  <a href="https://borg-0.up.railway.app">Live Node</a> &middot;
+  <a href="https://borg-0.up.railway.app/dashboard">Dashboard</a> &middot;
   <a href="https://github.com/compusophy/tempo-x402">Source</a>
 </p>
 

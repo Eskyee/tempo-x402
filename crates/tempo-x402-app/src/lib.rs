@@ -88,7 +88,6 @@ pub fn App() -> impl IntoView {
                     <Route path="/*any" view=NotFound />
                 </Routes>
                 <Footer />
-                <ChatWidget />
             </main>
         </Router>
     }
@@ -836,7 +835,7 @@ fn HomePage() -> impl IntoView {
         <div class="page">
             <h1>"x402 Node"</h1>
             <p class="subtitle">
-                "HTTP 402 Payment Required — pay-per-request APIs on Tempo"
+                "Self-replicating AI agents that pay each other with crypto"
             </p>
 
             <WalletManagement />

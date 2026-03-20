@@ -399,24 +399,34 @@ pub fn sample_problems(problems: &[ExercismProblem], n: usize) -> Vec<ExercismPr
 /// for proving collective intelligence (2 agents > 1 agent).
 pub async fn generate_solution(
     llm: &LlmClient,
+    db: &SoulDatabase,
     problem: &ExercismProblem,
     peer_failures: &[SharedFailure],
 ) -> Result<String, String> {
+    // Extract accumulated lessons from past benchmark runs
+    let benchmark_hints = load_benchmark_hints(db);
+
+    let base_system = format!(
+        "You are a Rust coding expert. Implement the solution for the given exercise. \
+         Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
+         The code must compile and pass all tests. Include all necessary use statements and type definitions. \
+         Do NOT include any test code or #[cfg(test)] modules — only the implementation.\n\n\
+         ## Rust Best Practices (from past experience)\n\
+         - Always check the test code for expected function signatures, return types, and trait implementations.\n\
+         - If tests use `&str`, return `&str` not `String` (or vice versa — match the tests).\n\
+         - If tests import from the crate root, make sure to `pub` export everything needed.\n\
+         - Use `impl Display for MyType` when tests call `to_string()` or use `format!`.\n\
+         - For iterator exercises, implement `Iterator` trait on a custom struct.\n\
+         - Check if the exercise needs `From`/`Into`/`TryFrom` trait implementations.\n\
+         - Read ALL test cases, not just the first one — edge cases matter.\n\
+         {}", benchmark_hints);
+
     let system = if peer_failures.is_empty() {
-        "You are a Rust coding expert. Implement the solution for the given exercise. \
-         Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
-         The code must compile and pass all tests. Include all necessary use statements and type definitions. \
-         Do NOT include any test code or #[cfg(test)] modules — only the implementation."
-            .to_string()
+        base_system
     } else {
-        "You are a Rust coding expert. Implement the solution for the given exercise. \
-         IMPORTANT: A previous attempt at this problem FAILED. Study the failed solution and \
-         its error output below carefully. Your solution MUST take a DIFFERENT approach to avoid \
-         the same mistake. \
-         Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
-         The code must compile and pass all tests. Include all necessary use statements and type definitions. \
-         Do NOT include any test code or #[cfg(test)] modules — only the implementation."
-            .to_string()
+        format!("{}\n\nIMPORTANT: Previous attempt(s) at this problem FAILED. \
+                 Study the failed solution(s) and error output below carefully. \
+                 Your solution MUST take a DIFFERENT approach to avoid the same mistake.", base_system)
     };
 
     let mut prompt = format!(
@@ -806,8 +816,33 @@ pub async fn run_benchmark_session(
         let task_id = format!("exercism/{}", problem.slug);
         let has_peer_context = peer_failure_task_ids.contains(task_id.as_str());
 
-        // Generate solution (with peer failure context if available)
-        let solution = match generate_solution(llm, problem, &peer_failures).await {
+        // Load own past failures for this specific problem — avoid repeating mistakes
+        let own_failures: Vec<SharedFailure> = db
+            .get_all_benchmark_runs()
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| !r.passed && r.task_id == task_id && !r.generated_solution.is_empty())
+            .take(2)
+            .map(|r| SharedFailure {
+                task_id: r.task_id.clone(),
+                entry_point: r.entry_point.clone(),
+                failed_solution: r.generated_solution.clone(),
+                error_output: r.error_output.clone(),
+                attempted_by: "self (previous attempt)".to_string(),
+            })
+            .collect();
+
+        // Combine own + peer failures for maximum context
+        let mut all_failures: Vec<SharedFailure> = own_failures;
+        all_failures.extend(
+            peer_failures
+                .iter()
+                .filter(|f| f.task_id == task_id)
+                .cloned(),
+        );
+
+        // Generate solution (with own + peer failure context + accumulated hints)
+        let solution = match generate_solution(llm, db, problem, &all_failures).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(
@@ -991,6 +1026,9 @@ pub async fn run_benchmark_session(
             .to_string(),
         );
     }
+
+    // Update benchmark hints from failure analysis — improves future sessions
+    update_benchmark_hints(db);
 
     Ok(weighted_score)
 }
@@ -1464,4 +1502,78 @@ pub fn collective_score(db: &SoulDatabase) -> (f64, u32, u32) {
     };
 
     (pass_at_1, solved, total_problems)
+}
+
+/// Extract accumulated lessons from past benchmark failures.
+/// Analyzes error patterns across all runs and generates hints for the LLM.
+/// Stored in soul_state as "benchmark_hints" and updated after each session.
+fn load_benchmark_hints(db: &SoulDatabase) -> String {
+    // Check if we have cached hints
+    if let Ok(Some(hints)) = db.get_state("benchmark_hints") {
+        if !hints.is_empty() {
+            return format!("\n## Lessons from Past Benchmark Failures\n{}\n", hints);
+        }
+    }
+    String::new()
+}
+
+/// Analyze recent benchmark failures and extract common error patterns.
+/// Called after each benchmark session to update the hint cache.
+pub fn update_benchmark_hints(db: &SoulDatabase) {
+    let runs = db.get_all_benchmark_runs().unwrap_or_default();
+    let failures: Vec<&BenchmarkRun> = runs.iter().filter(|r| !r.passed && !r.error_output.is_empty()).collect();
+
+    if failures.len() < 3 {
+        return; // Not enough data to extract patterns
+    }
+
+    let mut patterns: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+
+    for f in &failures {
+        let err = &f.error_output;
+        // Categorize common Rust errors
+        if err.contains("expected `&str`, found `String`") || err.contains("expected `String`, found `&str`") {
+            *patterns.entry("String/&str type mismatch — check test expectations for owned vs borrowed strings").or_default() += 1;
+        }
+        if err.contains("not found in this scope") || err.contains("cannot find") {
+            *patterns.entry("Missing imports or pub exports — ensure all types/functions used by tests are publicly accessible").or_default() += 1;
+        }
+        if err.contains("trait bound") && err.contains("not satisfied") {
+            *patterns.entry("Missing trait implementation — check what traits the tests expect (Display, From, Iterator, etc.)").or_default() += 1;
+        }
+        if err.contains("mismatched types") {
+            *patterns.entry("Type mismatch — carefully read the function signature the tests expect").or_default() += 1;
+        }
+        if err.contains("overflow") || err.contains("attempt to") {
+            *patterns.entry("Integer overflow/underflow — use checked arithmetic or handle edge cases").or_default() += 1;
+        }
+        if err.contains("borrow") || err.contains("lifetime") {
+            *patterns.entry("Borrow checker issue — prefer owned types (String, Vec) in return positions unless tests require references").or_default() += 1;
+        }
+        if err.contains("thread 'main' panicked") || err.contains("assertion") {
+            *patterns.entry("Logic error — the code compiled but produced wrong output. Trace through the test cases manually").or_default() += 1;
+        }
+    }
+
+    if patterns.is_empty() {
+        return;
+    }
+
+    // Sort by frequency and format as hints
+    let mut sorted: Vec<(&&str, &u32)> = patterns.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+
+    let hints: Vec<String> = sorted
+        .iter()
+        .take(5) // Top 5 patterns
+        .map(|(pattern, count)| format!("- ({} occurrences) {}", count, pattern))
+        .collect();
+
+    let hint_text = hints.join("\n");
+    let _ = db.set_state("benchmark_hints", &hint_text);
+    tracing::info!(
+        patterns = hints.len(),
+        failures = failures.len(),
+        "Updated benchmark hints from failure analysis"
+    );
 }

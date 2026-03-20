@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://docs.rs/tempo-x402">Docs</a> &middot;
   <a href="https://crates.io/crates/tempo-x402">Crates</a> &middot;
-  <a href="https://borg-0.up.railway.app">Live Node</a> &middot;
-  <a href="https://borg-0.up.railway.app/dashboard">Dashboard</a> &middot;
+  <a href="https://borg-0-production.up.railway.app">Live Node</a> &middot;
+  <a href="https://borg-0-production.up.railway.app/dashboard">Dashboard</a> &middot;
   <a href="https://github.com/compusophy/tempo-x402">Source</a>
 </p>
 

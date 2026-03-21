@@ -252,23 +252,35 @@ pub fn goal_creation_prompt(
     let mut task_section = String::from(
         "# Task\n\
          You have NO active goals. Create 1-2 goals.\n\n\
-         Look at the data above — your endpoints, payments, fitness scores, peers, errors — \
-         and decide what would be most valuable to work on. You are an autonomous agent; \
-         use your judgment.\n\n",
+         YOUR PRIMARY MISSION is to improve yourself through CODE. You are a self-modifying agent. \
+         You MUST create at least one goal that involves editing your own source code and committing \
+         the change. Read-only goals (just reading files, running cargo check) are NOT sufficient — \
+         you must WRITE code.\n\n",
     );
 
     task_section.push_str(&format!(
         "## Context\n\
-         - You are an x402 payment agent on the Tempo blockchain\n\
-         - call_peer makes PAID x402 API calls (EIP-712 → pathUSD payment → response)\n\
-         - You can read/edit your own Rust source code and commit improvements\n\
-         - clone_self creates new peer nodes on Railway\n\
-         - WRITABLE files: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs, coding.rs, mode.rs, world_model.rs, normalize.rs, housekeeping.rs, and crates/tempo-x402/src/*\n\
-         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, benchmark.rs, validation.rs, tool_decl.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
+         - You are a self-improving autonomous agent on the Tempo blockchain\n\
+         - Your ELO benchmark score measures your intelligence — IMPROVE IT\n\
+         - You MUST edit your own source code to improve yourself\n\
+         - Workflow: read_file → edit_file → cargo_check → commit\n\
+         - WRITABLE files: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs, \
+           coding.rs, mode.rs, world_model.rs, normalize.rs, housekeeping.rs, temporal.rs, \
+           cortex.rs, genesis.rs, hivemind.rs, synthesis.rs, free_energy.rs, colony.rs, \
+           autonomy.rs, evaluation.rs, observer.rs, persistent_memory.rs, neuroplastic.rs, \
+           and crates/tempo-x402/src/*\n\
+         - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, brain.rs, \
+           benchmark.rs, validation.rs, tool_decl.rs, identity/*, node/routes/*, gateway/*, Cargo.toml\n\
          - {} peers available{}\n\n\
+         ## What to work on (in priority order)\n\
+         1. EDIT CODE to improve your benchmark performance or cognitive systems\n\
+         2. Improve your prompts (prompts.rs) to make better plans\n\
+         3. Improve your planning (plan.rs, thinking.rs) to execute more effectively\n\
+         4. Create useful endpoints or coordinate with peers\n\n\
          ## Guidelines\n\
+         - At least ONE goal MUST include edit_file + cargo_check + commit steps\n\
          - Create 1-2 goals MAX\n\
-         - Be specific about what you'll do and how you'll know it worked\n\
+         - Be specific about what file you'll edit, what change you'll make, and why\n\
          - Don't retry approaches that recently failed (check the errors above)\n\
          - Prioritize pending nudges if any exist\n\n\
          Respond with a JSON array of goal operations:\n\

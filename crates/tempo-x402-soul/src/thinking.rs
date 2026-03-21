@@ -1945,15 +1945,13 @@ impl ThinkingLoop {
                 ));
             }
 
-            // Always include codebase research as the first or second goal
+            // First goal: make a code change to prove the pipeline works
             seed_goals.push((
-                "Research your own codebase: read the main thinking loop \
-                 (crates/tempo-x402-soul/src/thinking.rs), the prompt system \
-                 (crates/tempo-x402-soul/src/prompts.rs), and the tool executor \
-                 (crates/tempo-x402-soul/src/tools.rs). Understand how you think, \
-                 plan, and act. Record what you learn as beliefs — what are your \
-                 strengths, weaknesses, and opportunities for self-improvement?",
-                "At least 3 beliefs recorded about own architecture, capabilities, and limitations",
+                "Make your first code change: read crates/tempo-x402-soul/src/housekeeping.rs, \
+                 then use edit_file to add a useful comment or improve a log message. \
+                 Run cargo_check to verify it compiles, then commit the change. \
+                 This establishes your ability to self-modify.",
+                "A commit exists with a change to housekeeping.rs that passes cargo check",
                 if self.config.initial_goal.is_some() {
                     4
                 } else {

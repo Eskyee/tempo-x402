@@ -2760,21 +2760,33 @@ impl ToolExecutor {
                     }
                 }
 
-                // If we have a PARENT_URL and found no peers from siblings,
-                // treat the parent itself as a peer (the parent isn't in its
-                // own siblings list, so children can't discover it otherwise).
-                if enriched_peers.is_empty() {
+                // Always add parent as peer if PARENT_URL is set.
+                // The parent isn't in its own siblings list, so children
+                // must explicitly include it. Check even if we found siblings
+                // (they might all be filtered as self).
+                {
                     if let Ok(parent_env) = std::env::var("PARENT_URL") {
                         let parent_trimmed = parent_env.trim_end_matches('/');
+                        // Skip if parent is already in enriched_peers
+                        let parent_already_added = enriched_peers.iter().any(|p| {
+                            p.get("url").and_then(|v| v.as_str()).map(|u| u == parent_trimmed).unwrap_or(false)
+                        });
+                        if !parent_already_added {
                         let info_url = format!("{}/instance/info", parent_trimmed);
                         if let Ok(r) = client.get(&info_url).send().await {
                             if r.status().is_success() {
                                 if let Ok(info) = r.json::<serde_json::Value>().await {
-                                    let p_inst = info
-                                        .get("instance_id")
+                                    // instance_id and address are under "identity" in /instance/info
+                                    let identity = info.get("identity");
+                                    let p_inst = identity
+                                        .and_then(|i| i.get("instance_id"))
                                         .and_then(|v| v.as_str())
+                                        .or_else(|| info.get("instance_id").and_then(|v| v.as_str()))
                                         .unwrap_or("parent");
-                                    let p_addr = info.get("address").and_then(|v| v.as_str());
+                                    let p_addr = identity
+                                        .and_then(|i| i.get("address"))
+                                        .and_then(|v| v.as_str())
+                                        .or_else(|| info.get("address").and_then(|v| v.as_str()));
                                     let p_version = info.get("version").and_then(|v| v.as_str());
                                     let p_endpoints = info
                                         .get("endpoints")
@@ -2831,7 +2843,7 @@ impl ToolExecutor {
                                         tracing::info!(
                                             parent_id = %p_inst,
                                             endpoints = callable.len(),
-                                            "Added parent as peer (no siblings found)"
+                                            "Added parent as peer"
                                         );
 
                                         enriched_peers.push(serde_json::json!({
@@ -2845,6 +2857,7 @@ impl ToolExecutor {
                                 }
                             }
                         }
+                        } // if !parent_already_added
                     }
                 }
 

@@ -901,10 +901,45 @@ pub async fn run_benchmark_session(
             solution.clone()
         };
 
-        // Validate via cargo test
+        // Validate via cargo test — with retry on failure (self-play)
         let start = std::time::Instant::now();
-        let (success, error_output) =
+        let (mut success, mut error_output) =
             validate_solution(problem, &final_solution, workspace_root).await;
+
+        // Self-play retry: if first attempt fails, try once more with the error as context.
+        // This is how the swarm outperforms a single model call — iterative refinement.
+        if !success && !error_output.is_empty() {
+            tracing::info!(
+                slug = %problem.slug,
+                "Benchmark: first attempt failed, retrying with error context (self-play)"
+            );
+            let retry_failure = vec![SharedFailure {
+                task_id: task_id.clone(),
+                entry_point: problem.slug.clone(),
+                failed_solution: final_solution.clone(),
+                error_output: error_output.clone(),
+                attempted_by: "self (just failed)".to_string(),
+            }];
+            // Combine with existing failures for maximum context
+            let mut retry_context = all_failures.clone();
+            retry_context.extend(retry_failure);
+            if let Ok(retry_solution) = generate_solution(llm, db, problem, &retry_context).await {
+                let (retry_ok, retry_err) =
+                    validate_solution(problem, &retry_solution, workspace_root).await;
+                if retry_ok {
+                    tracing::info!(
+                        slug = %problem.slug,
+                        "Benchmark: PASS on retry (self-play worked!)"
+                    );
+                    success = true;
+                    error_output = String::new();
+                } else {
+                    // Use the retry error for recording
+                    error_output = retry_err;
+                }
+            }
+        }
+
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         if success {

@@ -264,13 +264,17 @@ pub fn goal_creation_prompt(
          - Your ELO benchmark score measures your intelligence — IMPROVE IT\n\
          - You MUST edit your own source code to improve yourself\n\
          - Workflow: read_file → edit_file → cargo_check → commit\n\
-         - WRITABLE files: ALL soul source files EXCEPT tools.rs/llm.rs/db.rs/guard.rs/config.rs/error.rs. \
-           This includes: benchmark.rs, brain.rs, thinking.rs, prompts.rs, plan.rs, validation.rs, \
+         - WORKSPACE LAYOUT: All source files are under crates/. Soul files are at crates/tempo-x402-soul/src/. \
+           Core lib is at crates/tempo-x402/src/. Node routes are at crates/tempo-x402-node/src/routes/.\n\
+         - ALWAYS use FULL PATHS like 'crates/tempo-x402-soul/src/prompts.rs', NEVER just 'prompts.rs'\n\
+         - WRITABLE soul files (under crates/tempo-x402-soul/src/): \
+           benchmark.rs, brain.rs, thinking.rs, prompts.rs, plan.rs, validation.rs, \
            capability.rs, feedback.rs, elo.rs, temporal.rs, cortex.rs, genesis.rs, hivemind.rs, \
-           synthesis.rs, free_energy.rs, colony.rs, autonomy.rs, evaluation.rs, and more. \
-           Also writable: crates/tempo-x402/src/*, node/routes/soul.rs\n\
+           synthesis.rs, free_energy.rs, colony.rs, autonomy.rs, evaluation.rs, coding.rs, \
+           chat.rs, memory.rs, neuroplastic.rs, persistent_memory.rs, world_model.rs, mode.rs, git.rs\n\
+         - ALSO writable: crates/tempo-x402/src/*, crates/tempo-x402-node/src/routes/soul.rs\n\
          - PROTECTED (cannot edit): tools.rs, llm.rs, db.rs, guard.rs, config.rs, error.rs, \
-           identity/*, node/main.rs, gateway/*, Cargo.toml (NOT Cargo.lock — it's auto-generated)\n\
+           crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*, Cargo.toml\n\
          - {} peers available{}\n\n\
          ## What to work on (in priority order)\n\
          1. EDIT CODE to improve your benchmark performance or cognitive systems\n\
@@ -506,13 +510,17 @@ pub fn planning_prompt(
          - End with a commit step\n\
          - Max 20 steps, prefer fewer — a simple endpoint needs ~5 steps (read, edit, cargo_check, commit)\n\
          - Prefer edit_code over generate_code for existing files\n\
-         - PROTECTED files that CANNOT be modified (writes WILL fail):\n\
-           tools.rs, llm.rs, db.rs, error.rs, guard.rs, config.rs, tool_registry.rs,\n\
-           brain.rs, computer_use.rs, capability.rs, feedback.rs, benchmark.rs, elo.rs, validation.rs,\n\
-           ALL files in identity/, node/routes/, gateway/, .github/, and ALL Cargo.toml (NOT Cargo.lock — it's auto-generated)\n\
-         - Files you CAN edit: thinking.rs, prompts.rs, plan.rs, chat.rs, memory.rs, git.rs,\n\
-           coding.rs, mode.rs, neuroplastic.rs, persistent_memory.rs, world_model.rs,\n\
-           and ANY files in crates/tempo-x402/src/ (core lib)\n\
+         - IMPORTANT: ALWAYS use FULL PATHS. Files are under crates/tempo-x402-soul/src/.\n\
+           Example: 'crates/tempo-x402-soul/src/prompts.rs', NEVER just 'prompts.rs'.\n\
+         - PROTECTED files (writes WILL fail): tools.rs, llm.rs, db.rs, error.rs, guard.rs, config.rs,\n\
+           ALL files in crates/tempo-x402-identity/, crates/tempo-x402-node/src/main.rs,\n\
+           crates/tempo-x402-gateway/src/, .github/, and ALL Cargo.toml\n\
+         - Files you CAN edit (under crates/tempo-x402-soul/src/):\n\
+           thinking.rs, prompts.rs, plan.rs, benchmark.rs, brain.rs, elo.rs, validation.rs,\n\
+           capability.rs, feedback.rs, coding.rs, chat.rs, memory.rs, git.rs, mode.rs,\n\
+           neuroplastic.rs, persistent_memory.rs, world_model.rs, temporal.rs, cortex.rs,\n\
+           genesis.rs, hivemind.rs, synthesis.rs, free_energy.rs, colony.rs, autonomy.rs, evaluation.rs,\n\
+           computer_use.rs, and ANY files in crates/tempo-x402/src/ (core lib)\n\
          - Do NOT try to modify Dockerfile, railway.toml, or deployment configs\n\
          - Use only dependencies already available in the workspace\n\
          - For inter-agent calls, ALWAYS use call_peer with just the slug. NEVER construct URLs manually.\n\

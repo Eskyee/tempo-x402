@@ -582,6 +582,21 @@ async fn main() -> std::io::Result<()> {
                     let db = soul.database().clone();
                     // Reset ephemeral counters on new deploy (keeps brain/lessons/benchmarks)
                     let build_sha = env!("GIT_SHA");
+                    // Check for cognitive architecture changes (brain size, etc.)
+                    // This wipes ALL learned state — brain weights, cortex, genesis, etc.
+                    // Preserves benchmark solutions and ELO history.
+                    const COGNITIVE_VERSION: &str = "v2-brain89k-input64-hidden256";
+                    if db.reset_cognitive_architecture(COGNITIVE_VERSION) {
+                        tracing::warn!("Cognitive architecture reset to {COGNITIVE_VERSION}");
+                        x402_soul::emit_event(
+                            &db,
+                            "warn",
+                            "system.cognitive_reset",
+                            &format!("Cognitive architecture reset: {COGNITIVE_VERSION}"),
+                            Some(serde_json::json!({"version": COGNITIVE_VERSION})),
+                            x402_soul::EventRefs::default(),
+                        );
+                    }
                     if db.reset_deploy_counters(build_sha) {
                         tracing::info!(build = %build_sha, "Deploy counters reset for new build");
                         x402_soul::emit_event(

@@ -1606,6 +1606,77 @@ impl SoulDatabase {
         true
     }
 
+    /// Full cognitive reset — wipe ALL learned state when the architecture changes.
+    /// This is triggered when brain architecture version changes (e.g., 23K→89K params).
+    /// Preserves: benchmark solutions (hard-won), benchmark history (ELO tracking).
+    /// Wipes: brain weights, cortex, genesis, hivemind, synthesis, plan outcomes,
+    /// capability events, durable rules, failure chains, thoughts, plans, goals.
+    pub fn reset_cognitive_architecture(&self, version: &str) -> bool {
+        let last_version = self
+            .get_state("cognitive_architecture_version")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+        if last_version == version {
+            return false; // Same architecture, no reset needed
+        }
+
+        tracing::warn!(
+            old_version = %last_version,
+            new_version = %version,
+            "Cognitive architecture changed — FULL RESET of learned state"
+        );
+
+        if let Ok(conn) = self.conn.lock() {
+            // Wipe all learned behavioral data (trained on old architecture)
+            let _ = conn.execute("DELETE FROM thoughts", []);
+            let _ = conn.execute("DELETE FROM plans", []);
+            let _ = conn.execute("DELETE FROM plan_outcomes", []);
+            let _ = conn.execute("DELETE FROM capability_events", []);
+            let _ = conn.execute("DELETE FROM nudges", []);
+            let _ = conn.execute("UPDATE goals SET status = 'abandoned' WHERE status = 'active'", []);
+
+            // Wipe cognitive subsystem state (all trained on stale data)
+            let stale_keys = [
+                "brain_weights",
+                "cortex_state",
+                "genesis_pool",
+                "hivemind_state",
+                "synthesis_state",
+                "durable_rules",
+                "failure_chains",
+                "peer_failures",
+                "benchmark_hints",
+                "benchmark_force_next",
+                "recent_errors",
+                "total_think_cycles",
+                "cycles_since_last_commit",
+                "stagnation_resets",
+                "last_benchmark_at",
+                "last_benchmark_cycle",
+                "active_plan_id",
+                "active_genesis_template_id",
+            ];
+            for key in &stale_keys {
+                let _ = conn.execute(
+                    "DELETE FROM soul_state WHERE key = ?1",
+                    rusqlite::params![key],
+                );
+            }
+        }
+
+        // Record the new version
+        let _ = self.set_state("cognitive_architecture_version", version);
+        let _ = self.set_state(
+            "cognitive_reset_at",
+            &chrono::Utc::now().timestamp().to_string(),
+        );
+
+        tracing::warn!("Cognitive reset complete — all subsystems will reinitialize from scratch");
+        true
+    }
+
     // ── Nudge operations ──
 
     /// Insert a nudge. Returns the generated ID.

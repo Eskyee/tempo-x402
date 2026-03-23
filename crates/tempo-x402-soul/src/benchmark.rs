@@ -374,22 +374,63 @@ pub async fn fetch_problems() -> Result<Vec<ExercismProblem>, String> {
 
 /// Pick a random subset of N problems for a benchmark run.
 pub fn sample_problems(problems: &[ExercismProblem], n: usize) -> Vec<ExercismProblem> {
+    sample_problems_smart(problems, n, &std::collections::HashSet::new())
+}
+
+/// Smart sampling: prioritize unsolved problems, mix in some solved ones for regression testing.
+/// `solved_slugs` is the set of problems already solved by the collective.
+pub fn sample_problems_smart(
+    problems: &[ExercismProblem],
+    n: usize,
+    solved_slugs: &std::collections::HashSet<String>,
+) -> Vec<ExercismProblem> {
     use std::collections::HashSet;
 
     if problems.len() <= n {
         return problems.to_vec();
     }
 
-    // Deterministic-ish shuffle using timestamp as seed
+    // Split into unsolved and solved
+    let unsolved: Vec<&ExercismProblem> = problems
+        .iter()
+        .filter(|p| !solved_slugs.contains(&p.slug))
+        .collect();
+    let solved: Vec<&ExercismProblem> = problems
+        .iter()
+        .filter(|p| solved_slugs.contains(&p.slug))
+        .collect();
+
+    // 80% unsolved (push the frontier), 20% solved (regression testing)
+    let unsolved_target = (n * 4 / 5).min(unsolved.len());
+    let solved_target = n.saturating_sub(unsolved_target).min(solved.len());
+    let remaining = n.saturating_sub(unsolved_target + solved_target);
+
     let seed = chrono::Utc::now().timestamp() as usize;
+    let mut selected = Vec::new();
+
+    // Sample from unsolved
     let mut indices: HashSet<usize> = HashSet::new();
     let mut i = seed;
-    while indices.len() < n {
-        i = (i.wrapping_mul(6364136223846793005).wrapping_add(1)) % problems.len();
+    while indices.len() < unsolved_target && !unsolved.is_empty() {
+        i = (i.wrapping_mul(6364136223846793005).wrapping_add(1)) % unsolved.len();
         indices.insert(i);
     }
+    for idx in &indices {
+        selected.push(unsolved[*idx].clone());
+    }
 
-    indices.into_iter().map(|i| problems[i].clone()).collect()
+    // Sample from solved (regression)
+    indices.clear();
+    i = seed.wrapping_add(12345);
+    while indices.len() < (solved_target + remaining) && !solved.is_empty() {
+        i = (i.wrapping_mul(6364136223846793005).wrapping_add(1)) % solved.len();
+        indices.insert(i);
+    }
+    for idx in &indices {
+        selected.push(solved[*idx].clone());
+    }
+
+    selected
 }
 
 /// Generate a solution for an Exercism Rust problem using the LLM.
@@ -407,18 +448,27 @@ pub async fn generate_solution(
     let benchmark_hints = load_benchmark_hints(db);
 
     let base_system = format!(
-        "You are a Rust coding expert. Implement the solution for the given exercise. \
+        "You are a Rust coding expert solving Exercism exercises. \
          Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
-         The code must compile and pass all tests. Include all necessary use statements and type definitions. \
-         Do NOT include any test code or #[cfg(test)] modules — only the implementation.\n\n\
-         ## Rust Best Practices (from past experience)\n\
-         - Always check the test code for expected function signatures, return types, and trait implementations.\n\
-         - If tests use `&str`, return `&str` not `String` (or vice versa — match the tests).\n\
-         - If tests import from the crate root, make sure to `pub` export everything needed.\n\
-         - Use `impl Display for MyType` when tests call `to_string()` or use `format!`.\n\
-         - For iterator exercises, implement `Iterator` trait on a custom struct.\n\
-         - Check if the exercise needs `From`/`Into`/`TryFrom` trait implementations.\n\
-         - Read ALL test cases, not just the first one — edge cases matter.\n\
+         The code must compile and pass ALL tests.\n\n\
+         ## CRITICAL Rules\n\
+         1. Read EVERY test case carefully — the tests ARE the spec. Match function signatures, return types, trait bounds EXACTLY.\n\
+         2. If tests use `assert_eq!` or `assert_ne!`, your types MUST derive or implement `Debug` and `PartialEq`.\n\
+         3. If a type parameter `T` is used, check what trait bounds the tests require (Clone, Debug, PartialEq, Ord, etc.).\n\
+         4. Export everything the tests import with `pub`. Check `use` statements in tests.\n\
+         5. Never write prose or explanations — ONLY Rust code.\n\
+         6. Handle ALL edge cases: empty inputs, zero, negative numbers, unicode, overflow.\n\n\
+         ## Common Mistakes to AVOID\n\
+         - Missing `#[derive(Debug)]` — tests use `assert_eq!` which requires Debug\n\
+         - Missing `Clone` bound on generic types — if you call `.clone()` on `T`, add `T: Clone`\n\
+         - Wrong return type: `&str` vs `String`, `Option<T>` vs `Result<T,E>` — match the test expectations\n\
+         - Forgetting to handle the empty/zero case\n\
+         - Writing English text instead of Rust code\n\
+         - Not making structs/enums `pub` when tests import them\n\
+         - Integer overflow: use `i64`/`u64` or checked arithmetic for large numbers\n\
+         - Off-by-one errors in ranges and slicing\n\
+         - For exercises with `Display` trait: check if tests call `.to_string()` or use `format!`\n\
+         - For exercises with custom errors: check if tests pattern-match on error variants\n\
          {}", benchmark_hints);
 
     let system = if peer_failures.is_empty() {
@@ -792,7 +842,21 @@ pub async fn run_benchmark_session(
         }
     };
 
-    let sample = sample_problems(&problems, sample_size);
+    // Build set of already-solved problems (own + collective) to prioritize unsolved
+    let solved_slugs: std::collections::HashSet<String> = db
+        .get_all_benchmark_runs()
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.passed)
+        .map(|r| r.entry_point.clone())
+        .collect();
+    let sample = sample_problems_smart(&problems, sample_size, &solved_slugs);
+    tracing::info!(
+        total_problems = problems.len(),
+        solved = solved_slugs.len(),
+        sampled = sample.len(),
+        "Benchmark: smart sampling (80% unsolved, 20% regression)"
+    );
     let mut total_weight = 0.0f64;
     let mut earned_weight = 0.0f64;
     let mut passed = 0u32;
@@ -1309,10 +1373,10 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
     total_cycles / interval > last_benchmark_cycle / interval
 }
 
-/// Default: run benchmark every 100 cycles (Rust benchmarks are expensive).
-pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 100;
-/// Default: sample 10 problems per session (Rust compilation is much slower than Python exec).
-pub const DEFAULT_SAMPLE_SIZE: usize = 10;
+/// Run benchmark every 30 cycles (was 100) — more data, faster learning, more self-play training.
+pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 30;
+/// Sample 15 problems per session (was 10) — broader coverage per run.
+pub const DEFAULT_SAMPLE_SIZE: usize = 15;
 
 /// Format benchmark score for prompt injection.
 pub fn benchmark_summary_for_prompt(db: &SoulDatabase) -> String {

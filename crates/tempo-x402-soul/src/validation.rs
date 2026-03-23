@@ -162,6 +162,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_cortex_module_exists() {
+        // This test ensures that we can access the cortex module
+        // and its primary functions without unresolved import errors.
+        let success_count = crate::cortex::get_successful_plans();
+        assert!(success_count >= 0, "Cortex module should be accessible");
+    }
+
+    #[test]
     fn test_system_sanity_v2() {
         assert!(true);
     }

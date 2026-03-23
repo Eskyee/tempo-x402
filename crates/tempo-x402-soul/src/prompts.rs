@@ -484,6 +484,7 @@ pub fn planning_prompt(
          ## Inter-Agent Coordination (CRITICAL — this is x402!)\n\
          Use `call_peer` for ALL inter-agent calls. It discovers peers, resolves the URL, and signs an EIP-712 payment.\n\
          EVERY call_peer triggers the full x402 payment flow: GET → 402 → sign → pay pathUSD → get response.\n\
+         If you encounter 429 Too Many Requests errors, implement an exponential backoff retry strategy. Detect the error, wait, and retry with increasing intervals before giving up.\n\
          Standard slugs: 'info', 'soul', 'chat', 'clone'. Peers also have custom script-* endpoints — check the Peer Endpoints section above!\n\
          YOU HAVE A WALLET WITH pathUSD — SPEND IT BY CALLING PEERS. This is the entire point of x402.\n\
          The x402 economy works when agents PAY each other for services. No free rides.\n\n\

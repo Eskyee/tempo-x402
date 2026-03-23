@@ -387,6 +387,16 @@ pub fn planning_prompt(
         for err in recent_errors.iter().take(3) {
             extra_context.push_str(&format!("- {err}\n"));
         }
+        extra_context.push_str(
+            "\n[CRITICAL]: If you encounter 429 Too Many Requests errors, you must use the following \
+             structured retry block in your plans:\n\
+             ```json\n\
+             { \"type\": \"wait\", \"seconds\": 10 },\n\
+             { \"type\": \"retry_previous_step\" }\n\
+             ```\n\
+             Do NOT fail immediately. When designing your plan, if a step involves external API calls, \
+             always plan for potential rate-limiting."
+        );
     }
 
     // Structured health from events system

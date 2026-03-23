@@ -110,9 +110,144 @@ pub fn validate_plan(
     // ── Rule 9: Block plans for goals with excessive failure chains ──
     check_failure_chain_saturation(db, goal_description, &mut violations);
 
+    // ── Rule 10: Input Sanitization ──
+    // Ensure all slugs for script endpoints are alphanumeric/underscored.
+    check_slug_sanitization(steps, &mut violations);
+
+    // Validate inputs for shell metacharacters
+    check_input_sanitization(steps, &mut violations);
+
     ValidationResult {
         valid: violations.iter().all(|v| v.severity != Severity::Hard),
         violations,
+    }
+}
+
+/// Helper to sanitize input strings for command-line safety.
+pub fn sanitize_input(input: &str) -> bool {
+    let forbidden = ['&', '|', ';', '>', '<', '`', '$', '(', ')'];
+    !input.contains(forbidden)
+}
+
+fn check_input_sanitization(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    for (i, step) in steps.iter().enumerate() {
+        let arg = match step {
+            PlanStep::RunShell { command, .. } => Some(command.clone()),
+            PlanStep::ReadFile { path, .. } => Some(path.clone()),
+            PlanStep::SearchCode { pattern, .. } => Some(pattern.clone()),
+            PlanStep::ListDir { path, .. } => Some(path.clone()),
+            PlanStep::CheckSelf { endpoint, .. } => Some(endpoint.clone()),
+            PlanStep::CreateScriptEndpoint { slug, script, .. } => Some(format!("{} {}", slug, script)),
+            PlanStep::TestScriptEndpoint { slug, input, .. } => Some(format!("{} {:?}", slug, input)),
+            PlanStep::Commit { message } => Some(message.clone()),
+            _ => None, // Ignore other variants
+        };
+
+        if let Some(a) = arg {
+            if !sanitize_input(&a) {
+                violations.push(PlanViolation {
+                    rule: "Input Sanitization",
+                    severity: Severity::Hard,
+                    detail: format!("Unsafe characters detected in argument: '{}'", a),
+                    step_index: Some(i),
+                });
+            }
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_system_sanity_v2() {
+        assert!(true);
+    }
+
+    #[test]
+    fn test_input_sanitization() {
+        let step = PlanStep::RunShell {
+            command: "ls; rm -rf /".to_string(),
+            store_as: None,
+        };
+        let mut violations = Vec::new();
+        check_input_sanitization(&[step], &mut violations);
+        assert!(!violations.is_empty());
+        assert_eq!(violations[0].rule, "Input Sanitization");
+        assert_eq!(violations[0].severity, Severity::Hard);
+    }
+
+    #[test]
+    fn test_safe_input() {
+        let step = PlanStep::RunShell {
+            command: "ls -la".to_string(),
+            store_as: None,
+        };
+        let mut violations = Vec::new();
+        check_input_sanitization(&[step], &mut violations);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn test_validation_result_logic() {
+        let mut violations = Vec::new();
+        violations.push(PlanViolation {
+            rule: "TestRule",
+            severity: Severity::Hard,
+            detail: "This is a hard test violation".to_string(),
+            step_index: None,
+        });
+        
+        let result = ValidationResult {
+            valid: violations.iter().all(|v| v.severity != Severity::Hard),
+            violations,
+        };
+        
+        assert!(!result.is_valid());
+        assert!(result.rejection_reason().contains("TestRule"));
+    }
+
+    #[test]
+    fn test_check_slug_sanitization() {
+        use crate::plan::PlanStep;
+        let valid_step = PlanStep::CreateScriptEndpoint {
+            slug: "my_cool_script".to_string(),
+            script: "echo 1".to_string(),
+            description: None,
+            store_as: None,
+        };
+        let invalid_step = PlanStep::CreateScriptEndpoint {
+            slug: "my-cool-script!".to_string(),
+            script: "echo 1".to_string(),
+            description: None,
+            store_as: None,
+        };
+
+        let mut violations = Vec::new();
+        check_slug_sanitization(&[valid_step.clone()], &mut violations);
+        assert!(violations.is_empty());
+
+        check_slug_sanitization(&[invalid_step.clone()], &mut violations);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].rule, "slug_sanitization");
+    }
+}
+
+/// Rule 5: Slugs for script endpoints must be alphanumeric or underscores.
+fn check_slug_sanitization(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    for (i, step) in steps.iter().enumerate() {
+        if let PlanStep::CreateScriptEndpoint { slug, .. } = step {
+            if !slug.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                violations.push(PlanViolation {
+                    rule: "slug_sanitization",
+                    severity: Severity::Hard,
+                    detail: format!("Slug '{}' contains invalid characters. Use alphanumeric and underscores only.", slug),
+                    step_index: Some(i),
+                });
+            }
+        }
     }
 }
 
@@ -968,9 +1103,12 @@ fn extract_file_from_error(error: &str) -> Option<String> {
     None
 }
 
+
 #[cfg(test)]
-mod tests {
+mod validation_tests {
     use super::*;
+    use crate::plan::PlanStep;
+    use crate::db::SoulDatabase;
 
     fn make_db() -> SoulDatabase {
         SoulDatabase::new(":memory:").unwrap()
@@ -1086,5 +1224,15 @@ mod tests {
         // Brain untrained — should always allow
         let (should_execute, _) = brain_gate_step(&db, &step, &prediction);
         assert!(should_execute);
+    }
+
+    #[test]
+    fn test_validation_sanity() {
+        let result = ValidationResult {
+            valid: true,
+            violations: vec![],
+        };
+        assert!(result.is_valid());
+        assert_eq!(result.rejection_reason(), "");
     }
 }

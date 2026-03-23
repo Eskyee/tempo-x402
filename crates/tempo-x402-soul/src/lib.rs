@@ -61,6 +61,7 @@ pub mod colony;
 pub mod computer_use;
 pub mod config;
 pub mod cortex;
+pub use cortex::{log_cortex_prediction, increment_successful_plans, get_successful_plans};
 pub mod db;
 pub mod elo;
 pub mod error;

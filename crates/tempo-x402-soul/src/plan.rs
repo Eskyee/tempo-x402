@@ -16,6 +16,23 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Sanitize input strings for shell execution to mitigate injection.
+/// This is a basic blacklist, consider more robust escaping if necessary.
+pub fn sanitize_shell_input(s: &str) -> String {
+    s.replace(';', "")
+        .replace('|', "")
+        .replace('&', "")
+        .replace('$', "")
+        .replace('`', "")
+        .replace('>', "")
+        .replace('<', "")
+        .replace('(', "")
+        .replace(')', "")
+        .replace('"', "")
+        .replace('\'', "")
+        .replace('\\', "")
+}
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

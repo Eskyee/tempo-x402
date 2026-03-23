@@ -319,7 +319,7 @@ impl ThinkingLoop {
                     .await
                     {
                         Ok(pass_at_1) => {
-                            crate::elo::update_rating(&self.db, pass_at_1);
+                            crate::elo::update_rating(&self.db, pass_at_1, 1.0);
                             tracing::info!(
                                 pass_at_1 = format!("{:.1}%", pass_at_1),
                                 elo = crate::elo::rating_display(&self.db),

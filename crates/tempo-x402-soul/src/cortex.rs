@@ -51,15 +51,15 @@ use crate::plan::PlanStep;
 
 // ── Logging ──────────────────────────────────────────────────────────
 
-/// Logs a cortex prediction event for analysis.
+/// Logs a structured cortex prediction event.
 pub fn log_cortex_prediction(context: &str, action: &str, predicted_outcome: &str, confidence: f32) {
     info!(
         target: "cortex_prediction",
-        context = context,
-        action = action,
-        predicted_outcome = predicted_outcome,
+        context = %context,
+        action = %action,
+        predicted_outcome = %predicted_outcome,
         confidence = confidence,
-        "Cortex prediction made"
+        "Cortex prediction generated"
     );
 }
 

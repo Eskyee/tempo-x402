@@ -717,7 +717,8 @@ Rules:
 - All commits run through cargo check + cargo test before landing
 - Use edit_file for surgical changes (old_string must be unique)
 - Use write_file for new files or complete rewrites
-- Keep changes minimal and focused — one logical change per commit";
+- Keep changes minimal and focused — one logical change per commit
+- If you encounter 429 Too Many Requests errors, implement an exponential backoff retry strategy. Detect the error, wait, and retry with increasing intervals before giving up.";
 
 pub(crate) const REVIEW_INSTRUCTIONS: &str = "\
 You are in REVIEW mode — code review and analysis.

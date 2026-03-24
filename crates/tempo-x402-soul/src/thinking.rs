@@ -27,14 +27,20 @@ use crate::tools::{self, ToolExecutor};
 use crate::world_model::{Belief, BeliefDomain, Confidence, Goal, ModelUpdate};
 use crate::{capability, feedback, validation};
 
-/// State of the thinking loop, including resilience tracking.
+/// State of the thinking loop, including resilience and performance tracking.
 pub struct ThinkState {
     pub last_failures: Vec<chrono::DateTime<chrono::Utc>>,
+    pub total_cycles: u64,
+    pub last_step_type: Option<StepType>,
 }
 
 impl ThinkState {
     pub fn new() -> Self {
-        Self { last_failures: Vec::new() }
+        Self {
+            last_failures: Vec::new(),
+            total_cycles: 0,
+            last_step_type: None,
+        }
     }
 
     pub fn record_failure(&mut self) {
@@ -71,7 +77,9 @@ impl AdaptivePacer {
     }
 
     /// Determine next sleep interval based on what happened.
-    fn next_interval(&mut self, snapshot: &NodeSnapshot, step_type: StepType) -> u64 {
+    fn next_interval(&mut self, state: &mut ThinkState, snapshot: &NodeSnapshot, step_type: StepType) -> u64 {
+        state.total_cycles += 1;
+        state.last_step_type = Some(step_type);
         self.prev_snapshot = Some(snapshot.clone());
         let base = match step_type {
             StepType::Mechanical => 30,     // fast, keep making progress
@@ -80,12 +88,13 @@ impl AdaptivePacer {
             StepType::NoGoals => 600,       // idle
             StepType::Observe => 60,        // quick observation only
         };
-        (base as f64 * self.multiplier) as u64
+        (base as f64 * self.multiplier * state.backoff_multiplier()) as u64
     }
 }
 
 /// What kind of step was executed (for pacing).
-enum StepType {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StepType {
     Mechanical,
     Llm,
     PlanCompleted,
@@ -567,7 +576,10 @@ impl ThinkingLoop {
                 }
             }
 
-            let next_secs = pacer.next_interval(&snapshot, cycle_result.step_type);
+            let next_secs = {
+                let mut state = self.state.lock().unwrap();
+                pacer.next_interval(&mut state, &snapshot, cycle_result.step_type)
+            };
 
             // Persist cycle health metrics
             let _ = self.db.set_state(

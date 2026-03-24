@@ -133,11 +133,18 @@ impl TryFrom<PersistedIdentity> for InstanceIdentity {
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|e| IdentityError::ParseError(format!("invalid created_at: {e}")))?;
 
+        // Allow PARENT_URL env var to override persisted value.
+        // This lets operators fix parent_url without recreating the identity file.
+        let parent_url = env::var("PARENT_URL")
+            .ok()
+            .filter(|s| !s.is_empty() && s.starts_with("https://"))
+            .or(p.parent_url);
+
         Ok(InstanceIdentity {
             private_key: p.private_key,
             address,
             instance_id: p.instance_id,
-            parent_url: p.parent_url,
+            parent_url,
             parent_address,
             created_at,
             agent_token_id: p.agent_token_id,

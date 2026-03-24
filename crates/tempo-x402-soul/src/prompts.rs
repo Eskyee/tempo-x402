@@ -394,7 +394,13 @@ pub fn planning_prompt(
              1. Add a 'wait' step for a duration based on the 'Retry-After' header (if available) or a \
              default exponential backoff (e.g., 30s, 60s, 120s).\n\
              2. Repeat the failed action immediately after the wait.\n\
-             Do NOT give up or abandon the goal immediately on 429 errors.\n"
+             Do NOT give up or abandon the goal immediately on 429 errors.\n\n\
+             [DEPENDENCY MANAGEMENT]: When planning, do NOT hallucinate external libraries, \
+             imports, or dependencies not listed in the 'Available Dependencies' section of your \
+             system instructions. If you need functionality, use the existing codebase tools or \
+             implement it yourself within the current repo's constraints. Do not suggest adding \
+             new dependencies to Cargo.toml without explicit prior approval or specialized \
+             tooling."
         );
     }
 

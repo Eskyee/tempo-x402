@@ -2396,6 +2396,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             web::post().to(review_benchmark_solution),
         )
         .route("/soul/code-review", web::post().to(review_code_change))
+        .route("/soul/cleanup", web::post().to(disk_cleanup))
         .route("/soul/open-prs", web::get().to(open_prs))
         .route("/soul/diagnostics", web::get().to(soul_diagnostics))
         .route("/soul/dev-report", web::get().to(soul_dev_report))
@@ -2504,7 +2505,9 @@ async fn admin_workspace_reset(req: actix_web::HttpRequest) -> HttpResponse {
 
     let ws = std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".to_string());
     let script = format!(
-        "cd {ws} && \
+        "rm -rf {ws}/target /tmp/x402_cargo_target {ws}/.cargo 2>/dev/null; \
+         echo \"Cleaned: $(du -sh {ws} 2>/dev/null | cut -f1) workspace, $(du -sh /data 2>/dev/null | cut -f1) total\"; \
+         cd {ws} && \
          git stash 2>/dev/null; \
          git fetch origin main 2>&1 && \
          git reset --hard origin/main 2>&1 && \
@@ -2526,6 +2529,35 @@ async fn admin_workspace_reset(req: actix_web::HttpRequest) -> HttpResponse {
                 "success": output.status.success(),
                 "stdout": stdout.to_string(),
                 "stderr": stderr.to_string(),
+            }))
+        }
+        Err(e) => {
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("{e}")}))
+        }
+    }
+}
+
+/// POST /soul/cleanup — clean build artifacts from /data volume.
+/// No auth required — only deletes known safe targets (cargo target dirs).
+async fn disk_cleanup(_state: web::Data<NodeState>) -> HttpResponse {
+    let ws = std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".to_string());
+    let script = format!(
+        "rm -rf {ws}/target /tmp/x402_cargo_target {ws}/.cargo 2>/dev/null; \
+         rm -rf /data/workspace/target 2>/dev/null; \
+         echo \"$(du -sh /data 2>/dev/null | cut -f1)\""
+    );
+
+    match tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let size = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            HttpResponse::Ok().json(serde_json::json!({
+                "cleaned": true,
+                "data_volume_size": size,
             }))
         }
         Err(e) => {

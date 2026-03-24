@@ -4,7 +4,7 @@
 //! fixing common path errors, and removing broken steps.
 
 use crate::error::SoulError;
-use crate::plan::{sanitize_shell_input, PlanStep};
+use crate::plan::PlanStep;
 
 /// Fix common file path mistakes that LLMs produce.
 pub fn fix_common_path_errors(path: &str) -> String {
@@ -70,8 +70,6 @@ pub fn sanitize_plan_steps(steps: Vec<PlanStep>) -> Vec<PlanStep> {
                     } else {
                         command.as_str()
                     };
-
-                let command = sanitize_shell_input(command);
 
                 // Intercept tool names used as shell commands — LLM sometimes generates
                 // {"type":"run_shell","command":"edit_code file.rs ..."} instead of using EditCode

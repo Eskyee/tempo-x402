@@ -43,25 +43,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::info;
-
 use crate::db::SoulDatabase;
 use crate::plan::PlanStep;
-
-// ── Logging ──────────────────────────────────────────────────────────
-
-/// Logs a structured cortex prediction event.
-pub fn log_cortex_prediction(context: &str, action: &str, predicted_outcome: &str, confidence: f32) {
-    info!(
-        target: "cortex_prediction",
-        context = %context,
-        action = %action,
-        predicted_outcome = %predicted_outcome,
-        confidence = confidence,
-        "Cortex prediction generated"
-    );
-}
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -79,19 +62,6 @@ const EDGE_PRUNE_THRESHOLD: f32 = 0.05;
 const EMOTION_DECAY: f32 = 0.9;
 /// Counterfactual generation probability during dreams.
 const COUNTERFACTUAL_RATE: f32 = 0.2;
-
-/// Global tracker for successful plan completions.
-static SUCCESSFUL_PLANS: AtomicU64 = AtomicU64::new(0);
-
-/// Increment successful plan count.
-pub fn increment_successful_plans() {
-    SUCCESSFUL_PLANS.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Get successful plan count.
-pub fn get_successful_plans() -> u64 {
-    SUCCESSFUL_PLANS.load(Ordering::SeqCst)
-}
 
 // ── Core Types ───────────────────────────────────────────────────────
 

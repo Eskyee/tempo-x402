@@ -9,9 +9,6 @@ use crate::mode::AgentMode;
 use crate::observer::NodeSnapshot;
 use crate::world_model::{Belief, Goal};
 
-// Used for peer endpoint catalog deserialization in planning_prompt
-use serde_json;
-
 /// Build the system prompt for a given agent mode.
 pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
     let base = &config.personality;

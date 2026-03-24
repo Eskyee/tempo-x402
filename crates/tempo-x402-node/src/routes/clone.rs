@@ -787,6 +787,14 @@ fn spawn_post_clone_probe(
                                 address = ?address,
                                 "Post-clone probe: child promoted to running"
                             );
+                            // Notify all existing siblings about the new peer.
+                            // One-time, fire-and-forget. No polling.
+                            notify_siblings_of_new_peer(
+                                &db,
+                                &instance_id,
+                                &child_url,
+                                &http,
+                            ).await;
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -823,6 +831,70 @@ fn spawn_post_clone_probe(
             "Post-clone probe: gave up after 10 minutes — child never responded"
         );
     });
+}
+
+/// Notify all existing siblings about a new peer that just joined the colony.
+/// Called once when a new clone boots successfully. Fire-and-forget.
+async fn notify_siblings_of_new_peer(
+    db: &x402_gateway::Database,
+    new_instance_id: &str,
+    new_url: &str,
+    http: &reqwest::Client,
+) {
+    let siblings = match db::list_children_active(db) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list siblings for new-peer notification");
+            return;
+        }
+    };
+
+    let new_peer_info = serde_json::json!({
+        "instance_id": new_instance_id,
+        "url": new_url.trim_end_matches('/'),
+        "event": "new_peer",
+    });
+
+    let mut notified = 0u32;
+    for sibling in &siblings {
+        // Skip the new clone itself
+        if sibling.instance_id == new_instance_id {
+            continue;
+        }
+        // Skip siblings without URLs
+        let sib_url = match &sibling.url {
+            Some(u) if !u.is_empty() => u,
+            _ => continue,
+        };
+
+        let nudge_url = format!("{}/soul/nudge", sib_url.trim_end_matches('/'));
+        let nudge_body = serde_json::json!({
+            "content": format!(
+                "New peer joined the colony: {} at {}. Run discover_peers to sync.",
+                new_instance_id, new_url
+            ),
+            "source": "colony",
+        });
+
+        match http.post(&nudge_url).json(&nudge_body).send().await {
+            Ok(r) if r.status().is_success() => {
+                notified += 1;
+            }
+            _ => {
+                tracing::debug!(
+                    sibling = %sibling.instance_id,
+                    "Failed to notify sibling of new peer (non-fatal)"
+                );
+            }
+        }
+    }
+
+    tracing::info!(
+        new_peer = %new_instance_id,
+        siblings_notified = notified,
+        total_siblings = siblings.len() - 1,
+        "Notified siblings of new colony member"
+    );
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {

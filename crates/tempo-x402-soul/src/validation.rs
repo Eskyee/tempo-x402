@@ -110,6 +110,9 @@ pub fn validate_plan(
     // ── Rule 9: Block plans for goals with excessive failure chains ──
     check_failure_chain_saturation(db, goal_description, &mut violations);
 
+    // ── Rule 10: Slug sanitization for script endpoints ──
+    check_slug_sanitization(steps, &mut violations);
+
     ValidationResult {
         valid: violations.iter().all(|v| v.severity != Severity::Hard),
         violations,
@@ -582,6 +585,25 @@ fn check_failure_chain_saturation(
             ),
             step_index: None,
         });
+    }
+}
+
+/// Rule 10: Slugs for script endpoints must be alphanumeric or underscores.
+fn check_slug_sanitization(steps: &[PlanStep], violations: &mut Vec<PlanViolation>) {
+    for (i, step) in steps.iter().enumerate() {
+        if let PlanStep::CreateScriptEndpoint { slug, .. } = step {
+            if !slug.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                violations.push(PlanViolation {
+                    rule: "slug-sanitization",
+                    severity: Severity::Hard,
+                    detail: format!(
+                        "Slug '{}' contains invalid characters. Use alphanumeric and underscores only.",
+                        slug
+                    ),
+                    step_index: Some(i),
+                });
+            }
+        }
     }
 }
 

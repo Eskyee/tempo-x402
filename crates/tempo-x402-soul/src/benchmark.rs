@@ -83,6 +83,11 @@ fn difficulty_weight(difficulty: &str) -> f64 {
     match difficulty {
         "hard" => 3.0,
         "medium" => 2.0,
+        "tier1" => 1.0,
+        "tier2" => 2.0,
+        "tier3" => 3.0,
+        "tier4" => 4.0,
+        "tier5" => 5.0,
         _ => 1.0,
     }
 }
@@ -1377,6 +1382,308 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
 pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 30;
 /// Sample 15 problems per session (was 10) — broader coverage per run.
 pub const DEFAULT_SAMPLE_SIZE: usize = 15;
+
+/// Benchmark mode: Exercism (external, Rust exercises) or Opus (embedded, IQ-calibrated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchmarkMode {
+    Exercism,
+    Opus,
+}
+
+impl BenchmarkMode {
+    pub fn from_env() -> Self {
+        match std::env::var("SOUL_BENCHMARK_MODE").as_deref() {
+            Ok("opus") | Ok("Opus") | Ok("OPUS") => BenchmarkMode::Opus,
+            _ => BenchmarkMode::Exercism, // default for backwards compat
+        }
+    }
+}
+
+/// Run a benchmark session using Opus IQ problems (embedded, no network).
+/// Same pipeline as Exercism: solve via LLM, validate via cargo test, record, train brain.
+pub async fn run_opus_benchmark_session(
+    llm: &LlmClient,
+    db: &SoulDatabase,
+    workspace_root: &str,
+    sample_size: usize,
+) -> Result<f64, String> {
+    tracing::info!(
+        sample_size = sample_size,
+        "Starting Opus IQ benchmark session"
+    );
+
+    let problems = crate::opus_bench::load_embedded_problems();
+    if problems.is_empty() {
+        return Err("No Opus benchmark problems loaded".into());
+    }
+
+    // Build set of already-solved problems to prioritize unsolved
+    let solved_slugs: std::collections::HashSet<String> = db
+        .get_all_benchmark_runs()
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.passed)
+        .map(|r| r.entry_point.clone())
+        .collect();
+    let sample = sample_problems_smart(&problems, sample_size, &solved_slugs);
+
+    tracing::info!(
+        total_problems = problems.len(),
+        solved = solved_slugs.len(),
+        sampled = sample.len(),
+        "Opus IQ: smart sampling"
+    );
+
+    let mut total_weight = 0.0f64;
+    let mut earned_weight = 0.0f64;
+    let mut passed = 0u32;
+    let mut attempted = 0u32;
+    let now = chrono::Utc::now().timestamp();
+
+    // Brain training data
+    let mut brain_attempts: Vec<crate::brain::BenchmarkAttemptContext> = Vec::new();
+    let current_elo = crate::elo::load_rating(db) as f32;
+    let current_pass_at_1 = db
+        .get_state("opus_benchmark_score")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<BenchmarkScore>(&s).ok())
+        .map(|s| s.pass_at_1 as f32)
+        .unwrap_or(0.0);
+
+    // Load peer failures for collaborative solving
+    let peer_failures = load_peer_failures(db);
+
+    for problem in &sample {
+        attempted += 1;
+        let weight = difficulty_weight(&problem.difficulty);
+        total_weight += weight;
+        let task_id = format!("opus/{}", problem.slug);
+
+        // Load own past failures for this problem
+        let own_failures: Vec<SharedFailure> = db
+            .get_all_benchmark_runs()
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| !r.passed && r.task_id == task_id && !r.generated_solution.is_empty())
+            .take(2)
+            .map(|r| SharedFailure {
+                task_id: r.task_id.clone(),
+                entry_point: r.entry_point.clone(),
+                failed_solution: r.generated_solution.clone(),
+                error_output: r.error_output.clone(),
+                attempted_by: "self (previous attempt)".to_string(),
+            })
+            .collect();
+
+        let mut all_failures = own_failures;
+        all_failures.extend(
+            peer_failures
+                .iter()
+                .filter(|f| f.task_id == task_id)
+                .cloned(),
+        );
+
+        // Generate solution
+        let solution = match generate_solution(llm, db, problem, &all_failures).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(slug = %problem.slug, tier = %problem.difficulty, error = %e, "Opus: gen failed");
+                record_run(db, problem, false, "", &e, 0);
+                continue;
+            }
+        };
+
+        // Validate via cargo test with self-play retries
+        let start = std::time::Instant::now();
+        let (mut success, mut error_output) =
+            validate_solution(problem, &solution, workspace_root).await;
+
+        let max_retries = 3;
+        let mut retry_count = 0;
+        let mut last_solution = solution.clone();
+        let mut retry_context = all_failures.clone();
+        while !success && !error_output.is_empty() && retry_count < max_retries {
+            retry_count += 1;
+            tracing::info!(slug = %problem.slug, retry = retry_count, "Opus: retrying");
+            retry_context.push(SharedFailure {
+                task_id: task_id.clone(),
+                entry_point: problem.slug.clone(),
+                failed_solution: last_solution.clone(),
+                error_output: error_output.clone(),
+                attempted_by: format!("self (retry {})", retry_count),
+            });
+            if let Ok(retry_solution) = generate_solution(llm, db, problem, &retry_context).await {
+                let (retry_ok, retry_err) =
+                    validate_solution(problem, &retry_solution, workspace_root).await;
+                if retry_ok {
+                    success = true;
+                    error_output = String::new();
+                } else {
+                    error_output = retry_err;
+                    last_solution = retry_solution;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        if success {
+            passed += 1;
+            earned_weight += weight;
+            tracing::info!(slug = %problem.slug, tier = %problem.difficulty, "Opus: PASS");
+        } else {
+            tracing::info!(
+                slug = %problem.slug,
+                tier = %problem.difficulty,
+                error = %error_output.chars().take(100).collect::<String>(),
+                "Opus: FAIL"
+            );
+        }
+
+        // Brain training data
+        brain_attempts.push(crate::brain::BenchmarkAttemptContext {
+            difficulty: problem.difficulty.clone(),
+            passed: success && retry_count == 0,
+            retry_number: 0,
+            had_peer_context: !peer_failures.is_empty(),
+            had_peer_review: false,
+            compiled: success || !error_output.contains("error[E"),
+            elo_rating: current_elo,
+            pass_at_1: current_pass_at_1,
+            peer_count: 0,
+        });
+
+        record_run(db, problem, success, &last_solution, &error_output, elapsed_ms);
+    }
+
+    let weighted_score = if total_weight > 0.0 {
+        earned_weight / total_weight * 100.0
+    } else {
+        0.0
+    };
+    let raw_rate = if attempted > 0 {
+        passed as f64 / attempted as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    // Store Opus-specific score
+    update_opus_score(db, weighted_score, raw_rate, attempted, passed, now);
+
+    // Compute IQ
+    let iq = crate::opus_bench::weighted_score_to_iq(weighted_score);
+
+    let _ = tokio::fs::remove_dir_all(BENCHMARK_TARGET_DIR).await;
+
+    tracing::info!(
+        weighted = format!("{:.1}%", weighted_score),
+        raw = format!("{:.1}%", raw_rate),
+        iq = format!("{:.0}", iq),
+        passed = passed,
+        attempted = attempted,
+        "Opus IQ benchmark session complete"
+    );
+
+    // Store IQ for prompt injection
+    let _ = db.set_state("opus_iq", &format!("{:.0}", iq));
+
+    // Train brain on self-play data
+    crate::brain::train_on_benchmark_selfplay(db, &brain_attempts);
+
+    Ok(weighted_score)
+}
+
+/// Update Opus benchmark score (separate from Exercism score).
+fn update_opus_score(
+    db: &SoulDatabase,
+    weighted_score: f64,
+    raw_rate: f64,
+    attempted: u32,
+    passed: u32,
+    measured_at: i64,
+) {
+    let mut score = db
+        .get_state("opus_benchmark_score")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<BenchmarkScore>(&s).ok())
+        .unwrap_or(BenchmarkScore {
+            pass_at_1: 0.0,
+            raw_pass_rate: 0.0,
+            problems_attempted: 0,
+            problems_passed: 0,
+            measured_at: 0,
+            history: Vec::new(),
+        });
+
+    if score.problems_attempted > 0 {
+        score.history.push(HistoricalScore {
+            pass_at_1: score.pass_at_1,
+            problems_attempted: score.problems_attempted,
+            measured_at: score.measured_at,
+        });
+        if score.history.len() > 20 {
+            score.history.drain(..score.history.len() - 20);
+        }
+    }
+
+    score.pass_at_1 = weighted_score;
+    score.raw_pass_rate = raw_rate;
+    score.problems_attempted = attempted;
+    score.problems_passed = passed;
+    score.measured_at = measured_at;
+
+    if let Ok(json) = serde_json::to_string(&score) {
+        let _ = db.set_state("opus_benchmark_score", &json);
+    }
+}
+
+/// Format Opus IQ benchmark for prompt injection.
+pub fn opus_summary_for_prompt(db: &SoulDatabase) -> String {
+    let score = match db
+        .get_state("opus_benchmark_score")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<BenchmarkScore>(&s).ok())
+    {
+        Some(s) => s,
+        None => return String::new(),
+    };
+
+    let iq = crate::opus_bench::weighted_score_to_iq(score.pass_at_1);
+
+    let mut lines = vec![format!(
+        "# Opus IQ Benchmark: {:.1}% weighted ({:.1}% raw, {}/{} problems) — IQ: {:.0}",
+        score.pass_at_1, score.raw_pass_rate, score.problems_passed, score.problems_attempted, iq
+    )];
+
+    lines.push(
+        "5 tiers: Generation(1×), Debugging(2×), Induction(3×), Reasoning(4×), Adversarial(5×). \
+         Designed by Claude Opus 4.6. Higher tiers worth more."
+            .into(),
+    );
+
+    if score.history.len() >= 2 {
+        let prev = &score.history[score.history.len() - 1];
+        let delta = score.pass_at_1 - prev.pass_at_1;
+        let direction = if delta > 0.5 {
+            "IMPROVING"
+        } else if delta < -0.5 {
+            "DECLINING"
+        } else {
+            "STABLE"
+        };
+        lines.push(format!(
+            "Trend: {} ({:+.1}% from last session)",
+            direction, delta
+        ));
+    }
+
+    lines.join("\n")
+}
 
 /// Format benchmark score for prompt injection.
 pub fn benchmark_summary_for_prompt(db: &SoulDatabase) -> String {

@@ -1331,6 +1331,16 @@ impl ThinkingLoop {
                         .handle_step_failure(llm, &mut plan, &step_summary, &error)
                         .await;
                 }
+                StepResult::RateLimited(msg) => {
+                    tracing::warn!(step = %step_summary, reason = %msg, "Rate limited — backing off");
+                    // Don't poison learning systems with rate-limit failures
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    return Ok(CycleResult {
+                        step_type: StepType::Mechanical,
+                        entered_code: false,
+                        summary: format!("Rate limited, retrying later: {msg}"),
+                    });
+                }
                 StepResult::NeedsReplan(reason) => {
                     tracing::info!(step = %step_summary, reason = %reason, "Step needs replan");
 

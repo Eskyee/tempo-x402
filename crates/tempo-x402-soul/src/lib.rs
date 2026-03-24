@@ -82,6 +82,7 @@ pub mod model;
 pub mod neuroplastic;
 pub mod normalize;
 pub mod observer;
+pub mod opus_bench;
 pub mod persistent_memory;
 pub mod plan;
 pub mod prompts;

@@ -61,7 +61,7 @@ pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
     };
 
     let mode_instructions = match mode {
-        AgentMode::Observe => "", // Plan-driven — no observe prompt needed
+        AgentMode::Observe => "",
         AgentMode::Chat => CHAT_INSTRUCTIONS,
         AgentMode::Code => CODE_INSTRUCTIONS,
         AgentMode::Review => REVIEW_INSTRUCTIONS,
@@ -96,7 +96,39 @@ pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
     format!("{base}{lineage}{coding_context}{specialization_context}\n\n{mode_instructions}")
 }
 
-// ── Plan-driven prompt builders ─────────────────────────────────────
+// ── System Prompt Constants ──────────────────────────────────────────
+
+const CHAT_INSTRUCTIONS: &str = r#"
+You are in CHAT mode — interactive conversation with a user.
+Answer helpfully and concisely. You can use tools to investigate the node's state,
+read files, list directories, or search code.
+You have read-only access to the codebase — you cannot modify files in this mode.
+"#;
+
+const CODE_INSTRUCTIONS: &str = r#"
+You are in CODE mode — you can read, modify, and commit code to the repository.
+
+Workflow:
+1. Understand: Use `read_file` or `list_directory` to map the task scope.
+2. Prepare: Search with `search_files` to find relevant definitions.
+3. Act: Apply changes using `edit_file` (surgical) or `write_file` (new files).
+4. Verify: Run `cargo check --workspace` to ensure validity.
+5. Commit: Use `commit_changes` (includes `cargo test`) to land code.
+
+Rules:
+- Protected files (soul, identity, Cargo.toml) are immutable.
+- Keep changes atomic, focused, and verified by `cargo check`.
+- Avoid hallucinated paths: Always `list_directory` or `read_file` before coding.
+- Handle errors gracefully: Use exponential backoff for network/429 retries.
+- Every commit MUST trigger and pass `cargo test` before landing.
+"#;
+
+const REVIEW_INSTRUCTIONS: &str = r#"
+You are in REVIEW mode - code review and analysis.
+Read and analyze code to answer questions about architecture, bugs, or improvements.
+You have read-only access - you cannot modify files in this mode.
+Be specific: reference file paths and line numbers when discussing code.
+"#;
 
 /// Prompt for creating goals when the soul has none.
 /// Focused: snapshot + beliefs → what should you build?
@@ -708,32 +740,5 @@ pub fn reflection_prompt(
     )
 }
 
-// ── Mode-specific constants (kept for chat.rs and code steps) ───────
+// ── End of file
 
-pub(crate) const CHAT_INSTRUCTIONS: &str = "\
-You are in CHAT mode — interactive conversation with a user.
-Answer helpfully and concisely. You can use tools to investigate the node's \
-state, read files, list directories, or search code.
-You have read-only access to the codebase — you cannot modify files in this mode.";
-
-pub(crate) const CODE_INSTRUCTIONS: &str = "\
-You are in CODE mode — you can read, modify, and commit code to the repository.
-
-Workflow:
-1. Understand: Use `read_file` or `list_directory` to map the task scope.
-2. Prepare: Search with `search_files` to find relevant definitions.
-3. Act: Apply changes using `edit_file` (surgical) or `write_file` (new files).
-4. Verify: Run `cargo check --workspace` to ensure validity.
-5. Commit: Use `commit_changes` (includes `cargo test`) to land code.
-
-Rules:
-- Protected files (soul, identity, Cargo.toml) are immutable.
-- Keep changes atomic, focused, and verified by `cargo check`.
-- Avoid hallucinated paths: Always `list_directory` or `read_file` before coding.
-- Handle errors gracefully: Use exponential backoff for network/429 retries.
-- Every commit MUST trigger and pass `cargo test` before landing.";
-
-pub(crate) const REVIEW_INSTRUCTIONS: &str = "You are in REVIEW mode - code review and analysis.
-Read and analyze code to answer questions about architecture, bugs, or improvements.
-You have read-only access - you cannot modify files in this mode.
-Be specific: reference file paths and line numbers when discussing code.";

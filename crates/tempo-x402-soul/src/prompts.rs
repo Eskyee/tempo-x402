@@ -395,12 +395,18 @@ pub fn planning_prompt(
              default exponential backoff (e.g., 30s, 60s, 120s).\n\
              2. Repeat the failed action immediately after the wait.\n\
              Do NOT give up or abandon the goal immediately on 429 errors.\n\n\
-             [DEPENDENCY MANAGEMENT]: When planning, do NOT hallucinate external libraries, \
-             imports, or dependencies not listed in the 'Available Dependencies' section of your \
-             system instructions. If you need functionality, use the existing codebase tools or \
-             implement it yourself within the current repo's constraints. Do not suggest adding \
-             new dependencies to Cargo.toml without explicit prior approval or specialized \
-             tooling."
+             [DEPENDENCY MANAGEMENT]: When planning, do NOT hallucinate external libraries, 
+             imports, or dependencies not listed in the 'Available Dependencies' section of your 
+             system instructions. If you need functionality, use the existing codebase tools or 
+             implement it yourself within the current repo's constraints. Do not suggest adding 
+             new dependencies to Cargo.toml without explicit prior approval or specialized 
+             tooling.
+
+             [PLANNING RULES]:
+             1. Strictly adhere to the 'Available Dependencies' list.
+             2. Never import a module not in `Cargo.toml`.
+             3. If unsure about a dependency, search the code for current usage or use only standard library.
+             4. All plans must be deterministic sequences of `PlanStep` variants."
         );
     }
 

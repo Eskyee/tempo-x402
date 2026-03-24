@@ -108,30 +108,36 @@ fn check_state_consistency(_db: &SoulDatabase, violations: &mut Vec<PlanViolatio
     }
 }
 
-/// Diagnostic test to ensure our validation logic itself is consistent
-pub fn verify_validation_integrity() -> bool {
-    // This function mimics an external audit of the validation rules
-    let violations = Vec::new();
-    // Simulate a perfect plan
-    let mock_plan: Vec<PlanStep> = Vec::new();
-    
-    // We expect no violations for an empty, well-formed state
-    let result = ValidationResult {
-        valid: true,
-        violations,
-    };
-    
-    result.valid && result.rejection_reason().is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thinking::ThinkState;
 
     #[test]
-    fn test_validation_logic_integrity() {
-        assert!(verify_validation_integrity());
+    fn test_validation_consistency() {
+        // Mock a state where backoff is nominal
+        let violations = Vec::new();
+        let result = ValidationResult {
+            valid: true,
+            violations,
+        };
+        assert!(result.is_valid());
+    }
+
+    #[test]
+    fn test_hard_violation_rejection() {
+        let mut violations = Vec::new();
+        violations.push(PlanViolation {
+            rule: "TestRule",
+            severity: Severity::Hard,
+            detail: "Mock failure".to_string(),
+            step_index: Some(0),
+        });
+        let result = ValidationResult {
+            valid: false,
+            violations,
+        };
+        assert!(!result.is_valid());
+        assert!(result.rejection_reason().contains("PLAN REJECTED"));
     }
 
     #[test]

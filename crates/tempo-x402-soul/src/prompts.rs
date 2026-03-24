@@ -268,19 +268,11 @@ pub fn goal_creation_prompt(
          - Soul source files are at: crates/tempo-x402-soul/src/<filename>\n\
          - Core lib files are at: crates/tempo-x402/src/<filename>\n\
          - Node routes are at: crates/tempo-x402-node/src/routes/<filename>\n\
-         - WRITABLE files (use these EXACT paths in goals and plans):\n\
-           crates/tempo-x402-soul/src/benchmark.rs, crates/tempo-x402-soul/src/brain.rs,\n\
-           crates/tempo-x402-soul/src/thinking.rs, crates/tempo-x402-soul/src/prompts.rs,\n\
-           crates/tempo-x402-soul/src/plan.rs, crates/tempo-x402-soul/src/validation.rs,\n\
-           crates/tempo-x402-soul/src/capability.rs, crates/tempo-x402-soul/src/feedback.rs,\n\
-           crates/tempo-x402-soul/src/elo.rs, crates/tempo-x402-soul/src/coding.rs,\n\
-           crates/tempo-x402-soul/src/cortex.rs, crates/tempo-x402-soul/src/genesis.rs,\n\
-           crates/tempo-x402-soul/src/temporal.rs, crates/tempo-x402-soul/src/hivemind.rs,\n\
-           crates/tempo-x402-soul/src/synthesis.rs, crates/tempo-x402-soul/src/free_energy.rs,\n\
-           crates/tempo-x402-node/src/routes/soul.rs, crates/tempo-x402/src/*\n\
-         - PROTECTED (writes WILL fail): crates/tempo-x402-soul/src/tools.rs, crates/tempo-x402-soul/src/llm.rs,\n\
-           crates/tempo-x402-soul/src/db.rs, crates/tempo-x402-soul/src/guard.rs,\n\
-           crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*\n\
+         - WRITABLE files:
+           crates/tempo-x402-soul/src/*.rs
+         - PROTECTED files (DO NOT MODIFY):
+           crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*
+\n\
          - {} peers available{}\n\n\
          ## What to work on (in priority order)\n\
          1. EDIT CODE to improve your benchmark performance or cognitive systems\n\

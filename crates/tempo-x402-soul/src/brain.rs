@@ -749,8 +749,97 @@ pub fn train_on_benchmark_selfplay(db: &SoulDatabase, attempts: &[BenchmarkAttem
 pub fn load_brain(db: &SoulDatabase) -> Brain {
     match db.get_state("brain_weights").ok().flatten() {
         Some(json) => Brain::from_json(&json).unwrap_or_default(),
-        None => Brain::new(),
+        None => {
+            // No local weights — try to recover from a peer before starting fresh.
+            // This handles volume wipes: the colony's knowledge isn't lost if any peer survives.
+            tracing::info!("No brain weights in DB — attempting peer recovery");
+            match recover_brain_from_peer() {
+                Some(brain) => {
+                    tracing::info!(
+                        steps = brain.train_steps,
+                        loss = format!("{:.4}", brain.running_loss),
+                        "Brain recovered from peer — colony knowledge preserved"
+                    );
+                    // Save immediately so we don't lose it again
+                    let json = brain.to_json();
+                    let _ = db.set_state("brain_weights", &json);
+                    brain
+                }
+                None => {
+                    tracing::info!("No peers available for brain recovery — starting fresh");
+                    Brain::new()
+                }
+            }
+        }
     }
+}
+
+/// Try to fetch brain weights from any reachable peer.
+/// Uses PEER_URLS and PARENT_URL to find peers.
+fn recover_brain_from_peer() -> Option<Brain> {
+    // Build peer URL list from env vars
+    let mut urls: Vec<String> = Vec::new();
+    if let Ok(peer_urls) = std::env::var("PEER_URLS") {
+        urls.extend(peer_urls.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+    }
+    if let Ok(parent) = std::env::var("PARENT_URL") {
+        if !parent.is_empty() && !urls.contains(&parent) {
+            urls.push(parent);
+        }
+    }
+
+    let our_domain = std::env::var("RAILWAY_PUBLIC_DOMAIN")
+        .ok()
+        .map(|d| format!("https://{d}"));
+
+    // Filter out self
+    urls.retain(|u| {
+        if let Some(ref ours) = our_domain {
+            u.trim_end_matches('/') != ours.trim_end_matches('/')
+        } else {
+            true
+        }
+    });
+
+    if urls.is_empty() {
+        return None;
+    }
+
+    // Synchronous HTTP — this runs during brain loading which is in sync context.
+    // Use a short-lived tokio runtime for the HTTP calls.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .ok()?;
+
+        let mut best_brain: Option<Brain> = None;
+        let mut best_steps = 0u64;
+
+        for url in &urls {
+            let endpoint = format!("{}/soul/brain/weights", url.trim_end_matches('/'));
+            match client.get(&endpoint).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(json) = resp.text().await {
+                        if let Some(brain) = Brain::from_json(&json) {
+                            if brain.train_steps > best_steps {
+                                best_steps = brain.train_steps;
+                                best_brain = Some(brain);
+                            }
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        best_brain
+    })
 }
 
 /// Save brain to database + periodic disk checkpoint.

@@ -399,7 +399,7 @@ pub fn list_children_active(db: &Database) -> Result<Vec<ChildInstance>, Gateway
             SELECT id, instance_id, address, url, railway_service_id,
                    funded_amount, funding_tx, status, branch, volume_id, designation, created_at, updated_at
             FROM children
-            WHERE status != 'failed'
+            WHERE status NOT IN ('failed', 'unreachable')
             ORDER BY created_at DESC
             "#,
         )?;

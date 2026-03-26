@@ -68,6 +68,10 @@ COPY --from=builder /app/target/release/x402-gateway /usr/local/bin/x402-gateway
 COPY --from=builder /app/target/release/x402-node /usr/local/bin/x402-node
 COPY --from=builder /app/crates/tempo-x402-app/dist /app/spa
 
+# Copy source code for soul (file reading, code search, shell execution)
+COPY --from=builder /app /app/source
+ENV SOUL_WORKSPACE_ROOT=/app/source
+
 # Copy Rust toolchain from builder for benchmark (cargo test on Exercism problems)
 COPY --from=builder /usr/local/rustup /usr/local/rustup
 COPY --from=builder /usr/local/cargo /usr/local/cargo

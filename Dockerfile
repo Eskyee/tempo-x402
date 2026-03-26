@@ -86,17 +86,7 @@ RUN chown -R app:app /app
 # Entrypoint: fix volume permissions then drop to non-root
 # NOTE: Do NOT chown cargo/registry here — too slow (60s+), blocks healthcheck.
 # Cargo registry is world-writable from the chmod in the build stage.
-RUN printf '#!/bin/sh\n\
-# Fix volume permissions\n\
-chown -R app:app /data 2>/dev/null || true\n\
-# Clean cargo build artifacts that fill volumes\n\
-rm -rf /data/workspace/target 2>/dev/null || true\n\
-rm -rf /tmp/x402_cargo_target 2>/dev/null || true\n\
-rm -rf /data/workspace/.cargo 2>/dev/null || true\n\
-# Report disk usage\n\
-echo "Disk: $(du -sh /data 2>/dev/null | cut -f1)"\n\
-BIN=${X402_BINARY:-x402-node}\n\
-exec gosu app "$BIN" "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN printf '#!/bin/sh\nchown -R app:app /data 2>/dev/null || true\nrm -rf /data/workspace/target /tmp/x402_cargo_target /data/workspace/.cargo 2>/dev/null || true\nBIN=${X402_BINARY:-x402-node}\nexec gosu app "$BIN" "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENV SPA_DIR=/app/spa
 ENV PORT=4023

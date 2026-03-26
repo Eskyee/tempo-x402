@@ -805,41 +805,48 @@ fn recover_brain_from_peer() -> Option<Brain> {
         return None;
     }
 
-    // Synchronous HTTP — this runs during brain loading which is in sync context.
-    // Use a short-lived tokio runtime for the HTTP calls.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .ok()?;
+    // Use block_in_place to run async HTTP from sync context safely.
+    // This works because we're called from within a multi-threaded tokio runtime.
+    let result = std::panic::catch_unwind(|| {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .build()
+                    .ok()?;
 
-    rt.block_on(async {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .ok()?;
+                let mut best_brain: Option<Brain> = None;
+                let mut best_steps = 0u64;
 
-        let mut best_brain: Option<Brain> = None;
-        let mut best_steps = 0u64;
-
-        for url in &urls {
-            let endpoint = format!("{}/soul/brain/weights", url.trim_end_matches('/'));
-            match client.get(&endpoint).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(json) = resp.text().await {
-                        if let Some(brain) = Brain::from_json(&json) {
-                            if brain.train_steps > best_steps {
-                                best_steps = brain.train_steps;
-                                best_brain = Some(brain);
+                for url in &urls {
+                    let endpoint = format!("{}/soul/brain/weights", url.trim_end_matches('/'));
+                    match client.get(&endpoint).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            if let Ok(json) = resp.text().await {
+                                if let Some(brain) = Brain::from_json(&json) {
+                                    if brain.train_steps > best_steps {
+                                        best_steps = brain.train_steps;
+                                        best_brain = Some(brain);
+                                    }
+                                }
                             }
                         }
+                        _ => continue,
                     }
                 }
-                _ => continue,
-            }
-        }
 
-        best_brain
-    })
+                best_brain
+            })
+        })
+    });
+
+    match result {
+        Ok(brain) => brain,
+        Err(_) => {
+            tracing::warn!("Brain peer recovery panicked — starting fresh");
+            None
+        }
+    }
 }
 
 /// Save brain to database + periodic disk checkpoint.

@@ -2459,7 +2459,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             "/soul/admin/workspace-reset",
             web::post().to(admin_workspace_reset),
         )
-        .route("/soul/admin/cargo-check", web::post().to(admin_cargo_check));
+        .route("/soul/admin/cargo-check", web::post().to(admin_cargo_check))
+        // Studio: file browsing for the IDE
+        .route("/soul/admin/ls", web::get().to(admin_ls))
+        .route("/soul/admin/cat", web::get().to(admin_cat));
 }
 
 // ── Admin: Mind Meld (direct command execution) ──
@@ -2627,5 +2630,89 @@ async fn admin_cargo_check(req: actix_web::HttpRequest) -> HttpResponse {
         }
         Err(_) => HttpResponse::GatewayTimeout()
             .json(serde_json::json!({"error": "cargo check timed out (120s)"})),
+    }
+}
+
+/// GET /soul/admin/ls?path=src — list files in workspace directory.
+/// No admin auth — read-only, safe for the Studio IDE.
+async fn admin_ls(query: web::Query<std::collections::HashMap<String, String>>) -> HttpResponse {
+    let ws = std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".to_string());
+    let rel_path = query.get("path").cloned().unwrap_or_else(|| ".".to_string());
+
+    // Sanitize path — no traversal
+    let sanitized = rel_path.replace("..", "").replace("//", "/");
+    let full_path = format!("{}/{}", ws, sanitized);
+
+    match tokio::fs::read_dir(&full_path).await {
+        Ok(mut entries) => {
+            let mut files = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Skip hidden files and target dirs
+                if name.starts_with('.') || name == "target" || name == "node_modules" {
+                    continue;
+                }
+                let meta = entry.metadata().await.ok();
+                let entry_type = if meta.as_ref().map(|m| m.is_dir()).unwrap_or(false) {
+                    "directory"
+                } else {
+                    "file"
+                };
+                let size = meta.as_ref().map(|m| m.len());
+                files.push(serde_json::json!({
+                    "name": name,
+                    "type": entry_type,
+                    "size": size,
+                }));
+            }
+            // Sort: directories first, then alphabetical
+            files.sort_by(|a, b| {
+                let a_dir = a.get("type").and_then(|v| v.as_str()) == Some("directory");
+                let b_dir = b.get("type").and_then(|v| v.as_str()) == Some("directory");
+                match (a_dir, b_dir) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => {
+                        let a_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let b_name = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        a_name.cmp(b_name)
+                    }
+                }
+            });
+            HttpResponse::Ok().json(files)
+        }
+        Err(e) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Cannot read directory: {e}"),
+            "path": full_path,
+        })),
+    }
+}
+
+/// GET /soul/admin/cat?path=src/lib.rs — read file content from workspace.
+/// No admin auth — read-only, safe for the Studio IDE.
+async fn admin_cat(query: web::Query<std::collections::HashMap<String, String>>) -> HttpResponse {
+    let ws = std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".to_string());
+    let rel_path = match query.get("path") {
+        Some(p) => p.clone(),
+        None => return HttpResponse::BadRequest().json(serde_json::json!({"error": "path required"})),
+    };
+
+    // Sanitize path — no traversal
+    let sanitized = rel_path.replace("..", "").replace("//", "/");
+    let full_path = format!("{}/{}", ws, sanitized);
+
+    // Max 1MB file read
+    match tokio::fs::read_to_string(&full_path).await {
+        Ok(content) => {
+            if content.len() > 1_048_576 {
+                HttpResponse::Ok().body(content[..1_048_576].to_string())
+            } else {
+                HttpResponse::Ok().body(content)
+            }
+        }
+        Err(e) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Cannot read file: {e}"),
+            "path": full_path,
+        })),
     }
 }

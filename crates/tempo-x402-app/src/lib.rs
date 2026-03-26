@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod api;
+pub mod studio;
 #[allow(unused_braces)]
 mod timeline;
 mod wallet;
@@ -87,6 +88,7 @@ pub fn App() -> impl IntoView {
                 <Routes>
                     <Route path="/" view=HomePage />
                     <Route path="/dashboard" view=DashboardPage />
+                    <Route path="/studio" view=studio::StudioPage />
                     <Route path="/timeline" view=timeline::TimelinePage />
                     <Route path="/*any" view=NotFound />
                 </Routes>
@@ -125,6 +127,11 @@ fn Header() -> impl IntoView {
                                 class=if path == "/dashboard" { "active" } else { "" }
                                 on:click=move |_| set_mobile_open.set(false)
                             >"Dashboard"</a>
+                            <a
+                                href="/studio"
+                                class=if path == "/studio" { "active" } else { "" }
+                                on:click=move |_| set_mobile_open.set(false)
+                            >"Studio"</a>
                             <a
                                 href="/timeline"
                                 class=if path == "/timeline" { "active" } else { "" }

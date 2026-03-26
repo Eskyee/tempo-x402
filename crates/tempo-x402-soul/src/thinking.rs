@@ -2086,19 +2086,30 @@ impl ThinkingLoop {
                 ));
             }
 
-            // First goal: make a code change to prove the pipeline works
-            seed_goals.push((
-                "Make your first code change: read crates/tempo-x402-soul/src/housekeeping.rs, \
-                 then use edit_file to add a useful comment or improve a log message. \
-                 Run cargo_check to verify it compiles, then commit the change. \
-                 This establishes your ability to self-modify.",
-                "A commit exists with a change to housekeeping.rs that passes cargo check",
-                if self.config.initial_goal.is_some() {
-                    4
-                } else {
-                    5
-                },
-            ));
+            if self.config.coding_enabled {
+                // First goal: make a code change to prove the pipeline works
+                seed_goals.push((
+                    "Make your first code change: read crates/tempo-x402-soul/src/housekeeping.rs, \
+                     then use edit_file to add a useful comment or improve a log message. \
+                     Run cargo_check to verify it compiles, then commit the change. \
+                     This establishes your ability to self-modify.",
+                    "A commit exists with a change to housekeeping.rs that passes cargo check",
+                    if self.config.initial_goal.is_some() {
+                        4
+                    } else {
+                        5
+                    },
+                ));
+            } else {
+                // Coding disabled — focus on observation, benchmarking, learning
+                seed_goals.push((
+                    "Run the Opus IQ benchmark to measure your intelligence. Observe your \
+                     node's health, endpoints, and beliefs. Record observations about the \
+                     system state. Focus on thinking and learning — coding is disabled.",
+                    "Benchmark has run at least once and IQ score is recorded",
+                    5,
+                ));
+            }
 
             if self.config.initial_goal.is_none() {
                 seed_goals.push((

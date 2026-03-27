@@ -214,7 +214,9 @@ impl ThinkingLoop {
             && (error.contains("Peers found: 0")
                 || error.contains("unable to auto-detect email address")
                 || error.to_lowercase().contains("protected")
-                || error.to_lowercase().contains("guard"));
+                || error.to_lowercase().contains("guard")
+                || error.contains("No such file or directory")
+                || error.contains("coding is not enabled"));
         if is_rate_limited {
             tracing::warn!(
                 plan_id = %plan.id,
@@ -357,9 +359,23 @@ impl ThinkingLoop {
 
         match llm.think(system, &prompt).await {
             Ok(response) => {
-                let mut new_steps = crate::normalize::sanitize_plan_steps(
-                    crate::normalize::parse_plan_steps(&response, self.config.max_plan_steps)?,
-                );
+                let parsed =
+                    crate::normalize::parse_plan_steps(&response, self.config.max_plan_steps);
+                let mut new_steps = match parsed {
+                    Ok(steps) => crate::normalize::sanitize_plan_steps(steps),
+                    Err(e) => {
+                        // LLM returned empty or unparseable plan — treat as replan failure
+                        tracing::warn!(error = %e, "Replan parse failed — incrementing replan count");
+                        plan.replan_count += 1;
+                        self.db.update_plan(plan)?;
+                        self.increment_cycle_count()?;
+                        return Ok(CycleResult {
+                            step_type: StepType::Llm,
+                            entered_code: false,
+                            summary: format!("replan parse failed: {e}"),
+                        });
+                    }
+                };
 
                 // Auto-fix: insert CargoCheck before Commit if missing
                 validation::auto_fix_cargo_check(&mut new_steps);

@@ -93,7 +93,7 @@ fn difficulty_weight(difficulty: &str) -> f64 {
 }
 
 /// Classify an exercise slug into a difficulty tier.
-fn classify_difficulty(slug: &str) -> &'static str {
+pub fn classify_difficulty(slug: &str) -> &'static str {
     // Hard exercises: complex algorithms, systems programming, concurrency
     const HARD: &[&str] = &[
         "forth",
@@ -1095,6 +1095,7 @@ pub async fn run_benchmark_session(
         // First attempt
         brain_attempts.push(crate::brain::BenchmarkAttemptContext {
             difficulty: problem.difficulty.clone(),
+            problem_slug: problem.slug.clone(),
             passed: success && retry_count == 0,
             retry_number: 0,
             had_peer_context: has_peer_context,
@@ -1110,6 +1111,7 @@ pub async fn run_benchmark_session(
         for r in 0..retry_count {
             brain_attempts.push(crate::brain::BenchmarkAttemptContext {
                 difficulty: problem.difficulty.clone(),
+                problem_slug: problem.slug.clone(),
                 passed: success && r + 1 == retry_count,
                 retry_number: r + 1,
                 had_peer_context: has_peer_context,
@@ -1607,6 +1609,7 @@ pub async fn run_opus_benchmark_session(
         // Brain training data
         brain_attempts.push(crate::brain::BenchmarkAttemptContext {
             difficulty: problem.difficulty.clone(),
+            problem_slug: problem.slug.clone(),
             passed: success && retry_count == 0,
             retry_number: 0,
             had_peer_context: !peer_failures.is_empty(),

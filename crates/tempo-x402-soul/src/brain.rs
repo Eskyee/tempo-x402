@@ -540,13 +540,23 @@ pub struct StepContext {
 // ── Experience data → training examples ──────────────────────────────
 
 /// Convert plan outcomes from the DB into training examples.
+/// Enriches feature vectors with capability profile data so the brain
+/// has real signal to learn from (not just zeros).
 pub fn outcomes_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
     let outcomes = db.get_recent_plan_outcomes(100).unwrap_or_default();
+    let profile = crate::capability::compute_profile(db);
     let mut examples = Vec::new();
 
+    // Pre-compute per-capability success rates for fast lookup
+    let cap_rates: HashMap<String, f32> = profile
+        .capabilities
+        .iter()
+        .map(|s| (s.capability.clone(), s.success_rate as f32))
+        .collect();
+
     for outcome in &outcomes {
-        // Create a basic feature vector from the outcome
-        let mut features = vec![0.0f32; INPUT_SIZE];
+        // Create a feature vector from the outcome
+        let mut base_features = vec![0.0f32; INPUT_SIZE];
 
         // Encode steps completed / total as progress
         let progress = if outcome.total_steps > 0 {
@@ -554,11 +564,16 @@ pub fn outcomes_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
         } else {
             0.0
         };
-        features[15] = progress;
-        features[16] = (outcome.replan_count as f32 / 3.0).min(1.0);
+        base_features[15] = progress;
+        base_features[16] = (outcome.replan_count as f32 / 3.0).min(1.0);
+        // Enrich: overall success rate from capability profile
+        base_features[17] = profile.overall_success_rate as f32;
+        // Enrich: total steps (normalized, log scale)
+        base_features[20] = (1.0 + outcome.total_steps as f32).ln() / 10.0;
+        // Enrich: steps completed ratio as additional progress signal
+        base_features[23] = progress;
 
         let success = outcome.status == "completed";
-
         let error_category = outcome.error_category.clone();
 
         // One example for each step type that was attempted
@@ -570,12 +585,18 @@ pub fn outcomes_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
             let cap = step_name_to_capability(step_name);
             let step_succeeded = outcome.steps_succeeded.contains(step_name);
 
-            let mut ex_features = features.clone();
+            let mut ex_features = base_features.clone();
             // Encode the step type
             let idx = step_name_to_idx(step_name);
             if idx < 14 {
                 ex_features[idx] = 1.0;
             }
+            // Enrich: feature 14 — is this an LLM step?
+            ex_features[14] = if idx >= 9 && idx <= 11 { 1.0 } else { 0.0 };
+            // Enrich: feature 18 — this capability's historical success rate
+            ex_features[18] = cap_rates.get(cap.as_str()).copied().unwrap_or(0.5);
+            // Enrich: feature 19 — was this step a failure? (inverse signal)
+            ex_features[19] = if step_succeeded { 0.0 } else { 1.0 };
 
             examples.push(TrainingExample {
                 features: ex_features,
@@ -590,9 +611,14 @@ pub fn outcomes_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
         }
 
         // Also create an overall plan example
-        features[14] = 1.0; // mark as "plan-level" prediction
+        base_features[14] = 1.0; // mark as "plan-level" prediction
+        // Enrich: capability success rate for PlanComplete
+        base_features[18] = cap_rates
+            .get(Capability::PlanComplete.as_str())
+            .copied()
+            .unwrap_or(0.5);
         examples.push(TrainingExample {
-            features,
+            features: base_features,
             success,
             error_category: error_category.clone(),
             capability: Capability::PlanComplete,
@@ -603,8 +629,18 @@ pub fn outcomes_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
 }
 
 /// Convert capability events into training examples.
+/// Uses actual capability success rates from the profile (not hardcoded values).
 pub fn events_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
     let events = db.get_recent_capability_events(200).unwrap_or_default();
+    let profile = crate::capability::compute_profile(db);
+
+    // Pre-compute per-capability success rates
+    let cap_rates: HashMap<String, f32> = profile
+        .capabilities
+        .iter()
+        .map(|s| (s.capability.clone(), s.success_rate as f32))
+        .collect();
+
     let mut examples = Vec::new();
 
     for event in &events {
@@ -616,7 +652,13 @@ pub fn events_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
         if idx < 14 {
             features[idx] = 1.0;
         }
-        features[18] = if event.succeeded { 0.8 } else { 0.3 }; // recent rate hint
+        // Use actual capability success rate, not hardcoded 0.8/0.3
+        features[18] = cap_rates
+            .get(event.capability.as_str())
+            .copied()
+            .unwrap_or(0.5);
+        // Enrich: overall success rate
+        features[17] = profile.overall_success_rate as f32;
 
         examples.push(TrainingExample {
             features,
@@ -636,6 +678,8 @@ pub fn events_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
 pub struct BenchmarkAttemptContext {
     /// "easy", "medium", "hard"
     pub difficulty: String,
+    /// Problem slug for category encoding (e.g. "binary-search", "forth")
+    pub problem_slug: String,
     /// Did this attempt pass?
     pub passed: bool,
     /// Retry number (0 = first attempt, 1 = first retry, etc.)
@@ -654,12 +698,60 @@ pub struct BenchmarkAttemptContext {
     pub peer_count: u32,
 }
 
+/// Classify a problem slug into a category index (0-13) for feature encoding.
+fn slug_to_category_idx(slug: &str) -> usize {
+    // Categorize by problem domain — these roughly match the Exercism exercise categories
+    if slug.contains("search") || slug.contains("sort") || slug.contains("binary") {
+        0 // Algorithms
+    } else if slug.contains("linked-list") || slug.contains("stack")
+        || slug.contains("queue") || slug.contains("circular-buffer") {
+        1 // Data Structures
+    } else if slug.contains("cipher") || slug.contains("crypto") || slug.contains("rot") {
+        2 // Cryptography
+    } else if slug.contains("prime") || slug.contains("sieve") || slug.contains("factor")
+        || slug.contains("pascal") || slug.contains("collatz") || slug.contains("armstrong")
+        || slug.contains("perfect") || slug.contains("sum-of") {
+        3 // Number Theory
+    } else if slug.contains("string") || slug.contains("word") || slug.contains("anagram")
+        || slug.contains("pangram") || slug.contains("isogram") || slug.contains("run-length")
+        || slug.contains("encode") || slug.contains("decode") {
+        4 // String Processing
+    } else if slug.contains("matrix") || slug.contains("spiral") || slug.contains("grid")
+        || slug.contains("minesweeper") || slug.contains("rectangles") {
+        5 // Matrix/Grid
+    } else if slug.contains("clock") || slug.contains("date") || slug.contains("time")
+        || slug.contains("gigasecond") || slug.contains("leap") {
+        6 // Date/Time
+    } else if slug.contains("roman") || slug.contains("say") || slug.contains("diamond")
+        || slug.contains("allergies") || slug.contains("all-your-base") || slug.contains("luhn")
+        || slug.contains("isbn") || slug.contains("phone") {
+        7 // Encoding/Mapping
+    } else if slug.contains("react") || slug.contains("forth") || slug.contains("calculator")
+        || slug.contains("rpn") || slug.contains("dot-dsl") || slug.contains("simple-linked") {
+        8 // Interpreter/VM
+    } else if slug.contains("poker") || slug.contains("dominoes") || slug.contains("bowling")
+        || slug.contains("scrabble") || slug.contains("tournament") || slug.contains("grade") {
+        9 // Games/Simulation
+    } else if slug.contains("parallel") || slug.contains("concurrent") || slug.contains("mutex") {
+        10 // Concurrency
+    } else if slug.contains("trait") || slug.contains("macro") || slug.contains("derive")
+        || slug.contains("custom-set") || slug.contains("decimal") || slug.contains("xorcism") {
+        11 // Advanced Rust
+    } else if slug.contains("grep") || slug.contains("grep") || slug.contains("diffie")
+        || slug.contains("affine") || slug.contains("rail-fence") {
+        12 // Systems
+    } else {
+        13 // Misc (hello-world, leap, raindrops, etc.)
+    }
+}
+
 /// Generate training examples from benchmark self-play attempts.
 /// Each attempt becomes a training example so the brain learns:
 /// - Which difficulty levels it can handle
 /// - Whether retries help (and how many)
 /// - Whether peer context improves success
 /// - Whether peer review catches bugs
+/// - Problem category patterns (what domains it's strong/weak in)
 ///
 /// This is the AlphaZero-style self-play loop: play games → train → play better.
 pub fn benchmark_attempts_to_examples(
@@ -690,6 +782,10 @@ pub fn benchmark_attempts_to_examples(
             "easy" => features[36] = 1.0,
             "medium" => features[37] = 1.0,
             "hard" => features[38] = 1.0,
+            // Opus tiers
+            "tier1" => features[36] = 1.0,
+            "tier2" => features[37] = 1.0,
+            "tier3" | "tier4" | "tier5" | "tier6" => features[38] = 1.0,
             _ => features[36] = 1.0,
         }
 
@@ -704,6 +800,29 @@ pub fn benchmark_attempts_to_examples(
 
         // Feature 42: compiled successfully
         features[42] = if attempt.compiled { 1.0 } else { 0.0 };
+
+        // Features 43-56: problem category one-hot (derived from slug)
+        if !attempt.problem_slug.is_empty() {
+            let cat_idx = slug_to_category_idx(&attempt.problem_slug);
+            if cat_idx < 14 {
+                features[43 + cat_idx] = 1.0;
+            }
+        }
+
+        // Feature 57: difficulty as proxy for solution complexity
+        // Harder problems tend to have longer solutions
+        features[57] = match attempt.difficulty.as_str() {
+            "easy" | "tier1" => 0.2,
+            "medium" | "tier2" | "tier3" => 0.5,
+            "hard" | "tier4" | "tier5" | "tier6" => 0.8,
+            _ => 0.3,
+        };
+
+        // Feature 58: difficulty as proxy for test count
+        features[58] = features[57]; // same rough proxy
+
+        // Feature 59: assume starter code is present (Exercism always has it)
+        features[59] = 1.0;
 
         // Determine error category for failed attempts
         let error_category = if attempt.passed {
@@ -912,12 +1031,24 @@ fn prune_checkpoints(dir: &std::path::Path, keep: usize) {
 
 /// Run a training cycle: load experience → train → save.
 /// Returns (examples_trained, avg_loss).
+///
+/// Trains on ALL available data sources:
+/// 1. Plan outcomes (what worked/failed in plans)
+/// 2. Capability events (per-step success/failure)
+/// 3. Benchmark self-play (coding problem attempts)
+///
+/// Benchmark training is always included here — it's the highest quality
+/// signal and should never be gated by temporal oscillators.
 pub fn train_cycle(db: &SoulDatabase) -> (usize, f32) {
     let mut brain = load_brain(db);
 
-    // Collect training data from experience
+    // Collect training data from all experience sources
     let mut examples = outcomes_to_examples(db);
     examples.extend(events_to_examples(db));
+
+    // Also train on benchmark self-play data (always — don't rely on temporal gating)
+    let bench_examples = load_benchmark_training_data(db);
+    examples.extend(bench_examples);
 
     if examples.is_empty() {
         return (0, 0.0);
@@ -943,6 +1074,63 @@ pub fn train_cycle(db: &SoulDatabase) -> (usize, f32) {
     save_brain(db, &brain);
 
     (count, avg_loss)
+}
+
+/// Load benchmark training data directly from stored benchmark runs.
+/// This ensures the brain trains on benchmark data even if the temporal
+/// oscillator hasn't fired the benchmark operation.
+fn load_benchmark_training_data(db: &SoulDatabase) -> Vec<TrainingExample> {
+    let runs = db.get_all_benchmark_runs().unwrap_or_default();
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    let current_elo = crate::elo::load_rating(db) as f32;
+    let current_pass_at_1 = db
+        .get_state("benchmark_score")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<crate::benchmark::BenchmarkScore>(&s).ok())
+        .map(|s| s.pass_at_1 as f32)
+        .or_else(|| {
+            db.get_state("opus_benchmark_score")
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str::<crate::benchmark::BenchmarkScore>(&s).ok())
+                .map(|s| s.pass_at_1 as f32)
+        })
+        .unwrap_or(0.0);
+
+    // Convert recent benchmark runs to attempt contexts
+    let mut attempts = Vec::new();
+    for run in runs.iter().take(50) {
+        // Determine difficulty from slug
+        let difficulty = crate::benchmark::classify_difficulty(&run.entry_point).to_string();
+
+        attempts.push(BenchmarkAttemptContext {
+            difficulty,
+            problem_slug: run.entry_point.clone(),
+            passed: run.passed,
+            retry_number: 0, // stored runs don't track retries
+            had_peer_context: false,
+            had_peer_review: false,
+            compiled: run.passed || !run.error_output.contains("error[E"),
+            elo_rating: current_elo,
+            pass_at_1: current_pass_at_1,
+            peer_count: 0,
+        });
+    }
+
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+
+    tracing::info!(
+        runs = attempts.len(),
+        "Loading benchmark training data from stored runs"
+    );
+
+    benchmark_attempts_to_examples(&attempts)
 }
 
 /// Format brain predictions as actionable intelligence for planning prompts.

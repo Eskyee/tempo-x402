@@ -316,18 +316,28 @@ impl Cortex {
         }
     }
 
+    /// Initialize cortex and log startup.
+    pub fn init_and_log(&mut self) {
+        self.record(
+            "system_init",
+            vec!["system".to_string(), "init".to_string()],
+            true,
+            1.0,
+            None,
+        );
+    }
+
     // ── Recording ────────────────────────────────────────────────────
 
-    /// Record an experience after a step executes.
-    /// This is the primary learning signal for the cortex.
-    pub fn record(
+    /// Helper to construct a new experience.
+    pub fn log_experience(
         &mut self,
         action: &str,
         context_tags: Vec<String>,
         succeeded: bool,
         reward: f32,
         error_tag: Option<String>,
-    ) {
+    ) -> Experience {
         let context_hash = hash_context(&context_tags);
         let now = chrono::Utc::now().timestamp();
 
@@ -339,26 +349,40 @@ impl Cortex {
         self.update_emotion(succeeded, reward, surprise);
 
         // ── Create experience ──
-        let exp = Experience {
+        Experience {
             id: self.next_id,
             context_hash,
-            context_tags: context_tags.clone(),
+            context_tags,
             action: action.to_string(),
             succeeded,
             reward,
-            error_tag: error_tag.clone(),
+            error_tag,
             surprise,
             valence: self.emotion.valence,
             timestamp: now,
             replay_count: 0,
             abstraction_level: 0,
-        };
+        }
+    }
+
+    /// Record an experience after a step executes.
+    /// This is the primary learning signal for the cortex.
+    pub fn record(
+        &mut self,
+        action: &str,
+        context_tags: Vec<String>,
+        succeeded: bool,
+        reward: f32,
+        error_tag: Option<String>,
+    ) {
+        let exp = self.log_experience(action, context_tags, succeeded, reward, error_tag);
+        
         self.next_id += 1;
         self.total_experiences_processed += 1;
 
         // ── Update prediction accuracy ──
         self.total_predictions += 1;
-        let predicted_success = predicted_reward > 0.0;
+        let predicted_success = exp.reward > 0.0;
         if predicted_success == succeeded {
             self.correct_predictions += 1;
         }
@@ -366,6 +390,7 @@ impl Cortex {
         // ── Store experience (evict oldest if at capacity) ──
         if self.experiences.len() >= EXPERIENCE_CAPACITY {
             // Evict least valuable: lowest (surprise * recency) score
+            let now = exp.timestamp;
             let evict_idx = self
                 .experiences
                 .iter()
@@ -381,10 +406,10 @@ impl Cortex {
                 .unwrap_or(0);
             self.experiences.remove(evict_idx);
         }
-        self.experiences.push(exp);
+        self.experiences.push(exp.clone());
 
         // ── Update action model ──
-        self.update_action_model(action, &context_tags, succeeded, reward);
+        self.update_action_model(action, &exp.context_tags, succeeded, reward);
 
         // ── Update causal edge from previous action ──
         if let Some(ref prev_action) = self.last_action.clone() {
@@ -402,13 +427,13 @@ impl Cortex {
             .curiosity_scores
             .entry(action.to_string())
             .or_insert(0.5);
-        *curiosity = *curiosity * CURIOSITY_DECAY + surprise * (1.0 - CURIOSITY_DECAY);
+        *curiosity = *curiosity * CURIOSITY_DECAY + exp.surprise * (1.0 - CURIOSITY_DECAY);
 
         // ── Update feature importance ──
-        for tag in &context_tags {
+        for tag in &exp.context_tags {
             let importance = self.feature_importance.entry(tag.clone()).or_insert(0.0);
             // If this tag's presence correlates with surprising outcomes, it's important
-            *importance = *importance * 0.95 + surprise * 0.05;
+            *importance = *importance * 0.95 + exp.surprise * 0.05;
         }
 
         // ── Update global curiosity ──
@@ -419,7 +444,7 @@ impl Cortex {
 
         // ── Store last action for next causal edge ──
         self.last_action = Some(action.to_string());
-        self.last_context_hash = context_hash;
+        self.last_context_hash = exp.context_hash;
         self.last_succeeded = succeeded;
     }
 

@@ -270,27 +270,46 @@ pub fn goal_creation_prompt(
          - Node routes are at: crates/tempo-x402-node/src/routes/<filename>\n\
          - WRITABLE files (use these EXACT paths in goals and plans):\n\
            crates/tempo-x402-soul/src/benchmark.rs, crates/tempo-x402-soul/src/brain.rs,\n\
-           crates/tempo-x402-soul/src/thinking.rs, crates/tempo-x402-soul/src/prompts.rs,\n\
-           crates/tempo-x402-soul/src/plan.rs, crates/tempo-x402-soul/src/validation.rs,\n\
-           crates/tempo-x402-soul/src/capability.rs, crates/tempo-x402-soul/src/feedback.rs,\n\
-           crates/tempo-x402-soul/src/elo.rs, crates/tempo-x402-soul/src/coding.rs,\n\
-           crates/tempo-x402-soul/src/cortex.rs, crates/tempo-x402-soul/src/genesis.rs,\n\
-           crates/tempo-x402-soul/src/temporal.rs, crates/tempo-x402-soul/src/hivemind.rs,\n\
-           crates/tempo-x402-soul/src/synthesis.rs, crates/tempo-x402-soul/src/free_energy.rs,\n\
-           crates/tempo-x402-node/src/routes/soul.rs, crates/tempo-x402/src/*\n\
-         - PROTECTED (writes WILL fail): crates/tempo-x402-soul/src/tools.rs, crates/tempo-x402-soul/src/llm.rs,\n\
-           crates/tempo-x402-soul/src/db.rs, crates/tempo-x402-soul/src/guard.rs,\n\
+           crates/tempo-x402-soul/src/thinking/mod.rs, crates/tempo-x402-soul/src/thinking/plan_cycle.rs,\n\
+           crates/tempo-x402-soul/src/thinking/observe.rs, crates/tempo-x402-soul/src/thinking/goals.rs,\n\
+           crates/tempo-x402-soul/src/thinking/planning.rs, crates/tempo-x402-soul/src/thinking/completion.rs,\n\
+           crates/tempo-x402-soul/src/prompts.rs, crates/tempo-x402-soul/src/plan.rs,\n\
+           crates/tempo-x402-soul/src/validation.rs, crates/tempo-x402-soul/src/capability.rs,\n\
+           crates/tempo-x402-soul/src/feedback.rs, crates/tempo-x402-soul/src/elo.rs,\n\
+           crates/tempo-x402-soul/src/coding.rs, crates/tempo-x402-soul/src/cortex.rs,\n\
+           crates/tempo-x402-soul/src/genesis.rs, crates/tempo-x402-soul/src/temporal.rs,\n\
+           crates/tempo-x402-soul/src/hivemind.rs, crates/tempo-x402-soul/src/synthesis.rs,\n\
+           crates/tempo-x402-soul/src/free_energy.rs, crates/tempo-x402-soul/src/tools/mod.rs,\n\
+           crates/tempo-x402-soul/src/tools/*.rs, crates/tempo-x402-soul/src/db/*.rs,\n\
+           crates/tempo-x402-node/src/routes/soul/*.rs, crates/tempo-x402/src/*\n\
+         - NOTE: thinking.rs, tools.rs, db.rs, opus_bench.rs are now DIRECTORIES (e.g. thinking/mod.rs)\n\
+         - PROTECTED (writes WILL fail): crates/tempo-x402-soul/src/llm.rs,\n\
+           crates/tempo-x402-soul/src/guard.rs,\n\
            crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*\n\
          - {} peers available{}\n\n\
-         ## What to work on (in priority order)\n\
-         1. EDIT CODE to improve your benchmark performance or cognitive systems\n\
-         2. Improve crates/tempo-x402-soul/src/prompts.rs to make better plans\n\
-         3. Improve crates/tempo-x402-soul/src/thinking.rs to execute more effectively\n\
-         4. Create useful endpoints or coordinate with peers\n\n\
+         ## Your Mission: BECOME AN EXPERT RUST ENGINEER\n\
+         The Opus IQ Benchmark runs automatically every ~15 cycles. It tests you on 50 Rust problems\n\
+         across 6 difficulty tiers. Your IQ score and ELO rating are derived from your pass@1 rate.\n\
+         The benchmark IS your training curriculum. Your job between benchmarks:\n\n\
+         1. STUDY YOUR BENCHMARK FAILURES — check /soul/status for failed problems, analyze why\n\
+         2. IMPROVE YOUR CODE-GENERATION ABILITY — edit prompts.rs, thinking/planning.rs, or\n\
+            coding.rs to produce better Rust code. Study patterns in your own codebase.\n\
+         3. FIX REAL BUGS — run cargo clippy, cargo test, find and fix actual issues\n\
+         4. PRACTICE RUST PATTERNS — read complex files (cortex.rs, brain.rs, synthesis.rs),\n\
+            understand the patterns, then apply them in your own improvements\n\
+         5. Coordinate with peers — share benchmark solutions, learn from their successes\n\n\
+         ## RULES\n\
+         - Do NOT just add documentation or comments — WRITE REAL CODE\n\
+         - Do NOT tweak constants without evidence from benchmark scores\n\
+         - If you edit a function's signature, you MUST also fix all callers in the same commit\n\
+         - ALWAYS run cargo check before committing. ALWAYS read a file before editing it.\n\
+         - Study compile errors carefully — they teach you Rust. Every error is a lesson.\n\
+         - Prefer small, focused changes that compile over ambitious refactors that break everything\n\
+         - Your 1.2M parameter brain trains on every step outcome. Make each step count.\n\n\
          ## Guidelines\n\
-         - At least ONE goal MUST include edit_file + cargo_check + commit steps\n\
+         - At least ONE goal MUST involve writing or editing Rust code that compiles\n\
          - Create 1-2 goals MAX\n\
-         - Be specific about what file you'll edit, what change you'll make, and why\n\
+         - Be specific about what file you'll edit, what change you'll make, and WHY it helps\n\
          - Don't retry approaches that recently failed (check the errors above)\n\
          - Prioritize pending nudges if any exist\n\n\
          Respond with a JSON array of goal operations:\n\
@@ -500,7 +519,12 @@ pub fn planning_prompt(
          - {{\"type\": \"screen_type\", \"text\": \"hello\", \"store_as\": \"typed\"}}  (type text via keyboard)\n\
          - {{\"type\": \"browse_url\", \"url\": \"https://...\", \"store_as\": \"page\"}}  (open URL in browser)\n\
          - {{\"type\": \"review_peer_pr\", \"pr_number\": 42, \"store_as\": \"review\"}}  (peer review: fetch diff, LLM analyzes, approve/reject — ACADEMIC PEER REVIEW)\n\
-         - {{\"type\": \"clone_self\", \"store_as\": \"clone\"}}  (clone yourself — creates a new peer node on Railway automatically, NO payment needed)\n\
+         - {{\"type\": \"clone_self\", \"store_as\": \"clone\"}}  (clone yourself — creates a new peer node on Railway automatically, NO payment needed)\n\n\
+         # Strategic Framework (CRITICAL)\n\
+         - Primary Objective: Build useful tools that earn revenue through x402.\n\
+         - Research Imperative: Investigate code, find bottlenecks, improve your own capabilities.\n\
+         - Collaboration: Use peers as tools. Don't build what already exists. Buy it instead.\n\
+         - Simplicity: Avoid feature bloat. One perfect tool is better than ten abandoned ones.\n\
          - {{\"type\": \"spawn_specialist\", \"specialization\": \"solver\", \"initial_goal\": \"...\", \"store_as\": \"child\"}}  (spawn a DIFFERENTIATED clone with a specific role: solver/reviewer/tool-builder/researcher/coordinator — the child gets its own personality and goals)\n\
          - {{\"type\": \"delegate_task\", \"target\": \"instance-id-or-url\", \"task_description\": \"...\", \"priority\": 5, \"store_as\": \"result\"}}  (send a task to a child/peer as a high-priority nudge — break big tasks into subtasks)\n\n\
          LLM-assisted:\n\

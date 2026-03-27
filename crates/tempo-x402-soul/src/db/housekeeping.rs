@@ -237,11 +237,7 @@ impl SoulDatabase {
             .try_into()
             .unwrap_or(0);
 
-        // Reset cycle counters
-        let _ = conn.execute(
-            "INSERT OR REPLACE INTO soul_state (key, value) VALUES ('total_think_cycles', '0')",
-            [],
-        );
+        // Reset cycle counters (ephemeral — safe to reset)
         let _ = conn.execute(
             "INSERT OR REPLACE INTO soul_state (key, value) VALUES ('cycles_since_last_commit', '0')",
             [],
@@ -275,8 +271,7 @@ impl SoulDatabase {
             "New deploy detected — resetting ephemeral counters"
         );
 
-        // Reset cycle counters
-        let _ = self.set_state("total_think_cycles", "0");
+        // Reset cycle counters (ephemeral — safe to reset)
         let _ = self.set_state("cycles_since_last_commit", "0");
         let _ = self.set_state("recent_errors", "[]");
         let _ = self.set_state("last_benchmark_at", "0");

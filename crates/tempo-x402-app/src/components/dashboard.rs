@@ -490,7 +490,7 @@ pub fn DashboardPage() -> impl IntoView {
 
                         // ═══ TERMINAL PANEL (bottom, full width) ═══
                         <div class="tmux-terminal">
-                            <TerminalPanel children=children soul_data=soul_data eps=eps />
+                            <TerminalPanel children=children.clone() soul_data=soul_data.clone() eps=eps.clone() />
                         </div>
 
                         // Sticky footer with external links
@@ -824,6 +824,37 @@ pub fn TerminalPanel(
 ) -> impl IntoView {
     let (active_tab, set_active_tab) = create_signal(0usize);
 
+    // Clone data for use in closures
+    let children_net = children.clone();
+    let children_act = children.clone();
+    let soul_data_act = soul_data.clone();
+    let eps_copy = eps.clone();
+
+    // Pre-compute network tab data
+    let net_rows: Vec<serde_json::Value> = children_net.clone();
+    let eval_data = soul_data.get("evaluation").cloned().unwrap_or(serde_json::json!({}));
+    let colony_syncs = eval_data.get("colony_benefit").and_then(|c| c.get("syncs_measured")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let colony_delta = eval_data.get("colony_benefit").and_then(|c| c.get("avg_sync_benefit")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    // Pre-compute activity tab data
+    let hive_data = soul_data_act.get("hivemind").cloned().unwrap_or(serde_json::json!({}));
+    let hive_deposits = hive_data.get("total_deposits").and_then(|v| v.as_u64()).unwrap_or(0);
+    let hive_trails = hive_data.get("total_trails").and_then(|v| v.as_u64()).unwrap_or(0);
+    let hive_evap = hive_data.get("evaporation_cycles").and_then(|v| v.as_u64()).unwrap_or(0);
+    let hive_attractants = hive_data.get("top_attractants").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    // Pre-compute cortex data
+    let cortex_drive = soul_data_act.get("cortex").and_then(|c| c.get("emotion")).and_then(|e| e.get("drive")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
+    let cortex_valence = soul_data_act.get("cortex").and_then(|c| c.get("emotion")).and_then(|e| e.get("valence")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cortex_experiences = soul_data_act.get("cortex").and_then(|c| c.get("total_experiences")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let cortex_dreams = soul_data_act.get("cortex").and_then(|c| c.get("dream_cycles")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let has_cortex = soul_data_act.get("cortex").is_some();
+
+    // Pre-compute genesis data
+    let genesis_generation = soul_data_act.get("genesis").and_then(|g| g.get("generation")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let genesis_mutations = soul_data_act.get("genesis").and_then(|g| g.get("total_mutations")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let has_genesis = soul_data_act.get("genesis").is_some();
+
     view! {
         <div class="tmux-terminal">
             <div class="tmux-terminal-tabs">
@@ -841,23 +872,24 @@ pub fn TerminalPanel(
                 >"ENDPOINTS"</button>
             </div>
 
-            // ─── NETWORK TAB (peers + colony) ───
+            // ─── NETWORK TAB ───
             <Show when=move || active_tab.get() == 0 fallback=|| ()>
                 <div class="tmux-terminal-body">
-                    {children.iter().map(|child| {
+                    {net_rows.iter().map(|child| {
                         let id = child.get("instance_id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
                         let url = child.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         let status = child.get("status").and_then(|v| v.as_str()).unwrap_or("?").to_string();
                         let dot_class = if status == "running" { "tmux-peer-dot tmux-peer-dot--running" } else { "tmux-peer-dot tmux-peer-dot--stopped" };
                         let short = if id.len() > 12 { format!("{}...", &id[..12]) } else { id };
+                        let url_inner = url.clone();
                         view! {
                             <div class="tmux-terminal-row">
                                 <span class={dot_class}></span>
                                 <span class="tmux-terminal-badge tmux-terminal-badge--peer">"PEER"</span>
                                 <span>{short}</span>
                                 <span class="tmux-terminal-msg">
-                                    {if !url.is_empty() {
-                                        view! { <a href={url.clone()} target="_blank" style="color: var(--accent);">{url}</a> }.into_view()
+                                    {if !url_inner.is_empty() {
+                                        view! { <a href={url_inner.clone()} target="_blank" style="color: var(--accent);">{url_inner}</a> }.into_view()
                                     } else {
                                         view! { <span style="color: var(--text-dim);">"no url"</span> }.into_view()
                                     }}
@@ -867,108 +899,78 @@ pub fn TerminalPanel(
                         }
                     }).collect::<Vec<_>>()}
 
-                    // Colony sync info
-                    {
-                        let eval = soul_data.get("evaluation");
-                        let syncs = eval.and_then(|e| e.get("colony_benefit")).and_then(|c| c.get("syncs_measured")).and_then(|v| v.as_u64()).unwrap_or(0);
-                        let delta = eval.and_then(|e| e.get("colony_benefit")).and_then(|c| c.get("avg_sync_benefit")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        if syncs > 0 {
-                            view! {
-                                <div class="tmux-terminal-row">
-                                    <span class="tmux-terminal-badge tmux-terminal-badge--sync">"SYNC"</span>
-                                    <span class="tmux-terminal-msg">
-                                        {format!("{} cognitive syncs completed, avg benefit {:+.3}", syncs, delta)}
-                                    </span>
-                                </div>
-                            }.into_view()
-                        } else {
-                            ().into_view()
-                        }
-                    }
+                    {if colony_syncs > 0 {
+                        view! {
+                            <div class="tmux-terminal-row">
+                                <span class="tmux-terminal-badge tmux-terminal-badge--sync">"SYNC"</span>
+                                <span class="tmux-terminal-msg">
+                                    {format!("{} cognitive syncs completed, avg benefit {:+.3}", colony_syncs, colony_delta)}
+                                </span>
+                            </div>
+                        }.into_view()
+                    } else { ().into_view() }}
 
-                    {if children.is_empty() {
+                    {if net_rows.is_empty() {
                         view! { <div class="tmux-terminal-row"><span class="tmux-terminal-msg" style="color: var(--text-dim);">"No peers connected"</span></div> }.into_view()
                     } else { ().into_view() }}
                 </div>
             </Show>
 
-            // ─── ACTIVITY TAB (hivemind + cortex events) ───
+            // ─── ACTIVITY TAB ───
             <Show when=move || active_tab.get() == 1 fallback=|| ()>
                 <div class="tmux-terminal-body">
-                    {
-                        let hive_data = soul_data.get("hivemind");
-                        let deposits = hive_data.and_then(|h| h.get("total_deposits")).and_then(|v| v.as_u64()).unwrap_or(0);
-                        let trails = hive_data.and_then(|h| h.get("total_trails")).and_then(|v| v.as_u64()).unwrap_or(0);
-                        let evap = hive_data.and_then(|h| h.get("evaporation_cycles")).and_then(|v| v.as_u64()).unwrap_or(0);
-                        let attractants = hive_data
-                            .and_then(|h| h.get("top_attractants"))
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-
+                    <div class="tmux-terminal-row">
+                        <span class="tmux-terminal-badge tmux-terminal-badge--sync">"HIVE"</span>
+                        <span class="tmux-terminal-msg">
+                            {format!("{} trails, {} deposits, {} evaporation cycles", hive_trails, hive_deposits, hive_evap)}
+                        </span>
+                    </div>
+                    {hive_attractants.iter().take(5).map(|a| {
+                        let resource = a.get("resource").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                        let intensity = a.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let reinforced = a.get("reinforced").and_then(|v| v.as_u64()).unwrap_or(0);
                         view! {
                             <div class="tmux-terminal-row">
-                                <span class="tmux-terminal-badge tmux-terminal-badge--sync">"HIVE"</span>
+                                <span class="tmux-terminal-badge tmux-terminal-badge--tx">"TRAIL"</span>
+                                <span>{resource}</span>
                                 <span class="tmux-terminal-msg">
-                                    {format!("{} trails, {} deposits, {} evaporation cycles", trails, deposits, evap)}
+                                    {format!("intensity {:.0}% reinforced {}x", intensity * 100.0, reinforced)}
                                 </span>
                             </div>
-                            {attractants.iter().take(5).map(|a| {
-                                let resource = a.get("resource").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                                let intensity = a.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let reinforced = a.get("reinforced").and_then(|v| v.as_u64()).unwrap_or(0);
-                                view! {
-                                    <div class="tmux-terminal-row">
-                                        <span class="tmux-terminal-badge tmux-terminal-badge--tx">"TRAIL"</span>
-                                        <span>{resource}</span>
-                                        <span class="tmux-terminal-msg">
-                                            {format!("intensity {:.0}% reinforced {}x", intensity * 100.0, reinforced)}
-                                        </span>
-                                    </div>
-                                }
-                            }).collect::<Vec<_>>()}
-
-                            // Cortex activity
-                            {soul_data.get("cortex").map(|c| {
-                                let drive = c.get("emotion").and_then(|e| e.get("drive")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
-                                let valence = c.get("emotion").and_then(|e| e.get("valence")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let experiences = c.get("total_experiences").and_then(|v| v.as_u64()).unwrap_or(0);
-                                let dreams = c.get("dream_cycles").and_then(|v| v.as_u64()).unwrap_or(0);
-                                view! {
-                                    <div class="tmux-terminal-row">
-                                        <span class="tmux-terminal-badge tmux-terminal-badge--sync">"CORTEX"</span>
-                                        <span class="tmux-terminal-msg">
-                                            {format!("drive={} valence={:+.2} experiences={} dreams={}", drive, valence, experiences, dreams)}
-                                        </span>
-                                    </div>
-                                }
-                            })}
-
-                            // Genesis mutations
-                            {soul_data.get("genesis").map(|g| {
-                                let generation = g.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
-                                let mutations = g.get("total_mutations").and_then(|v| v.as_u64()).unwrap_or(0);
-                                view! {
-                                    <div class="tmux-terminal-row">
-                                        <span class="tmux-terminal-badge tmux-terminal-badge--peer">"GENESIS"</span>
-                                        <span class="tmux-terminal-msg">
-                                            {format!("generation={} mutations={}", generation, mutations)}
-                                        </span>
-                                    </div>
-                                }
-                            })}
                         }
-                    }
+                    }).collect::<Vec<_>>()}
+
+                    {if has_cortex {
+                        view! {
+                            <div class="tmux-terminal-row">
+                                <span class="tmux-terminal-badge tmux-terminal-badge--sync">"CORTEX"</span>
+                                <span class="tmux-terminal-msg">
+                                    {format!("drive={} valence={:+.2} experiences={} dreams={}", cortex_drive, cortex_valence, cortex_experiences, cortex_dreams)}
+                                </span>
+                            </div>
+                        }.into_view()
+                    } else { ().into_view() }}
+
+                    {if has_genesis {
+                        view! {
+                            <div class="tmux-terminal-row">
+                                <span class="tmux-terminal-badge tmux-terminal-badge--peer">"GENESIS"</span>
+                                <span class="tmux-terminal-msg">
+                                    {format!("generation={} mutations={}", genesis_generation, genesis_mutations)}
+                                </span>
+                            </div>
+                        }.into_view()
+                    } else { ().into_view() }}
                 </div>
             </Show>
 
             // ─── ENDPOINTS TAB ───
             <Show when=move || active_tab.get() == 2 fallback=|| ()>
                 <div class="tmux-terminal-body">
-                    {if eps.is_empty() {
+                    {if eps_copy.is_empty() {
                         view! { <div class="tmux-terminal-row"><span class="tmux-terminal-msg" style="color: var(--text-dim);">"No endpoints registered"</span></div> }.into_view()
                     } else {
-                        eps.iter().map(|ep| {
+                        eps_copy.iter().map(|ep| {
                             let slug = ep.get("slug").and_then(|v| v.as_str()).unwrap_or("?").to_string();
                             let price = ep.get("price").and_then(|v| v.as_str()).unwrap_or("0").to_string();
                             let desc = ep.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();

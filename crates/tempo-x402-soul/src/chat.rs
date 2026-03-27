@@ -101,9 +101,23 @@ pub async fn handle_chat(
 
     let plan_context = build_plan_context(db);
 
+    // Inject benchmark context so the human can see failures and teach Rust patterns
+    let benchmark_context = {
+        let bench_summary = crate::benchmark::opus_summary_for_prompt(db);
+        let capability_profile = crate::capability::capability_guidance(db);
+        if bench_summary.is_empty() && capability_profile.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Benchmark & Capabilities:\n{}\n{}\n\n",
+                bench_summary, capability_profile
+            )
+        }
+    };
+
     let context_message = format!(
-        "{}Current node state:\n{}\n\n{}",
-        memory_section, snapshot_json, plan_context
+        "{}{}Current node state:\n{}\n\n{}",
+        memory_section, benchmark_context, snapshot_json, plan_context
     );
 
     // 6. Build conversation from session history

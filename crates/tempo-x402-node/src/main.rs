@@ -537,6 +537,22 @@ async fn main() -> std::io::Result<()> {
                     child_env_vars.insert("SOUL_INITIAL_GOAL".into(), goal);
                 }
 
+                // Benchmark mode — ensure entire colony uses the same benchmark suite
+                // Without this, clones default to Exercism while parent runs Opus
+                if let Ok(mode) = std::env::var("SOUL_BENCHMARK_MODE") {
+                    child_env_vars.insert("SOUL_BENCHMARK_MODE".into(), mode);
+                }
+
+                // Metrics security — forward parent's token to children
+                if let Ok(token) = std::env::var("METRICS_TOKEN") {
+                    child_env_vars.insert("METRICS_TOKEN".into(), token);
+                }
+
+                // Admin token — so operator can access child admin endpoints
+                if let Ok(token) = std::env::var("SOUL_ADMIN_TOKEN") {
+                    child_env_vars.insert("SOUL_ADMIN_TOKEN".into(), token);
+                }
+
                 // NOTE: Do NOT set FACILITATOR_PRIVATE_KEY, EVM_ADDRESS, or
                 // FACILITATOR_SHARED_SECRET — AUTO_BOOTSTRAP generates unique
                 // ones per node via identity bootstrap. Setting them here would

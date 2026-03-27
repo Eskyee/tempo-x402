@@ -445,8 +445,8 @@ impl TemporalBinding {
             ),
             Oscillator::new(
                 OP_BENCHMARK,
-                80,
-                40,
+                15,
+                5,
                 vec![
                     ("time_pressure", 0.5),
                     ("training_progress", 0.3),

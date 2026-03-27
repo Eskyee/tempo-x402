@@ -1354,12 +1354,13 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    // Don't benchmark in first 20 cycles — let agent warm up
-    if total_cycles < 20 {
+    // Don't benchmark in first 5 cycles — minimal warmup
+    if total_cycles < 5 {
         return false;
     }
 
-    // Check cooldown — don't run more than once per hour
+    // Check cooldown — don't run more than once per 15 minutes
+    // The benchmark IS the training loop. Run it frequently.
     let last_benchmark: i64 = db
         .get_state("last_benchmark_at")
         .ok()
@@ -1367,7 +1368,7 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let now = chrono::Utc::now().timestamp();
-    if now - last_benchmark < 3600 {
+    if now - last_benchmark < 900 {
         return false;
     }
 
@@ -1383,8 +1384,9 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
     total_cycles / interval > last_benchmark_cycle / interval
 }
 
-/// Run benchmark every 30 cycles (was 100) — more data, faster learning, more self-play training.
-pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 30;
+/// Run benchmark every 10 cycles — the benchmark IS the Rust training curriculum.
+/// Every problem solved teaches Rust patterns. Every failure identifies weaknesses.
+pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 10;
 /// Sample 15 problems per session (was 10) — broader coverage per run.
 pub const DEFAULT_SAMPLE_SIZE: usize = 15;
 

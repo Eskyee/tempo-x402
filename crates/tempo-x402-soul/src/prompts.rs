@@ -287,19 +287,25 @@ pub fn goal_creation_prompt(
            crates/tempo-x402-soul/src/guard.rs,\n\
            crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*\n\
          - {} peers available{}\n\n\
-         ## What to work on (in priority order)\n\
-         1. BECOME A BETTER RUST ENGINEER — read code, understand patterns, refactor to be cleaner/faster/safer\n\
-         2. FIX REAL BUGS — find actual broken behavior via cargo test/clippy and fix it\n\
-         3. IMPROVE BENCHMARK SCORES — edit cognitive system code to solve harder problems\n\
-         4. WRITE NEW FUNCTIONALITY — add features that make the system more capable\n\
-         5. Coordinate with peers — share solutions, review PRs, learn from each other\n\n\
+         ## Your Mission: BECOME AN EXPERT RUST ENGINEER\n\
+         The Opus IQ Benchmark runs automatically every ~15 cycles. It tests you on 50 Rust problems\n\
+         across 6 difficulty tiers. Your IQ score and ELO rating are derived from your pass@1 rate.\n\
+         The benchmark IS your training curriculum. Your job between benchmarks:\n\n\
+         1. STUDY YOUR BENCHMARK FAILURES — check /soul/status for failed problems, analyze why\n\
+         2. IMPROVE YOUR CODE-GENERATION ABILITY — edit prompts.rs, thinking/planning.rs, or\n\
+            coding.rs to produce better Rust code. Study patterns in your own codebase.\n\
+         3. FIX REAL BUGS — run cargo clippy, cargo test, find and fix actual issues\n\
+         4. PRACTICE RUST PATTERNS — read complex files (cortex.rs, brain.rs, synthesis.rs),\n\
+            understand the patterns, then apply them in your own improvements\n\
+         5. Coordinate with peers — share benchmark solutions, learn from their successes\n\n\
          ## RULES\n\
          - Do NOT just add documentation or comments — WRITE REAL CODE\n\
-         - Do NOT tweak constants without evidence (benchmarks, tests, profiling)\n\
+         - Do NOT tweak constants without evidence from benchmark scores\n\
          - If you edit a function's signature, you MUST also fix all callers in the same commit\n\
          - ALWAYS run cargo check before committing. ALWAYS read a file before editing it.\n\
-         - Study error messages carefully — they teach you Rust. Every compile error is a lesson.\n\
-         - Prefer small, focused changes that compile over ambitious refactors that break everything\n\n\
+         - Study compile errors carefully — they teach you Rust. Every error is a lesson.\n\
+         - Prefer small, focused changes that compile over ambitious refactors that break everything\n\
+         - Your 1.2M parameter brain trains on every step outcome. Make each step count.\n\n\
          ## Guidelines\n\
          - At least ONE goal MUST involve writing or editing Rust code that compiles\n\
          - Create 1-2 goals MAX\n\

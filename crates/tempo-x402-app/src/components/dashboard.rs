@@ -490,92 +490,7 @@ pub fn DashboardPage() -> impl IntoView {
 
                         // ═══ TERMINAL PANEL (bottom, full width) ═══
                         <div class="tmux-terminal">
-                            <div class="tmux-terminal-tabs">
-                                <button class="tmux-terminal-tab tmux-terminal-tab--active">"NETWORK"</button>
-                                <button class="tmux-terminal-tab">"ACTIVITY"</button>
-                                <button class="tmux-terminal-tab">"ENDPOINTS"</button>
-                            </div>
-                            <div class="tmux-terminal-body">
-                                // Peer network as terminal rows
-                                {children.iter().map(|child| {
-                                    let id = child.get("instance_id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                                    let url = child.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                    let status = child.get("status").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                                    let dot_class = if status == "running" { "tmux-peer-dot tmux-peer-dot--running" } else { "tmux-peer-dot tmux-peer-dot--stopped" };
-                                    let short = if id.len() > 12 { format!("{}...", &id[..12]) } else { id };
-                                    view! {
-                                        <div class="tmux-terminal-row">
-                                            <span class={dot_class}></span>
-                                            <span class="tmux-terminal-badge tmux-terminal-badge--peer">"PEER"</span>
-                                            <span>{short}</span>
-                                            <span class="tmux-terminal-msg">
-                                                {if !url.is_empty() {
-                                                    view! { <a href={url.clone()} target="_blank" style="color: var(--accent);">{url}</a> }.into_view()
-                                                } else {
-                                                    view! { <span style="color: var(--text-dim);">"no url"</span> }.into_view()
-                                                }}
-                                            </span>
-                                            <span class="tmux-tag tmux-tag--green">{status}</span>
-                                        </div>
-                                    }
-                                }).collect::<Vec<_>>()}
-
-                                // Hivemind pheromone activity
-                                {
-                                    let hive_data = soul_data.get("hivemind");
-                                    let deposits = hive_data.and_then(|h| h.get("total_deposits")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let trails = hive_data.and_then(|h| h.get("total_trails")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let evap = hive_data.and_then(|h| h.get("evaporation_cycles")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let attractants = hive_data
-                                        .and_then(|h| h.get("top_attractants"))
-                                        .and_then(|v| v.as_array())
-                                        .cloned()
-                                        .unwrap_or_default();
-
-                                    view! {
-                                        <div class="tmux-terminal-row">
-                                            <span class="tmux-terminal-badge tmux-terminal-badge--sync">"HIVE"</span>
-                                            <span class="tmux-terminal-msg">
-                                                {format!("{} trails, {} deposits, {} evaporation cycles", trails, deposits, evap)}
-                                            </span>
-                                        </div>
-                                        {attractants.iter().take(3).map(|a| {
-                                            let resource = a.get("resource").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                                            let intensity = a.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                            let reinforced = a.get("reinforced").and_then(|v| v.as_u64()).unwrap_or(0);
-                                            view! {
-                                                <div class="tmux-terminal-row">
-                                                    <span class="tmux-terminal-ts"></span>
-                                                    <span class="tmux-terminal-badge tmux-terminal-badge--tx">"TRAIL"</span>
-                                                    <span>{resource}</span>
-                                                    <span class="tmux-terminal-msg">
-                                                        {format!("intensity {:.0}% reinforced {}x", intensity * 100.0, reinforced)}
-                                                    </span>
-                                                </div>
-                                            }
-                                        }).collect::<Vec<_>>()}
-                                    }
-                                }
-
-                                // Colony sync info
-                                {
-                                    let eval = soul_data.get("evaluation");
-                                    let syncs = eval.and_then(|e| e.get("colony_benefit")).and_then(|c| c.get("syncs_measured")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let delta = eval.and_then(|e| e.get("colony_benefit")).and_then(|c| c.get("avg_sync_benefit")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                    if syncs > 0 {
-                                        Some(view! {
-                                            <div class="tmux-terminal-row">
-                                                <span class="tmux-terminal-badge tmux-terminal-badge--sync">"SYNC"</span>
-                                                <span class="tmux-terminal-msg">
-                                                    {format!("{} cognitive syncs completed, avg benefit {:+.3}", syncs, delta)}
-                                                </span>
-                                            </div>
-                                        })
-                                    } else {
-                                        None
-                                    }
-                                }
-                            </div>
+                            <TerminalPanel children=children soul_data=soul_data eps=eps />
                         </div>
 
                         // Sticky footer with external links
@@ -584,7 +499,7 @@ pub fn DashboardPage() -> impl IntoView {
                             <span class="tmux-footer-dot">{"\u{00B7}"}</span>
                             <a href="https://crates.io/crates/tempo-x402" target="_blank">"crates"</a>
                             <span class="tmux-footer-dot">{"\u{00B7}"}</span>
-                            <a href="https://github.com/compusophy/tempo-x402" target="_blank">"github"</a>
+                            <a href="https://github.com/Eskyee/tempo-x402" target="_blank">"github"</a>
                             <span class="tmux-footer-spacer"></span>
                             <span class="tmux-footer-text">{concat!("tempo-x402 v", env!("CARGO_PKG_VERSION"))}</span>
                         </div>
@@ -897,5 +812,178 @@ fn format_uptime(secs: i64) -> String {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     } else {
         format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+    }
+}
+
+/// Tabbed terminal panel with NETWORK / ACTIVITY / ENDPOINTS
+#[component]
+pub fn TerminalPanel(
+    children: Vec<serde_json::Value>,
+    soul_data: serde_json::Value,
+    eps: Vec<serde_json::Value>,
+) -> impl IntoView {
+    let (active_tab, set_active_tab) = create_signal(0usize);
+
+    view! {
+        <div class="tmux-terminal">
+            <div class="tmux-terminal-tabs">
+                <button
+                    class=move || if active_tab.get() == 0 { "tmux-terminal-tab tmux-terminal-tab--active" } else { "tmux-terminal-tab" }
+                    on:click=move |_| set_active_tab.set(0)
+                >"NETWORK"</button>
+                <button
+                    class=move || if active_tab.get() == 1 { "tmux-terminal-tab tmux-terminal-tab--active" } else { "tmux-terminal-tab" }
+                    on:click=move |_| set_active_tab.set(1)
+                >"ACTIVITY"</button>
+                <button
+                    class=move || if active_tab.get() == 2 { "tmux-terminal-tab tmux-terminal-tab--active" } else { "tmux-terminal-tab" }
+                    on:click=move |_| set_active_tab.set(2)
+                >"ENDPOINTS"</button>
+            </div>
+
+            // ─── NETWORK TAB (peers + colony) ───
+            <Show when=move || active_tab.get() == 0 fallback=|| ()>
+                <div class="tmux-terminal-body">
+                    {children.iter().map(|child| {
+                        let id = child.get("instance_id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                        let url = child.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let status = child.get("status").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                        let dot_class = if status == "running" { "tmux-peer-dot tmux-peer-dot--running" } else { "tmux-peer-dot tmux-peer-dot--stopped" };
+                        let short = if id.len() > 12 { format!("{}...", &id[..12]) } else { id };
+                        view! {
+                            <div class="tmux-terminal-row">
+                                <span class={dot_class}></span>
+                                <span class="tmux-terminal-badge tmux-terminal-badge--peer">"PEER"</span>
+                                <span>{short}</span>
+                                <span class="tmux-terminal-msg">
+                                    {if !url.is_empty() {
+                                        view! { <a href={url.clone()} target="_blank" style="color: var(--accent);">{url}</a> }.into_view()
+                                    } else {
+                                        view! { <span style="color: var(--text-dim);">"no url"</span> }.into_view()
+                                    }}
+                                </span>
+                                <span class="tmux-tag tmux-tag--green">{status}</span>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()}
+
+                    // Colony sync info
+                    {
+                        let eval = soul_data.get("evaluation");
+                        let syncs = eval.and_then(|e| e.get("colony_benefit")).and_then(|c| c.get("syncs_measured")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let delta = eval.and_then(|e| e.get("colony_benefit")).and_then(|c| c.get("avg_sync_benefit")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        if syncs > 0 {
+                            view! {
+                                <div class="tmux-terminal-row">
+                                    <span class="tmux-terminal-badge tmux-terminal-badge--sync">"SYNC"</span>
+                                    <span class="tmux-terminal-msg">
+                                        {format!("{} cognitive syncs completed, avg benefit {:+.3}", syncs, delta)}
+                                    </span>
+                                </div>
+                            }.into_view()
+                        } else {
+                            ().into_view()
+                        }
+                    }
+
+                    {if children.is_empty() {
+                        view! { <div class="tmux-terminal-row"><span class="tmux-terminal-msg" style="color: var(--text-dim);">"No peers connected"</span></div> }.into_view()
+                    } else { ().into_view() }}
+                </div>
+            </Show>
+
+            // ─── ACTIVITY TAB (hivemind + cortex events) ───
+            <Show when=move || active_tab.get() == 1 fallback=|| ()>
+                <div class="tmux-terminal-body">
+                    {
+                        let hive_data = soul_data.get("hivemind");
+                        let deposits = hive_data.and_then(|h| h.get("total_deposits")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let trails = hive_data.and_then(|h| h.get("total_trails")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let evap = hive_data.and_then(|h| h.get("evaporation_cycles")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let attractants = hive_data
+                            .and_then(|h| h.get("top_attractants"))
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+
+                        view! {
+                            <div class="tmux-terminal-row">
+                                <span class="tmux-terminal-badge tmux-terminal-badge--sync">"HIVE"</span>
+                                <span class="tmux-terminal-msg">
+                                    {format!("{} trails, {} deposits, {} evaporation cycles", trails, deposits, evap)}
+                                </span>
+                            </div>
+                            {attractants.iter().take(5).map(|a| {
+                                let resource = a.get("resource").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                                let intensity = a.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let reinforced = a.get("reinforced").and_then(|v| v.as_u64()).unwrap_or(0);
+                                view! {
+                                    <div class="tmux-terminal-row">
+                                        <span class="tmux-terminal-badge tmux-terminal-badge--tx">"TRAIL"</span>
+                                        <span>{resource}</span>
+                                        <span class="tmux-terminal-msg">
+                                            {format!("intensity {:.0}% reinforced {}x", intensity * 100.0, reinforced)}
+                                        </span>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+
+                            // Cortex activity
+                            {soul_data.get("cortex").map(|c| {
+                                let drive = c.get("emotion").and_then(|e| e.get("drive")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
+                                let valence = c.get("emotion").and_then(|e| e.get("valence")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let experiences = c.get("total_experiences").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let dreams = c.get("dream_cycles").and_then(|v| v.as_u64()).unwrap_or(0);
+                                view! {
+                                    <div class="tmux-terminal-row">
+                                        <span class="tmux-terminal-badge tmux-terminal-badge--sync">"CORTEX"</span>
+                                        <span class="tmux-terminal-msg">
+                                            {format!("drive={} valence={:+.2} experiences={} dreams={}", drive, valence, experiences, dreams)}
+                                        </span>
+                                    </div>
+                                }
+                            })}
+
+                            // Genesis mutations
+                            {soul_data.get("genesis").map(|g| {
+                                let generation = g.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let mutations = g.get("total_mutations").and_then(|v| v.as_u64()).unwrap_or(0);
+                                view! {
+                                    <div class="tmux-terminal-row">
+                                        <span class="tmux-terminal-badge tmux-terminal-badge--peer">"GENESIS"</span>
+                                        <span class="tmux-terminal-msg">
+                                            {format!("generation={} mutations={}", generation, mutations)}
+                                        </span>
+                                    </div>
+                                }
+                            })}
+                        }
+                    }
+                </div>
+            </Show>
+
+            // ─── ENDPOINTS TAB ───
+            <Show when=move || active_tab.get() == 2 fallback=|| ()>
+                <div class="tmux-terminal-body">
+                    {if eps.is_empty() {
+                        view! { <div class="tmux-terminal-row"><span class="tmux-terminal-msg" style="color: var(--text-dim);">"No endpoints registered"</span></div> }.into_view()
+                    } else {
+                        eps.iter().map(|ep| {
+                            let slug = ep.get("slug").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                            let price = ep.get("price").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+                            let desc = ep.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            view! {
+                                <div class="tmux-terminal-row">
+                                    <span class="tmux-terminal-badge tmux-terminal-badge--tx">"API"</span>
+                                    <span>{format!("/g/{}", slug)}</span>
+                                    <span class="tmux-tag tmux-tag--green">{format!("${}", price)}</span>
+                                    <span class="tmux-terminal-msg">{desc}</span>
+                                </div>
+                            }
+                        }).collect::<Vec<_>>().into_view()
+                    }}
+                </div>
+            </Show>
+        </div>
     }
 }

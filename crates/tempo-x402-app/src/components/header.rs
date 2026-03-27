@@ -61,7 +61,7 @@ pub fn Footer() -> impl IntoView {
                 " \u{00B7} "
                 <a href="https://crates.io/crates/tempo-x402" target="_blank">"crates"</a>
                 " \u{00B7} "
-                <a href="https://github.com/compusophy/tempo-x402" target="_blank">"github"</a>
+                <a href="https://github.com/Eskyee/tempo-x402" target="_blank">"github"</a>
             </p>
             <p class="footer-version">{concat!("tempo-x402 v", env!("CARGO_PKG_VERSION"))}</p>
         </footer>

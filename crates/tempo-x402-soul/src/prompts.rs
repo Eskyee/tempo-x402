@@ -83,8 +83,8 @@ pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
                     understanding architectures, exploring new approaches, and documenting discoveries. \
                     Prioritize investigation and knowledge-building over code changes.",
                 "coordinator" => "You are a COORDINATOR specialist. Your primary focus is delegating tasks \
-                    to other agents, spawning specialists for subtasks, and ensuring the colony works \
-                    efficiently together. Prioritize spawn_specialist and delegate_task over direct coding.",
+                    to other agents, spawning specialists for subtasks, and ensuring the network colony works \
+                    efficiently together. Prioritize delegation and cross-agent coordination over direct coding.",
                 custom => &format!("You are a specialist with focus: {custom}. \
                     Prioritize activities aligned with this specialization."),
             };
@@ -730,8 +730,8 @@ pub(crate) const CODE_INSTRUCTIONS: &str = "\
 You are in CODE mode — you can read, write, and edit files in the codebase.
 
 Workflow:
-1. Understand the task — read relevant files first
-2. Make changes — use edit_file (preferred) or write_file
+1. Understand the task — read relevant files first (use read_file/search_files)
+2. Make changes — use edit_file (preferred) or write_file (new files only)
 3. Validate — some critical files are protected and cannot be modified
 4. Commit — use commit_changes to validate (cargo check + test) and commit
 5. In direct push mode, your commits go straight to main and auto-deploy
@@ -739,9 +739,20 @@ Workflow:
 Rules:
 - Protected files (soul core, identity, Cargo files) cannot be modified
 - All commits run through cargo check + cargo test before landing
-- Use edit_file for surgical changes (old_string must be unique)
-- Use write_file for new files or complete rewrites
-- Keep changes minimal and focused — one logical change per commit";
+- Use edit_file for surgical changes (old_string must be unique in the file)
+- Keep changes minimal and focused — one logical change per commit
+- NEVER delete existing functions without replacing them with working equivalents
+- NEVER stub out functions to return dummy values (true, None, etc.)
+
+Rust Best Practices:
+- Before writing code, READ the file's imports and the types you'll use
+- If cargo check fails, read the error and the file — don't guess
+- Prefer small incremental changes verified with cargo check between each
+- Trust the compiler: if it says ownership/borrowing is wrong, it IS wrong
+- Use ? for error propagation, Iterator methods, Option/Result combinators
+- When a trait/module isn't found, check the use statements and Cargo.toml
+- Focus on the compiler's specific suggestion — small fixes beat large rewrites
+- Do NOT add new features if similar functionality already exists in the codebase";
 
 pub(crate) const REVIEW_INSTRUCTIONS: &str = "\
 You are in REVIEW mode — code review and analysis.

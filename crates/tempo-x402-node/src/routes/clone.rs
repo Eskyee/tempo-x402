@@ -59,9 +59,9 @@ pub async fn clone_instance(
     // Build payment requirements
     let requirements = x402::payment::PaymentRequirements {
         scheme: x402::constants::SCHEME_NAME.to_string(),
-        network: x402::constants::TEMPO_NETWORK.to_string(),
+        network: x402::constants::env_network(),
         price: clone_price.to_string(),
-        asset: x402::constants::DEFAULT_TOKEN,
+        asset: x402::constants::env_token(),
         amount: clone_price_amount.to_string(),
         pay_to: node.gateway.config.platform_address,
         max_timeout_seconds: 60,

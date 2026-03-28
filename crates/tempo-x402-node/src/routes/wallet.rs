@@ -38,7 +38,7 @@ pub async fn setup_wallet(
         .ok_or_else(|| GatewayError::Internal("no embedded facilitator configured".to_string()))?;
 
     let rpc_url = node.gateway.config.rpc_url.clone();
-    let token = x402::constants::DEFAULT_TOKEN;
+    let token = x402::constants::env_token();
 
     // 1. Fund via faucet (best-effort)
     let funded = match x402_identity::request_faucet_funds(&rpc_url, wallet_address).await {

@@ -1,7 +1,7 @@
 use crate::facilitator::state::AppState as FacilitatorState;
 use actix_web::{HttpRequest, HttpResponse};
 use alloy::primitives::Address;
-use x402::constants::{DEFAULT_TOKEN, SCHEME_NAME, TEMPO_NETWORK};
+use x402::constants::{env_network, env_token, SCHEME_NAME};
 use x402::hmac::compute_hmac;
 use x402::payment::{PaymentPayload, PaymentRequiredBody, PaymentRequirements};
 use x402::response::SettleResponse;
@@ -20,9 +20,9 @@ pub fn platform_requirements(
 ) -> PaymentRequirements {
     PaymentRequirements {
         scheme: SCHEME_NAME.to_string(),
-        network: TEMPO_NETWORK.to_string(),
+        network: env_network(),
         price: fee.to_string(),
-        asset: DEFAULT_TOKEN,
+        asset: env_token(),
         amount: fee_amount.to_string(),
         pay_to: platform_address,
         max_timeout_seconds: 30,
@@ -42,9 +42,9 @@ pub fn endpoint_requirements(
 ) -> PaymentRequirements {
     PaymentRequirements {
         scheme: SCHEME_NAME.to_string(),
-        network: TEMPO_NETWORK.to_string(),
+        network: env_network(),
         price: price_usd.to_string(),
-        asset: DEFAULT_TOKEN,
+        asset: env_token(),
         amount: price_amount.to_string(),
         pay_to: owner_address,
         max_timeout_seconds: 30,

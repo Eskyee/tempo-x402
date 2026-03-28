@@ -990,7 +990,7 @@ async fn main() -> std::io::Result<()> {
         // Faucet funding (only if balance is low)
         tokio::spawn(async move {
             // Check balance first — skip faucet if already funded
-            let token = x402::constants::DEFAULT_TOKEN;
+            let token = x402::constants::env_token();
             if let Ok(rpc_parsed) = rpc.parse::<reqwest::Url>() {
                 let provider = alloy::providers::ProviderBuilder::new().connect_http(rpc_parsed);
                 if let Ok(balance) = x402::tip20::balance_of(&provider, token, addr).await {
@@ -1077,7 +1077,7 @@ async fn main() -> std::io::Result<()> {
                 let provider = alloy::providers::ProviderBuilder::new()
                     .wallet(wallet)
                     .connect_http(rpc_parsed);
-                let token = x402::constants::DEFAULT_TOKEN;
+                let token = x402::constants::env_token();
 
                 // Check allowance: wallet (owner) → facilitator (spender)
                 let current_allowance =

@@ -29,6 +29,27 @@ pub const RPC_URL: &str = "https://rpc.moderato.tempo.xyz";
 /// Block explorer base URL.
 pub const EXPLORER_BASE: &str = "https://explore.moderato.tempo.xyz";
 
+/// Read the token address from TEMPO_TOKEN env var, falling back to DEFAULT_TOKEN.
+pub fn env_token() -> Address {
+    std::env::var("TEMPO_TOKEN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_TOKEN)
+}
+
+/// Read the CAIP-2 network string from CHAIN_ID env var, falling back to testnet.
+pub fn env_network() -> String {
+    let chain_id: u64 = std::env::var("CHAIN_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(TEMPO_CHAIN_ID);
+    if chain_id == TEMPO_CHAIN_ID {
+        TEMPO_NETWORK.to_string()
+    } else {
+        format!("eip155:{chain_id}")
+    }
+}
+
 /// Runtime chain configuration. Decouples scheme implementations from
 /// compile-time constants, enabling multi-chain support.
 #[derive(Debug, Clone, PartialEq, Eq)]

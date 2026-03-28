@@ -507,7 +507,7 @@ async fn fetch_pathusd_balance(address: Address) -> Option<serde_json::Value> {
         std::env::var("RPC_URL").unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
     let provider = alloy::providers::ProviderBuilder::new()
         .connect_http(rpc_url.parse::<reqwest::Url>().ok()?);
-    let token = x402::constants::DEFAULT_TOKEN;
+    let token = x402::constants::env_token();
     let balance = x402::tip20::balance_of(&provider, token, address)
         .await
         .ok()?;

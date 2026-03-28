@@ -46,14 +46,34 @@ pub struct ChainConfig {
 
 impl Default for ChainConfig {
     /// Defaults to Tempo Moderato configuration.
+    /// Reads from env vars if set: TEMPO_TOKEN, CHAIN_ID, RPC_URL.
     fn default() -> Self {
+        let chain_id: u64 = std::env::var("CHAIN_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(TEMPO_CHAIN_ID);
+
+        let network = if chain_id == TEMPO_CHAIN_ID {
+            TEMPO_NETWORK.to_string()
+        } else {
+            format!("eip155:{chain_id}")
+        };
+
+        let default_token = std::env::var("TEMPO_TOKEN")
+            .ok()
+            .and_then(|s| s.parse::<Address>().ok())
+            .unwrap_or(DEFAULT_TOKEN);
+
+        let rpc_url = std::env::var("RPC_URL")
+            .unwrap_or_else(|_| RPC_URL.to_string());
+
         Self {
-            chain_id: TEMPO_CHAIN_ID,
-            network: TEMPO_NETWORK.to_string(),
+            chain_id,
+            network,
             scheme_name: SCHEME_NAME.to_string(),
-            default_token: DEFAULT_TOKEN,
+            default_token,
             token_decimals: TOKEN_DECIMALS,
-            rpc_url: RPC_URL.to_string(),
+            rpc_url,
             explorer_base: EXPLORER_BASE.to_string(),
             eip712_domain_name: "x402-tempo".to_string(),
             eip712_domain_version: "1".to_string(),

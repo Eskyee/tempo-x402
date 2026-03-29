@@ -119,11 +119,28 @@ pub fn validate_plan_with_coding(
     // Plans that edit/generate files without reading them first almost always fail.
     check_read_before_write(steps, &mut violations);
 
-    // ── Rule 2: No commit without cargo_check ──
+    // ── Rule 2: Commit Gate Check ──
+    // Prevent commits if waiting for benchmarks (moved from coding.rs)
+    if let Ok(Some(awaiting)) = db.get_state("commit_awaiting_benchmark") {
+        if awaiting == "1" {
+            for (i, step) in steps.iter().enumerate() {
+                if matches!(step, PlanStep::Commit { .. }) {
+                    violations.push(PlanViolation {
+                        rule: "commit-gate",
+                        step_index: Some(i),
+                        detail: "Commit gated: awaiting benchmark results from previous commit.".to_string(),
+                        severity: Severity::Hard,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Rule 3: No commit without cargo_check ──
     // Commits without validation always break the build.
     check_cargo_before_commit(steps, &mut violations);
 
-    // ── Rule 3: Plans must start with investigation ──
+    // ── Rule 4: Plans must start with investigation ──
     // Plans that jump straight to editing without understanding context fail.
     check_starts_with_investigation(steps, &mut violations);
 

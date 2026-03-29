@@ -93,6 +93,7 @@ pub async fn compile_cartridge(
 }
 
 /// Generate the default Cargo.toml for a new cartridge.
+/// NOTE: No dependencies needed — the host ABI uses raw extern "C" FFI.
 pub fn default_cargo_toml(slug: &str) -> String {
     format!(
         r#"[package]
@@ -102,6 +103,10 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
+
+# NO DEPENDENCIES NEEDED — the x402 host ABI uses extern "C" functions.
+# Do NOT add x402_sdk or any external crate — cartridges are self-contained.
+[dependencies]
 
 [profile.release]
 opt-level = "z"

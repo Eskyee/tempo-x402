@@ -531,10 +531,12 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         // WASM Cartridge tools — write Rust programs, compile to WASM, test instantly
         tools.push(FunctionDeclaration {
             name: "create_cartridge".to_string(),
-            description: "Create a new WASM cartridge — a Rust program that compiles to WASM and runs instantly without redeploying. \
-                         Write the Rust source code and it gets scaffolded into a compilable project. \
-                         The cartridge handles HTTP requests via the x402 ABI. \
-                         This is the fastest way to practice Rust: write → compile → test in seconds.".to_string(),
+            description: "Create a new WASM cartridge — a Rust program that compiles to WASM and runs instantly. \
+                         IMPORTANT: Cartridges use NO external crates. The host ABI is via extern 'C' functions: \
+                         x402_response(status, body_ptr, body_len, ct_ptr, ct_len) to send responses, \
+                         x402_log(level, msg_ptr, msg_len) to log. The entry point is x402_handle(req_ptr, req_len). \
+                         Leave source_code empty to get the default working template. \
+                         Do NOT add any dependencies to Cargo.toml — cartridges are self-contained.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

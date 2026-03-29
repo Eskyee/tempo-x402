@@ -180,8 +180,23 @@ pub fn StudioPage() -> impl IntoView {
                             content: reply,
                         });
                     });
-                    // Refresh apps in case the agent created one
-                    refresh();
+                    // Reactively refresh apps ONLY if a tool modified endpoints
+                    let modified_endpoints = resp
+                        .get("tool_executions")
+                        .and_then(|v| v.as_array())
+                        .map(|execs| {
+                            execs.iter().any(|e| {
+                                let cmd = e.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                cmd.contains("create_script_endpoint")
+                                    || cmd.contains("delete_endpoint")
+                                    || cmd.contains("create_cartridge")
+                                    || cmd.contains("delete_cartridge")
+                            })
+                        })
+                        .unwrap_or(false);
+                    if modified_endpoints {
+                        refresh();
+                    }
                 }
                 Err(e) => {
                     set_messages.update(|msgs| {
@@ -370,12 +385,34 @@ pub fn StudioPage() -> impl IntoView {
                                     </div>
                                 </div>
                             }.into_view(),
-                            CenterView::AppPreview(slug) => {
+                            CenterView::AppPreview(ref slug) => {
                                 let url = format!("/app/{slug}");
+                                let slug_for_src = slug.clone();
+                                let set_center_for_src = set_center.clone();
+                                let view_source = move |_| {
+                                    let s = slug_for_src.clone();
+                                    let set_c = set_center_for_src.clone();
+                                    spawn_local(async move {
+                                        let path = format!("/data/endpoints/{s}.sh");
+                                        if let Ok(content) = fetch_file_content(&format!("..{}", path)).await {
+                                            set_c.set(CenterView::FileView(path, content));
+                                        } else {
+                                            // Try without prefix
+                                            let resp = gloo_net::http::Request::get(&format!("/soul/admin/cat?path=/data/endpoints/{}.sh", s))
+                                                .send().await;
+                                            if let Ok(r) = resp {
+                                                if let Ok(text) = r.text().await {
+                                                    set_c.set(CenterView::FileView(format!("/data/endpoints/{s}.sh"), text));
+                                                }
+                                            }
+                                        }
+                                    });
+                                };
                                 view! {
                                     <div class="studio-preview">
                                         <div class="studio-preview-bar">
                                             <span class="studio-preview-url">{&url}</span>
+                                            <button class="studio-preview-btn" on:click=view_source>"Source"</button>
                                             <a href={url.clone()} target="_blank" class="studio-preview-open">"Open \u{2197}"</a>
                                         </div>
                                         <iframe

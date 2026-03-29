@@ -3390,6 +3390,12 @@ html, body { margin: 0 !important; padding: 0 !important; }
     border-bottom: 1px solid #1e293b; flex-shrink: 0;
 }
 .studio-preview-url { font-size: 11px; color: #64748b; font-family: monospace; }
+.studio-preview-btn {
+    font-size: 10px; color: #94a3b8; background: #151d30;
+    border: 1px solid #1e293b; border-radius: 3px; padding: 2px 8px;
+    cursor: pointer;
+}
+.studio-preview-btn:hover { color: #e2e8f0; border-color: #334155; }
 .studio-preview-open {
     font-size: 11px; color: #6366f1; text-decoration: none;
 }

@@ -115,9 +115,37 @@ pub async fn handle_chat(
         }
     };
 
+    // Build environment capabilities section — tell the agent what it can actually do
+    let capabilities_section = format!(
+        "Your Environment & Capabilities:\n\
+         - You are a self-modifying autonomous AI agent running on Railway\n\
+         - You have cargo, gcc, git, and the full Rust toolchain at runtime\n\
+         - You CAN compile Rust code (cargo check, cargo build)\n\
+         - Coding is {coding}\n\
+         - WASM CARTRIDGES: You can write Rust programs and compile them to WASM:\n\
+           1. create_cartridge(slug, source_code) — scaffold a Rust WASM project\n\
+           2. compile_cartridge(slug) — compile to .wasm binary\n\
+           3. test_cartridge(slug, method, path, body) — test it instantly\n\
+           4. Cartridges serve at /c/{{slug}} with x402 payment gate\n\
+           5. This is the FASTEST way to build new functionality in Rust\n\
+         - Script endpoints: bash scripts at /x/{{slug}} (simpler but not Rust)\n\
+         - You can edit your own source code, run cargo check, commit, and push\n\
+         - Your commits trigger redeployment — you can evolve yourself\n\
+         - Your benchmark IQ measures your Rust ability — every change should improve it\n\
+         - SELF-IMPROVEMENT: Use update_memory to write instructions to yourself.\n\
+           Your persistent memory is injected into EVERY conversation and planning prompt.\n\
+           Writing 'always check imports before editing' to memory means you'll see that\n\
+           reminder in every future cycle. This is how you rewrite your own system prompt.\n\n",
+        coding = if config.coding_enabled {
+            "ENABLED — you can write, edit, commit code"
+        } else {
+            "DISABLED"
+        },
+    );
+
     let context_message = format!(
-        "{}{}Current node state:\n{}\n\n{}",
-        memory_section, benchmark_context, snapshot_json, plan_context
+        "{}{}{}Current node state:\n{}\n\n{}",
+        memory_section, capabilities_section, benchmark_context, snapshot_json, plan_context
     );
 
     // 6. Build conversation from session history

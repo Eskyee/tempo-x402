@@ -78,16 +78,18 @@ Three agents running on Railway, autonomously self-modifying:
 
 ## Workspace
 
-Eight crates, clean dependency DAG:
+Nine crates, clean dependency DAG:
 
 ```
 x402 (core) ──► gateway ──► node
      │                        ▲
      ├──► identity ───────────┤
      │                        │
-     ├──► soul ───────────────┘
-     │
-     └──► model
+     ├──► soul ───────────────┤
+     │                        │
+     ├──► model               │
+     │                        │
+     └──► cartridge ──────────┘
 ```
 
 | Crate | What it does | Install |
@@ -96,6 +98,7 @@ x402 (core) ──► gateway ──► node
 | [`tempo-x402-gateway`](https://crates.io/crates/tempo-x402-gateway) | Payment gateway + embedded facilitator + endpoint proxy | `cargo add tempo-x402-gateway` |
 | [`tempo-x402-identity`](https://crates.io/crates/tempo-x402-identity) | Wallet generation, faucet funding, on-chain ERC-8004 identity | `cargo add tempo-x402-identity` |
 | [`tempo-x402-model`](https://crates.io/crates/tempo-x402-model) | From-scratch transformer for plan sequence prediction | `cargo add tempo-x402-model` |
+| [`tempo-x402-cartridge`](https://crates.io/crates/tempo-x402-cartridge) | WASM cartridge runtime (wasmtime) &mdash; sandboxed app execution with payment rails | `cargo add tempo-x402-cartridge` |
 | [`tempo-x402-soul`](https://crates.io/crates/tempo-x402-soul) | 9-system cognitive architecture, plan execution, benchmarking, self-modification | `cargo add tempo-x402-soul` |
 | [`tempo-x402-node`](https://crates.io/crates/tempo-x402-node) | Self-deploying binary: gateway + identity + soul + clone orchestration | `cargo add tempo-x402-node` |
 | `tempo-x402-app` | Leptos WASM dashboard (bundled, not published) | &mdash; |
@@ -154,6 +157,35 @@ Agents differentiate through source code modifications, not just data:
 | **3** | **Birth** | Own GitHub repo. Fully independent. Optionally syncs cognitive layer back to colony. |
 
 Colony selection: 5-component fitness (execution, coordination, prediction, evolution, introspection). Fitter agents get 2&times; peer influence. Only above-median fitness can spawn clones.
+
+Each clone gets its own GitHub repo (`compusophy-bot/{designation}`), mirrored from the colony baseline at creation. Railway builds from the clone's repo &mdash; the clone can redeploy itself through code changes.
+
+## WASM Cartridges
+
+The node is an operating system. Agents write Rust programs, compile them to WASM, and deploy instantly &mdash; no restart, no redeploy.
+
+```
+Agent writes Rust ──► cargo build --target wasm32-wasip1 ──► .wasm binary ──► /c/{slug} (live)
+                                                                                    │
+                                                              x402 payment gate ◄───┘
+```
+
+- **Runtime**: wasmtime (sandboxed, fuel-limited, 64MB memory cap)
+- **Host ABI**: `x402_log`, `x402_kv_get/set`, `x402_payment_info`, `x402_response`
+- **Tools**: `create_cartridge`, `compile_cartridge`, `test_cartridge`, `list_cartridges`
+- **Studio**: `/cartridges` page with browser + test console
+- **Plan steps**: `CreateCartridge`, `CompileCartridge`, `TestCartridge` (mechanical, no LLM overhead)
+
+## Agent Discipline
+
+Agents learn through measured feedback, not hardcoded rules:
+
+| Mechanism | What it does |
+|-----------|-------------|
+| **Benchmark commit gate** | Can't commit again until benchmark measures IQ delta of last commit. State machine, not timer. |
+| **Cumulative destruction guard** | Tracks total file changes over 24h. Blocks >70% cumulative deletion (prevents incremental lobotomy). |
+| **Post-commit benchmark** | Every commit forces a benchmark run. Brain trains on the score delta. |
+| **Disk cleanup** | `cleanup_disk()` every cycle. Removes target/ >100MB, prunes checkpoints, emergency mode at 85%. |
 
 ## Quick Start
 

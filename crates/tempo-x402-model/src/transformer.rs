@@ -455,8 +455,12 @@ mod tests {
         let model = PlanTransformer::new();
         let params = model.param_count();
         println!("Model parameters: {}", params);
-        assert!(params > 200_000, "Should have >200K params, got {}", params);
-        assert!(params < 500_000, "Should have <500K params, got {}", params);
+        assert!(params > 1_000_000, "Should have >1M params, got {}", params);
+        assert!(
+            params < 10_000_000,
+            "Should have <10M params, got {}",
+            params
+        );
     }
 
     #[test]

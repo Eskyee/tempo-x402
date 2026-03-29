@@ -293,7 +293,38 @@ cargo clippy --workspace -- -D warnings  # Lint
 cargo fmt --all -- --check       # Format check
 ```
 
+## Studio
+
+Unified app workspace. Build apps by chatting with the AI agent.
+
+```
+┌──────────┬──────────────────────────┬───────────────────┐
+│  APPS    │     PREVIEW              │      CHAT         │
+│  todo    │  [live iframe preview]   │  "make a game"    │
+│  calc    │                          │  Soul: Done! ▸    │
+│  ttt     │                          │  [👍] [👎]        │
+│ FILES ▸  │                          │  [input bar]      │
+├──────────┴──────────────────────────┴───────────────────┤
+│  Fitness 79% | F=0.295 EXPLOIT | ELO 1184 | IQ 114     │
+└─────────────────────────────────────────────────────────┘
+```
+
+- **Apps browser**: Scripts + WASM cartridges unified. Click to preview. Delete with &times;.
+- **Live preview**: `/app/{slug}` renders in iframe. Works for scripts AND cartridges.
+- **Chat**: New conversation button. Separate sessions. Agent has coding tools.
+- **Feedback**: 👍/👎 on each response trains the quality model (human-in-the-loop).
+- **Status bar**: Fitness, free energy, regime, ELO &mdash; real-time.
+
 ## Changelog
+
+### v5.1.0 &mdash; Deep Planning + Cartridge Fix + Studio Polish
+- **Deep planning**: THINK phase injects quality model status into planning context
+- **Sub-goal investigation**: Before replanning, reads the failed file for evidence
+- **Cartridge compilation fix**: Auto-installs wasm32-wasip1 target, explicit RUSTUP paths
+- **Unified /app/**: Serves both scripts AND WASM cartridges under one route
+- **Studio**: Delete buttons, 👍/👎 feedback, source viewer, expanded status bar
+- **Rust alphabet**: 14 Rust construct tokens (fn, struct, impl, match, Result, Option...)
+- **Diff features**: Detects Rust constructs in diffs for quality model training
 
 ### v5.0.0 &mdash; Three-Model Coding Intelligence
 - **Code Quality Model** (1.1M params): Predicts whether diffs improve the codebase. 32-dim feature extraction from git diff. Lives in `tempo-x402-model` crate.

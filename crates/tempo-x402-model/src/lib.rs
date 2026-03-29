@@ -1,30 +1,28 @@
 #![allow(clippy::needless_range_loop, clippy::manual_range_contains)]
-//! tempo-x402-model: Sequence model for autonomous plan generation.
+//! tempo-x402-model: Three neural models for autonomous agent intelligence.
 //!
-//! A from-scratch transformer that predicts optimal plan step sequences given
-//! goal context. Trained on the colony's collective plan outcomes.
+//! All from-scratch. No ML framework. Pure Rust. 4.5M total parameters.
 //!
-//! ## Why Not Use an External ML Framework?
+//! ## Models
 //!
-//! - Must compile to a single binary for Railway deployment
-//! - Must be serializable for federated weight sharing between agents
-//! - Must train online (no batch jobs, no GPU)
-//! - Must be small enough to run alongside the soul loop
+//! - **Plan Transformer** (2.2M params): 4-layer causal attention, D=256, 8 heads.
+//!   Predicts optimal plan step sequences. Generates plans WITHOUT LLM calls.
+//! - **Code Quality Model** (1.1M params): 3-layer FFN, 32→1024→1024→1.
+//!   Predicts whether a code diff improves the codebase. Trained on benchmark deltas.
+//! - **Diff Features**: 32-dimensional feature extraction from git diffs.
+//!   Detects LOC changes, Rust construct patterns, duplication, test coverage.
 //!
-//! ## Architecture
+//! ## Vocabulary
 //!
-//! ```text
-//! Goal keywords → Embedding → [Transformer Layer × 2] → Linear → Softmax → Next step
-//!                               ↑ 4-head attention
-//!                               ↑ 128-dim model
-//!                               ↑ ~260K parameters
-//! ```
+//! 128-token vocab: plan step types + Rust construct tokens + context keywords.
+//! The "Rust alphabet" — fn, struct, impl, match, Result, Option, async, trait, etc.
 //!
-//! Input: sequence of plan step tokens (+ goal context tokens)
-//! Output: probability distribution over next plan step
+//! ## Design
 //!
-//! Training: online SGD on successful plan sequences from the colony.
-//! Inference: autoregressive generation — predict one step at a time.
+//! - Serializable for federated weight sharing between colony peers
+//! - Online SGD training (no batch jobs, no GPU)
+//! - Dimension validation on deserialization (safe scaling)
+//! - Xavier initialization via deterministic LCG PRNG
 
 pub mod diff_features;
 pub mod inference;

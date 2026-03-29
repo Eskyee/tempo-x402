@@ -308,6 +308,31 @@ pub async fn handle_app(
 
     let script_path = PathBuf::from(SCRIPTS_DIR).join(format!("{slug}.sh"));
     if !script_path.exists() {
+        // Fallback: try serving as a WASM cartridge
+        if let Some(ref engine) = _state.cartridge_engine {
+            if engine.loaded_slugs().contains(&slug.to_string()) {
+                let method = req.method().to_string();
+                let body_str = String::from_utf8_lossy(&body).to_string();
+                let request = x402_cartridge::CartridgeRequest {
+                    method,
+                    path: "/".to_string(),
+                    body: body_str,
+                    headers: std::collections::HashMap::new(),
+                    payment: None,
+                };
+                match tokio::task::block_in_place(|| {
+                    engine.execute(&slug, &request, Default::default(), 30)
+                }) {
+                    Ok(r) => {
+                        return HttpResponse::Ok().content_type(r.content_type).body(r.body);
+                    }
+                    Err(e) => {
+                        return HttpResponse::InternalServerError()
+                            .body(format!("Cartridge error: {e}"));
+                    }
+                }
+            }
+        }
         return HttpResponse::NotFound().body(format!("App '{slug}' not found"));
     }
 

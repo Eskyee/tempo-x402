@@ -287,6 +287,19 @@ pub fn StudioPage() -> impl IntoView {
                                             let kind = app.kind.clone();
                                             let desc = app.description.clone().unwrap_or_default();
                                             let slug_click = slug.clone();
+                                            let slug_del = slug.clone();
+                                            let refresh_for_del = refresh_apps.clone();
+                                            let delete_app = move |ev: web_sys::MouseEvent| {
+                                                ev.stop_propagation();
+                                                let s = slug_del.clone();
+                                                let r = refresh_for_del.clone();
+                                                spawn_local(async move {
+                                                    let _ = gloo_net::http::Request::delete(
+                                                        &format!("/admin/endpoints/script-{}", s)
+                                                    ).send().await;
+                                                    r();
+                                                });
+                                            };
                                             view! {
                                                 <div
                                                     class="studio-app-item"
@@ -294,6 +307,7 @@ pub fn StudioPage() -> impl IntoView {
                                                 >
                                                     <span class="studio-app-name">{&slug}</span>
                                                     <span class="studio-app-badge">{&kind}</span>
+                                                    <button class="studio-app-delete" on:click=delete_app title="Delete">{"\u{00D7}"}</button>
                                                     {(!desc.is_empty()).then(|| view! {
                                                         <span class="studio-app-desc">{&desc}</span>
                                                     })}
@@ -453,6 +467,28 @@ pub fn StudioPage() -> impl IntoView {
                                         <div class=if is_user { "studio-msg studio-msg--user" } else { "studio-msg studio-msg--ai" }>
                                             <div class="studio-msg-role">{if is_user { "You" } else { "Soul" }}</div>
                                             <div class="studio-msg-content">{content}</div>
+                                            {(!is_user).then(|| {
+                                                view! {
+                                                    <div class="studio-msg-feedback">
+                                                        <button class="studio-feedback-btn" on:click=move |_| {
+                                                            spawn_local(async move {
+                                                                let _ = gloo_net::http::Request::post("/soul/admin/reward")
+                                                                    .json(&serde_json::json!({"commit_sha": "chat-feedback"}))
+                                                                    .unwrap()
+                                                                    .send().await;
+                                                            });
+                                                        } title="Good response">{"\u{1F44D}"}</button>
+                                                        <button class="studio-feedback-btn" on:click=move |_| {
+                                                            spawn_local(async move {
+                                                                let _ = gloo_net::http::Request::post("/soul/admin/penalty")
+                                                                    .json(&serde_json::json!({"commit_sha": "chat-feedback"}))
+                                                                    .unwrap()
+                                                                    .send().await;
+                                                            });
+                                                        } title="Bad response">{"\u{1F44E}"}</button>
+                                                    </div>
+                                                }
+                                            })}
                                         </div>
                                     }
                                 }).collect_view().into_view()

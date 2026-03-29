@@ -28,6 +28,29 @@ pub async fn compile_cartridge(
     // Ensure output directory exists
     tokio::fs::create_dir_all(output_dir).await?;
 
+    // Ensure wasm32-wasip1 target is installed (might not be at runtime)
+    let target_check = tokio::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .await;
+    let has_wasip1 = target_check
+        .as_ref()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-wasip1"))
+        .unwrap_or(false);
+    if !has_wasip1 {
+        tracing::info!("Installing wasm32-wasip1 target for cartridge compilation");
+        let _ = tokio::process::Command::new("rustup")
+            .args(["target", "add", "wasm32-wasip1"])
+            .output()
+            .await;
+    }
+
+    // Use /tmp for build target to avoid bloating persistent volume
+    let target_dir = format!(
+        "/tmp/cartridge-build-{}",
+        source_dir.file_name().unwrap_or_default().to_string_lossy()
+    );
+
     // Build with wasm32-wasip1 target
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(COMPILE_TIMEOUT_SECS),
@@ -40,7 +63,9 @@ pub async fn compile_cartridge(
                 "--manifest-path",
             ])
             .arg(cargo_toml.to_string_lossy().as_ref())
-            .env("CARGO_TARGET_DIR", output_dir.join("target"))
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("RUSTUP_HOME", "/usr/local/rustup")
+            .env("CARGO_HOME", "/usr/local/cargo")
             .output(),
     )
     .await
@@ -62,14 +87,11 @@ pub async fn compile_cartridge(
         return Err(CartridgeError::CompilationFailed(truncated));
     }
 
-    // Find the compiled .wasm binary
-    let wasm_glob = output_dir
-        .join("target/wasm32-wasip1/release")
-        .join("*.wasm");
-    let pattern = wasm_glob.to_string_lossy();
+    // Find the compiled .wasm binary in the target directory
+    let release_dir_path = format!("{}/wasm32-wasip1/release", target_dir);
+    let pattern = format!("{}/*.wasm", release_dir_path);
 
-    // Find .wasm files in the release directory
-    let release_dir = output_dir.join("target/wasm32-wasip1/release");
+    let release_dir = std::path::PathBuf::from(&release_dir_path);
     let mut wasm_path = None;
     if let Ok(mut entries) = tokio::fs::read_dir(&release_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -86,6 +108,9 @@ pub async fn compile_cartridge(
             }
         }
     }
+
+    // Clean up build directory to save disk space
+    let _ = tokio::fs::remove_dir_all(&target_dir).await;
 
     wasm_path.ok_or_else(|| {
         CartridgeError::CompilationFailed(format!("no .wasm binary found in {}", pattern))

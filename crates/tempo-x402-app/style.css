@@ -3348,6 +3348,24 @@ html, body { margin: 0 !important; padding: 0 !important; }
     width: 100%; font-size: 11px; color: #475569;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.studio-app-delete {
+    margin-left: auto; background: none; border: none;
+    color: #334155; cursor: pointer; font-size: 14px; padding: 0 4px;
+    opacity: 0; transition: opacity 0.15s;
+}
+.studio-app-item:hover .studio-app-delete { opacity: 1; }
+.studio-app-delete:hover { color: #ef4444; }
+.studio-msg-feedback {
+    display: flex; gap: 4px; margin-top: 4px; opacity: 0.3;
+    transition: opacity 0.15s;
+}
+.studio-msg:hover .studio-msg-feedback { opacity: 1; }
+.studio-feedback-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; padding: 2px; filter: grayscale(100%);
+    transition: filter 0.15s;
+}
+.studio-feedback-btn:hover { filter: grayscale(0%); }
 .studio-file-path {
     padding: 4px 14px; font-size: 10px; color: #334155;
     font-family: monospace;

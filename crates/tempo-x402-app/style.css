@@ -3288,125 +3288,180 @@ html, body { margin: 0 !important; padding: 0 !important; }
     display: block;
 }
 
-/* ── Studio IDE ────────────────────────────────────────────────── */
-.studio { width: 100%; }
+/* ── Studio: Unified App Workspace ─────────────────────────────── */
+.studio {
+    width: 100%; display: flex; flex-direction: column;
+    height: calc(100vh - 60px); overflow: hidden;
+}
 .studio-header {
     display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 16px; padding-bottom: 12px;
-    border-bottom: 1px solid #1e293b;
+    padding: 8px 16px; border-bottom: 1px solid #1e293b;
+    background: #0a0f1a; flex-shrink: 0;
 }
-.studio-header h1 { font-size: 24px; margin: 0; color: #f8fafc; }
-.studio-status { display: flex; gap: 8px; flex-wrap: wrap; }
+.studio-header-left { display: flex; align-items: center; gap: 12px; }
+.studio-header-left h2 { font-size: 16px; margin: 0; color: #e2e8f0; font-weight: 500; }
+.studio-header-right { display: flex; gap: 6px; }
 .studio-badge {
-    background: #1e293b; border: 1px solid #334155;
-    border-radius: 4px; padding: 4px 8px;
-    font-size: 11px; color: #94a3b8; font-family: monospace;
+    background: #151d30; border: 1px solid #1e293b;
+    border-radius: 4px; padding: 3px 8px;
+    font-size: 11px; color: #64748b; font-family: monospace;
 }
 .studio-layout {
     display: grid;
-    grid-template-columns: 220px 1fr 380px;
-    gap: 12px;
-    min-height: calc(100vh - 200px);
+    grid-template-columns: 220px 1fr 340px;
+    flex: 1; overflow: hidden;
 }
 @media (max-width: 900px) {
     .studio-layout { grid-template-columns: 1fr; }
 }
 
-/* File browser */
-.studio-files {
-    background: #0f172a; border: 1px solid #1e293b;
-    border-radius: 8px; overflow: hidden;
+/* ── Left: Sidebar (Apps + Files) ── */
+.studio-sidebar {
+    background: #0a0f1a; border-right: 1px solid #1e293b;
+    overflow-y: auto; display: flex; flex-direction: column;
 }
-.studio-files-header {
-    padding: 10px 12px; border-bottom: 1px solid #1e293b;
-    display: flex; justify-content: space-between; align-items: center;
+.studio-section { border-bottom: 1px solid #1e293b; }
+.studio-section-header {
+    padding: 10px 14px; font-size: 11px; font-weight: 600;
+    color: #64748b; text-transform: uppercase; letter-spacing: 1px;
 }
-.studio-files-header h3 { margin: 0; font-size: 13px; color: #e2e8f0; }
-.studio-path { font-size: 11px; color: #64748b; font-family: monospace; }
-.studio-file-list { padding: 4px 0; max-height: calc(100vh - 280px); overflow-y: auto; }
-.studio-file {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 12px; cursor: pointer;
+.studio-section-toggle { cursor: pointer; }
+.studio-section-toggle:hover { color: #94a3b8; }
+.studio-empty { padding: 16px; }
+.studio-empty p { margin: 4px 0; font-size: 12px; color: #475569; }
+.studio-hint { font-size: 11px; color: #334155; font-style: italic; }
+.studio-app-list { padding: 2px 0; }
+.studio-app-item {
+    padding: 8px 14px; cursor: pointer;
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
     font-size: 13px; color: #cbd5e1;
+    transition: background 0.1s;
 }
-.studio-file:hover { background: #1e293b; }
-.studio-file--dir .studio-file-name { color: #38bdf8; }
-.studio-file-icon { font-size: 14px; }
-.studio-file-name { font-family: monospace; }
+.studio-app-item:hover { background: #151d30; }
+.studio-app-name { font-family: monospace; font-weight: 500; }
+.studio-app-badge {
+    font-size: 9px; padding: 1px 5px;
+    background: #1e293b; border-radius: 3px; color: #64748b;
+    text-transform: uppercase;
+}
+.studio-app-desc {
+    width: 100%; font-size: 11px; color: #475569;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.studio-file-path {
+    padding: 4px 14px; font-size: 10px; color: #334155;
+    font-family: monospace;
+}
+.studio-file-list { padding: 2px 0; }
+.studio-file {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 14px; cursor: pointer;
+    font-size: 12px; color: #94a3b8; font-family: monospace;
+    transition: background 0.1s;
+}
+.studio-file:hover { background: #151d30; }
+.studio-file--dir { color: #38bdf8; }
 
-/* Code viewer */
-.studio-editor {
-    background: #0f172a; border: 1px solid #1e293b;
-    border-radius: 8px; overflow: hidden;
+/* ── Center: Preview / Editor / Welcome ── */
+.studio-center {
+    overflow: hidden; display: flex; flex-direction: column;
+    background: #080c14;
 }
-.studio-editor-header {
-    padding: 8px 12px; border-bottom: 1px solid #1e293b;
-    background: #1e293b;
-}
-.studio-editor-path { font-size: 12px; color: #94a3b8; font-family: monospace; }
-.studio-code {
-    padding: 12px; margin: 0;
-    font-size: 12px; line-height: 1.5;
-    color: #e2e8f0; overflow: auto;
-    max-height: calc(100vh - 280px);
-    tab-size: 4;
-}
-.studio-editor-empty {
+.studio-welcome {
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    height: 300px; color: #64748b;
+    height: 100%; color: #334155; text-align: center; padding: 40px;
 }
-.studio-hint { font-size: 13px; color: #475569; margin-top: 8px; font-style: italic; }
-
-/* Chat panel */
-.studio-chat {
+.studio-welcome h2 { color: #475569; font-weight: 400; font-size: 20px; }
+.studio-welcome p { color: #334155; font-size: 14px; }
+.studio-suggestions {
+    display: flex; flex-direction: column; gap: 6px; margin-top: 16px;
+}
+.studio-suggestions code {
     background: #0f172a; border: 1px solid #1e293b;
-    border-radius: 8px; display: flex; flex-direction: column;
+    padding: 6px 12px; border-radius: 4px;
+    font-size: 12px; color: #64748b; cursor: pointer;
 }
-.studio-chat-header {
-    padding: 10px 12px; border-bottom: 1px solid #1e293b;
+.studio-suggestions code:hover { border-color: #334155; color: #94a3b8; }
+.studio-preview { display: flex; flex-direction: column; height: 100%; }
+.studio-preview-bar {
     display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 12px; background: #0f172a;
+    border-bottom: 1px solid #1e293b; flex-shrink: 0;
 }
-.studio-chat-header h3 { margin: 0; font-size: 13px; color: #e2e8f0; }
-.studio-session { font-size: 10px; color: #64748b; font-family: monospace; }
-.studio-messages {
+.studio-preview-url { font-size: 11px; color: #64748b; font-family: monospace; }
+.studio-preview-open {
+    font-size: 11px; color: #6366f1; text-decoration: none;
+}
+.studio-preview-open:hover { color: #818cf8; }
+.studio-preview-frame {
+    flex: 1; border: none; width: 100%; background: white;
+}
+.studio-editor { display: flex; flex-direction: column; height: 100%; }
+.studio-editor-bar {
+    padding: 6px 12px; background: #0f172a;
+    border-bottom: 1px solid #1e293b;
+    font-size: 11px; color: #64748b; font-family: monospace; flex-shrink: 0;
+}
+.studio-code {
+    padding: 12px; margin: 0; flex: 1; overflow: auto;
+    font-size: 12px; line-height: 1.6; color: #e2e8f0; tab-size: 4;
+}
+
+/* ── Right: Chat ── */
+.studio-chat {
+    background: #0a0f1a; border-left: 1px solid #1e293b;
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.studio-chat-messages {
     flex: 1; padding: 12px; overflow-y: auto;
-    max-height: calc(100vh - 380px);
     display: flex; flex-direction: column; gap: 8px;
 }
-.studio-msg { border-radius: 6px; padding: 8px 10px; }
-.studio-msg--user { background: #1e3a5f; align-self: flex-end; max-width: 90%; }
-.studio-msg--ai { background: #1e293b; align-self: flex-start; max-width: 90%; }
-.studio-msg-role {
-    font-size: 10px; color: #64748b;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    margin-bottom: 4px;
+.studio-chat-empty {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100%; text-align: center;
 }
-.studio-msg-content pre {
-    margin: 0; white-space: pre-wrap; word-wrap: break-word;
-    font-size: 13px; color: #e2e8f0; font-family: inherit;
+.studio-chat-empty p { margin: 4px 0; font-size: 13px; color: #334155; }
+.studio-msg { border-radius: 6px; padding: 8px 10px; max-width: 95%; }
+.studio-msg--user { background: #1e3a5f; align-self: flex-end; }
+.studio-msg--ai { background: #151d30; align-self: flex-start; }
+.studio-msg-role {
+    font-size: 9px; color: #475569;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px;
+}
+.studio-msg-content {
+    font-size: 13px; color: #e2e8f0; line-height: 1.5;
+    white-space: pre-wrap; word-wrap: break-word;
 }
 .studio-typing {
-    color: #64748b; font-style: italic; font-size: 13px;
+    color: #475569; font-style: italic; font-size: 12px;
     animation: pulse 1.5s ease-in-out infinite;
 }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.studio-input {
-    padding: 12px; border-top: 1px solid #1e293b;
-    display: flex; gap: 8px;
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.studio-chat-input {
+    padding: 10px; border-top: 1px solid #1e293b;
+    display: flex; gap: 6px; flex-shrink: 0;
 }
-.studio-textarea {
-    flex: 1; background: #1e293b; border: 1px solid #334155;
+.studio-chat-input textarea {
+    flex: 1; background: #151d30; border: 1px solid #1e293b;
     border-radius: 6px; padding: 8px 10px;
-    color: #e2e8f0; font-size: 13px; resize: none;
-    font-family: inherit;
+    color: #e2e8f0; font-size: 13px; resize: none; font-family: inherit;
 }
-.studio-textarea:focus { outline: none; border-color: #38bdf8; }
-.studio-textarea::placeholder { color: #475569; }
-.studio-send {
-    background: #2563eb; color: white; border: none;
-    border-radius: 6px; padding: 8px 16px;
-    font-size: 13px; cursor: pointer; align-self: flex-end;
+.studio-chat-input textarea:focus { outline: none; border-color: #334155; }
+.studio-chat-input textarea::placeholder { color: #334155; }
+
+/* ── Status bar ── */
+.studio-statusbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 14px; background: #0a0f1a;
+    border-top: 1px solid #1e293b;
+    font-size: 11px; color: #475569; font-family: monospace;
+    flex-shrink: 0;
 }
-.studio-send:hover { background: #1d4ed8; }
-.studio-send:disabled { background: #334155; cursor: not-allowed; }
+.studio-statusbar-sep { color: #1e293b; }
+.studio-statusbar-badge {
+    background: #151d30; border: 1px solid #1e293b;
+    border-radius: 3px; padding: 1px 5px;
+    font-size: 10px; color: #6366f1;
+}

@@ -186,32 +186,12 @@ impl CloneOrchestrator {
         // 2. Get default environment
         let env_id = self.railway.get_default_environment().await?;
 
-        // ── Stem cell differentiation: create dedicated GitHub repo for clone ──
-        // Each clone gets its own repo, mirrored from the colony baseline.
-        // This enables independent code evolution: clone pushes to its own repo,
-        // Railway auto-rebuilds from it, and good changes flow upstream via PRs.
-        let clone_repo = if let (Some(ref source_repo), Some(ref token)) =
-            (&self.config.source_repo, &self.config.github_token)
-        {
-            match create_clone_repo(token, source_repo, designation).await {
-                Ok(repo) => {
-                    tracing::info!(repo = %repo, designation = %designation, "Clone repo ready");
-                    Some(repo)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to create clone repo — falling back to shared source"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Determine deployment source: clone's own repo (preferred) or shared source
-        let deploy_repo = clone_repo.as_deref().or(self.config.source_repo.as_deref());
+        // Deploy from shared colony fork. Each clone uses the same source repo
+        // (compusophy-bot/tempo-x402) and differentiates via vm/{id} branches
+        // when it starts making code changes. No per-clone repos — they cause
+        // Railway permission issues and unnecessary complexity.
+        let clone_repo: Option<String> = None;
+        let deploy_repo = self.config.source_repo.as_deref();
         let use_source = deploy_repo.is_some();
         let branch_name = if use_source {
             Some("main".to_string())

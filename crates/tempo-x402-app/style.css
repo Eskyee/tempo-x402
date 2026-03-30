@@ -3373,6 +3373,15 @@ html, body { margin: 0 !important; padding: 0 !important; }
 .studio-feedback-locked.studio-feedback-good { color: #22c55e; }
 .studio-feedback-locked.studio-feedback-bad { color: #ef4444; }
 .studio-metric-warn { color: #ef4444 !important; font-weight: bold; }
+.studio-canvas-container {
+    flex: 1; display: flex; justify-content: center; align-items: center;
+    background: #0a0a0a; padding: 12px;
+}
+.studio-canvas {
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    width: 100%; max-width: 640px; max-height: 480px;
+    border: 1px solid #1e293b; outline: none;
+}
 .studio-cartridge-output {
     flex: 1; padding: 12px; overflow: auto;
     background: #0a0a0a; color: #e2e8f0;

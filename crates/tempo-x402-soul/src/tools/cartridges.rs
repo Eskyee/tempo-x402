@@ -9,6 +9,7 @@ impl ToolExecutor {
         slug: &str,
         source_code: Option<&str>,
         description: Option<&str>,
+        interactive: bool,
     ) -> Result<ToolResult, String> {
         // Validate slug
         if !slug
@@ -33,9 +34,13 @@ impl ToolExecutor {
             .map_err(|e| format!("failed to write Cargo.toml: {e}"))?;
 
         // Write lib.rs (user-provided or default template)
-        let lib_rs = source_code
-            .map(String::from)
-            .unwrap_or_else(|| x402_cartridge::compiler::default_lib_rs(slug));
+        let lib_rs = source_code.map(String::from).unwrap_or_else(|| {
+            if interactive {
+                x402_cartridge::compiler::default_interactive_lib_rs(slug)
+            } else {
+                x402_cartridge::compiler::default_lib_rs(slug)
+            }
+        });
         std::fs::write(format!("{src_dir}/src/lib.rs"), &lib_rs)
             .map_err(|e| format!("failed to write lib.rs: {e}"))?;
 

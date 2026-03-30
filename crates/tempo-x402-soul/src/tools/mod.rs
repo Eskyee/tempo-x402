@@ -482,7 +482,8 @@ impl ToolExecutor {
                     .ok_or_else(|| "missing 'slug' argument".to_string())?;
                 let source_code = args.get("source_code").and_then(|v| v.as_str());
                 let description = args.get("description").and_then(|v| v.as_str());
-                self.create_cartridge(slug, source_code, description).await
+                let interactive = args.get("interactive").and_then(|v| v.as_bool()).unwrap_or(false);
+                self.create_cartridge(slug, source_code, description, interactive).await
             }
             "compile_cartridge" => {
                 let slug = args

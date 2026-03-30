@@ -3,8 +3,13 @@
 //! Three-panel layout: Cartridges/Files (left) | Preview/Editor (center) | Chat (right)
 //! Status bar at bottom shows intelligence metrics in real-time.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use leptos::*;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::api;
 
@@ -39,7 +44,8 @@ struct ChatMsg {
 enum CenterView {
     Welcome,
     AppPreview(String),            // slug (script — iframe fallback)
-    CartridgePreview(String),      // slug (WASM-within-WASM)
+    CartridgePreview(String),      // slug (backend WASM — text output)
+    InteractivePreview(String),    // slug (interactive WASM — canvas 60fps)
     FileView(String, String),      // path, content
 }
 
@@ -455,20 +461,28 @@ pub fn StudioPage() -> impl IntoView {
                             },
                             CenterView::CartridgePreview(ref slug) => {
                                 let slug_run = slug.clone();
+                                let slug_for_switch = slug.clone();
+                                let set_center_for_switch = set_center.clone();
                                 let (cartridge_html, set_cartridge_html) = create_signal(String::from("<div class='studio-loading'>Loading cartridge...</div>"));
                                 let (cartridge_logs, set_cartridge_logs) = create_signal(Vec::<String>::new());
-                                // Run the cartridge client-side via WASM-within-WASM
+                                // Detect type then run accordingly
                                 spawn_local(async move {
-                                    match crate::cartridge_runner::run_cartridge(&slug_run).await {
-                                        Ok(output) => {
-                                            set_cartridge_html.set(output.body);
-                                            set_cartridge_logs.set(output.logs);
+                                    match crate::cartridge_runner::detect_type(&slug_run).await {
+                                        Ok((crate::cartridge_runner::CartridgeType::Interactive, _)) => {
+                                            // Switch to interactive canvas mode
+                                            set_center_for_switch.set(CenterView::InteractivePreview(slug_for_switch));
                                         }
-                                        Err(e) => {
-                                            set_cartridge_html.set(format!(
-                                                "<div class='studio-error'><h3>Cartridge Error</h3><pre>{e}</pre></div>"
-                                            ));
+                                        Ok((crate::cartridge_runner::CartridgeType::Backend, _)) => {
+                                            // Run as text cartridge
+                                            match crate::cartridge_runner::run_cartridge(&slug_run).await {
+                                                Ok(output) => {
+                                                    set_cartridge_html.set(output.body);
+                                                    set_cartridge_logs.set(output.logs);
+                                                }
+                                                Err(e) => set_cartridge_html.set(format!("<div class='studio-error'><pre>{e}</pre></div>")),
+                                            }
                                         }
+                                        Err(e) => set_cartridge_html.set(format!("<div class='studio-error'><pre>{e}</pre></div>")),
                                     }
                                 });
                                 view! {
@@ -490,6 +504,124 @@ pub fn StudioPage() -> impl IntoView {
                                                 }.into_view()
                                             }
                                         }}
+                                    </div>
+                                }.into_view()
+                            },
+                            CenterView::InteractivePreview(ref slug) => {
+                                let slug_run = slug.clone();
+                                let (error_msg, set_error) = create_signal(Option::<String>::None);
+                                let canvas_ref = create_node_ref::<leptos::html::Canvas>();
+
+                                // Launch the interactive runtime on mount
+                                let slug_for_init = slug.clone();
+                                create_effect(move |_| {
+                                    let canvas_el = canvas_ref.get();
+                                    if canvas_el.is_none() { return; }
+                                    let canvas = canvas_el.unwrap();
+                                    let slug = slug_for_init.clone();
+                                    let set_err = set_error;
+
+                                    spawn_local(async move {
+                                        // Fetch and detect (we know it's interactive, but need the bytes)
+                                        let bytes = match crate::cartridge_runner::detect_type(&slug).await {
+                                            Ok((_, b)) => b,
+                                            Err(e) => { set_err.set(Some(e)); return; }
+                                        };
+
+                                        let width = 320u32;
+                                        let height = 240u32;
+
+                                        // Set canvas dimensions
+                                        canvas.set_width(width);
+                                        canvas.set_height(height);
+                                        let _ = canvas.focus();
+
+                                        let cart = match crate::cartridge_runner::instantiate_interactive(&bytes, width, height).await {
+                                            Ok(c) => c,
+                                            Err(e) => { set_err.set(Some(e)); return; }
+                                        };
+
+                                        let ctx: web_sys::CanvasRenderingContext2d = canvas
+                                            .get_context("2d")
+                                            .unwrap()
+                                            .unwrap()
+                                            .dyn_into()
+                                            .unwrap();
+
+                                        // Share cartridge across closures
+                                        let cart = Rc::new(cart);
+                                        let cart_for_loop = cart.clone();
+                                        let cart_for_kd = cart.clone();
+                                        let cart_for_ku = cart.clone();
+
+                                        // Keyboard handlers
+                                        let kd = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+                                            ev.prevent_default();
+                                            if let Some(ref f) = cart_for_kd.key_down_fn {
+                                                let _ = f.call1(&JsValue::undefined(), &JsValue::from(ev.key_code() as i32));
+                                            }
+                                        });
+                                        let ku = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+                                            if let Some(ref f) = cart_for_ku.key_up_fn {
+                                                let _ = f.call1(&JsValue::undefined(), &JsValue::from(ev.key_code() as i32));
+                                            }
+                                        });
+                                        let _ = canvas.add_event_listener_with_callback("keydown", kd.as_ref().unchecked_ref());
+                                        let _ = canvas.add_event_listener_with_callback("keyup", ku.as_ref().unchecked_ref());
+                                        kd.forget();
+                                        ku.forget();
+
+                                        // requestAnimationFrame loop
+                                        let window = web_sys::window().unwrap();
+                                        let f: Rc<RefCell<Option<wasm_bindgen::closure::Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+                                        let g = f.clone();
+
+                                        *g.borrow_mut() = Some(wasm_bindgen::closure::Closure::new(move || {
+                                            // Tick
+                                            let _ = cart_for_loop.tick_fn.call0(&JsValue::undefined());
+
+                                            // Read framebuffer
+                                            let pixels = crate::cartridge_runner::read_framebuffer(&cart_for_loop);
+
+                                            // Blit to canvas
+                                            if let Ok(img_data) = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+                                                wasm_bindgen::Clamped(pixels.as_slice()),
+                                                cart_for_loop.width,
+                                                cart_for_loop.height,
+                                            ) {
+                                                let _ = ctx.put_image_data(&img_data, 0.0, 0.0);
+                                            }
+
+                                            // Next frame
+                                            let win = web_sys::window().unwrap();
+                                            let _ = win.request_animation_frame(
+                                                f.borrow().as_ref().unwrap().as_ref().unchecked_ref()
+                                            );
+                                        }));
+
+                                        let _ = window.request_animation_frame(
+                                            g.borrow().as_ref().unwrap().as_ref().unchecked_ref()
+                                        );
+                                    });
+                                });
+
+                                view! {
+                                    <div class="studio-preview">
+                                        <div class="studio-preview-bar">
+                                            <span class="studio-preview-url">"/c/"{slug_run}" (Interactive WASM)"</span>
+                                        </div>
+                                        {move || error_msg.get().map(|e| view! {
+                                            <div class="studio-error"><pre>{e}</pre></div>
+                                        })}
+                                        <div class="studio-canvas-container">
+                                            <canvas
+                                                node_ref=canvas_ref
+                                                class="studio-canvas"
+                                                tabindex="0"
+                                                width="320"
+                                                height="240"
+                                            />
+                                        </div>
                                     </div>
                                 }.into_view()
                             },

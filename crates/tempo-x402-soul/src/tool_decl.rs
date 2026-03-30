@@ -478,13 +478,15 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         tools.push(FunctionDeclaration {
             name: "create_cartridge".to_string(),
             description: "Create a WASM cartridge — a Rust program that compiles to WASM. \
-                         Cartridges can return ANY content type: HTML pages, JSON APIs, images, etc. \
-                         For games/apps: return a complete HTML page with inline CSS and inline JavaScript \
-                         for the UI, all built as a Rust string. Set content_type to 'text/html'. \
-                         For APIs: return JSON. The host ABI: #[link(wasm_import_module = \"x402\")] extern \"C\" \
-                         { fn response(status, body_ptr, body_len, ct_ptr, ct_len); fn log(level, msg_ptr, msg_len); } \
-                         Entry point: #[no_mangle] pub extern \"C\" fn x402_handle(req_ptr, req_len). \
-                         NO external crates. NO dependencies in Cargo.toml. Pure Rust only.".to_string(),
+                         TWO TYPES: \
+                         (1) BACKEND: exports x402_handle, returns HTTP responses (JSON, HTML). \
+                         (2) INTERACTIVE: exports x402_tick/x402_key_down/x402_get_framebuffer — \
+                         renders pixels to a 320x240 RGBA framebuffer at 60fps with keyboard input. \
+                         For games, visualizations, interactive tools: set interactive=true. \
+                         The host reads your pixels and blits to canvas. No web-sys, no HTML needed. \
+                         Write game state + pixel rendering in pure Rust. set_pixel(x,y,r,g,b) helper included. \
+                         Arrow keys: 37=Left, 38=Up, 39=Right, 40=Down, 32=Space. \
+                         NO external crates. NO dependencies. Pure Rust only.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -499,6 +501,10 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
                     "description": {
                         "type": "string",
                         "description": "Short description of what the cartridge does"
+                    },
+                    "interactive": {
+                        "type": "boolean",
+                        "description": "If true, creates an interactive framebuffer cartridge (60fps canvas with keyboard input) instead of a backend HTTP cartridge. Use for games, animations, visual apps."
                     }
                 },
                 "required": ["slug"]

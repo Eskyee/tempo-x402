@@ -240,3 +240,160 @@ fn build_imports(
 
     Ok(imports)
 }
+
+// ── Interactive Cartridge Runtime ──────────────────────────────────
+
+/// Cartridge type — detected by checking exports after instantiation.
+pub enum CartridgeType {
+    /// Exports x402_handle — returns text/HTML/JSON responses.
+    Backend,
+    /// Exports x402_tick — framebuffer rendering at 60fps.
+    Interactive,
+}
+
+/// A running interactive cartridge instance.
+pub struct InteractiveCartridge {
+    pub memory: WebAssembly::Memory,
+    pub tick_fn: Function,
+    pub key_down_fn: Option<Function>,
+    pub key_up_fn: Option<Function>,
+    pub fb_ptr_fn: Function,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Fetch a cartridge binary and detect its type.
+pub async fn detect_type(slug: &str) -> Result<(CartridgeType, Vec<u8>), String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let url = format!("/c/{slug}/wasm");
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(&url))
+        .await
+        .map_err(|e| format!("fetch: {e:?}"))?
+        .dyn_into()
+        .map_err(|_| "response cast")?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let buf = JsFuture::from(resp.array_buffer().map_err(|e| format!("{e:?}"))?)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    let bytes = Uint8Array::new(&buf).to_vec();
+    if bytes.is_empty() {
+        return Err("empty binary".into());
+    }
+
+    // Quick instantiate to check exports
+    let imports = build_imports(
+        Rc::new(RefCell::new(CartridgeOutput {
+            status: 200,
+            body: String::new(),
+            content_type: String::new(),
+            logs: Vec::new(),
+        })),
+        Rc::new(RefCell::new(None)),
+    )?;
+    let result = JsFuture::from(WebAssembly::instantiate_buffer(&bytes, &imports))
+        .await
+        .map_err(|e| format!("instantiate: {e:?}"))?;
+    let instance: WebAssembly::Instance = Reflect::get(&result, &"instance".into())
+        .map_err(|e| format!("{e:?}"))?
+        .dyn_into()
+        .map_err(|_| "instance cast")?;
+    let exports = instance.exports();
+
+    let has_tick = Reflect::get(exports.as_ref(), &"x402_tick".into())
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok())
+        .is_some();
+
+    if has_tick {
+        Ok((CartridgeType::Interactive, bytes))
+    } else {
+        Ok((CartridgeType::Backend, bytes))
+    }
+}
+
+/// Instantiate an interactive cartridge for 60fps rendering.
+pub async fn instantiate_interactive(
+    wasm_bytes: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<InteractiveCartridge, String> {
+    let output = Rc::new(RefCell::new(CartridgeOutput {
+        status: 200,
+        body: String::new(),
+        content_type: String::new(),
+        logs: Vec::new(),
+    }));
+    let memory_ref: Rc<RefCell<Option<WebAssembly::Memory>>> = Rc::new(RefCell::new(None));
+    let imports = build_imports(output, memory_ref.clone())?;
+
+    let result = JsFuture::from(WebAssembly::instantiate_buffer(wasm_bytes, &imports))
+        .await
+        .map_err(|e| format!("instantiate: {e:?}"))?;
+    let instance: WebAssembly::Instance = Reflect::get(&result, &"instance".into())
+        .map_err(|e| format!("{e:?}"))?
+        .dyn_into()
+        .map_err(|_| "instance cast")?;
+    let exports = instance.exports();
+
+    let memory: WebAssembly::Memory = Reflect::get(exports.as_ref(), &"memory".into())
+        .map_err(|e| format!("memory: {e:?}"))?
+        .dyn_into()
+        .map_err(|_| "memory cast")?;
+    *memory_ref.borrow_mut() = Some(memory.clone());
+
+    let tick_fn = Reflect::get(exports.as_ref(), &"x402_tick".into())
+        .map_err(|e| format!("x402_tick: {e:?}"))?
+        .dyn_into::<Function>()
+        .map_err(|_| "x402_tick not a function")?;
+
+    let key_down_fn = Reflect::get(exports.as_ref(), &"x402_key_down".into())
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok());
+    let key_up_fn = Reflect::get(exports.as_ref(), &"x402_key_up".into())
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok());
+    let fb_ptr_fn = Reflect::get(exports.as_ref(), &"x402_get_framebuffer".into())
+        .map_err(|e| format!("x402_get_framebuffer: {e:?}"))?
+        .dyn_into::<Function>()
+        .map_err(|_| "x402_get_framebuffer not a function")?;
+
+    // Call x402_init if it exists
+    if let Ok(init_fn) = Reflect::get(exports.as_ref(), &"x402_init".into())
+        .and_then(|v| v.dyn_into::<Function>().map_err(|e| e.into()))
+    {
+        let _ = init_fn.call2(
+            &JsValue::undefined(),
+            &JsValue::from(width as i32),
+            &JsValue::from(height as i32),
+        );
+    }
+
+    Ok(InteractiveCartridge {
+        memory,
+        tick_fn,
+        key_down_fn,
+        key_up_fn,
+        fb_ptr_fn,
+        width,
+        height,
+    })
+}
+
+/// Read the RGBA framebuffer from the cartridge's WASM memory.
+pub fn read_framebuffer(cart: &InteractiveCartridge) -> Vec<u8> {
+    let ptr_val = cart
+        .fb_ptr_fn
+        .call0(&JsValue::undefined())
+        .unwrap_or(JsValue::from(0));
+    let ptr = ptr_val.as_f64().unwrap_or(0.0) as u32;
+    let size = cart.width * cart.height * 4;
+
+    // MUST re-acquire buffer() each frame — it detaches after memory.grow()
+    let buffer = cart.memory.buffer();
+    let view = Uint8Array::new_with_byte_offset_and_length(&buffer, ptr, size);
+    let mut pixels = vec![0u8; size as usize];
+    view.copy_to(&mut pixels);
+    pixels
+}

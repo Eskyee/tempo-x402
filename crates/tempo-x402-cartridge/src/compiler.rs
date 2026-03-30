@@ -216,3 +216,161 @@ pub extern "C" fn x402_alloc(size: i32) -> *mut u8 {
 "#;
     template.replace("__SLUG__", slug)
 }
+
+/// Generate the lib.rs template for an INTERACTIVE cartridge.
+///
+/// Interactive cartridges render to a framebuffer at 60fps.
+/// The host reads pixel data from WASM memory and blits to canvas.
+/// No browser APIs needed — pure Rust computation.
+pub fn default_interactive_lib_rs(slug: &str) -> String {
+    let template = r##"//! __SLUG__ — interactive x402 WASM cartridge
+//!
+//! This cartridge renders to a framebuffer. The host calls x402_tick()
+//! every frame, reads pixels via x402_get_framebuffer(), and blits to canvas.
+//! Arrow keys are forwarded via x402_key_down/x402_key_up.
+
+const WIDTH: usize = 320;
+const HEIGHT: usize = 240;
+const FB_SIZE: usize = WIDTH * HEIGHT * 4; // RGBA
+
+static mut FB: [u8; FB_SIZE] = [0u8; FB_SIZE];
+static mut W: usize = WIDTH;
+static mut H: usize = HEIGHT;
+
+// Game state
+static mut PX: i32 = 160;
+static mut PY: i32 = 120;
+static mut VX: i32 = 2;
+static mut VY: i32 = 1;
+static mut KEY_LEFT: bool = false;
+static mut KEY_RIGHT: bool = false;
+static mut KEY_UP: bool = false;
+static mut KEY_DOWN: bool = false;
+
+/// Set a pixel in the framebuffer.
+fn set_pixel(x: usize, y: usize, r: u8, g: u8, b: u8) {
+    unsafe {
+        if x < W && y < H {
+            let i = (y * W + x) * 4;
+            FB[i] = r;
+            FB[i + 1] = g;
+            FB[i + 2] = b;
+            FB[i + 3] = 255;
+        }
+    }
+}
+
+/// Clear the framebuffer.
+fn clear(r: u8, g: u8, b: u8) {
+    unsafe {
+        for y in 0..H {
+            for x in 0..W {
+                let i = (y * W + x) * 4;
+                FB[i] = r;
+                FB[i + 1] = g;
+                FB[i + 2] = b;
+                FB[i + 3] = 255;
+            }
+        }
+    }
+}
+
+/// Draw a filled rectangle.
+fn fill_rect(x: i32, y: i32, w: i32, h: i32, r: u8, g: u8, b: u8) {
+    for dy in 0..h {
+        for dx in 0..w {
+            let px = x + dx;
+            let py = y + dy;
+            if px >= 0 && py >= 0 {
+                set_pixel(px as usize, py as usize, r, g, b);
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_init(w: i32, h: i32) {
+    unsafe {
+        W = w as usize;
+        H = h as usize;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_tick() {
+    unsafe {
+        // Handle input
+        if KEY_LEFT { VX = -2; }
+        if KEY_RIGHT { VX = 2; }
+        if KEY_UP { VY = -2; }
+        if KEY_DOWN { VY = 2; }
+
+        // Move
+        PX += VX;
+        PY += VY;
+
+        // Bounce off walls
+        if PX <= 0 || PX >= (W as i32 - 20) { VX = -VX; PX += VX; }
+        if PY <= 0 || PY >= (H as i32 - 20) { VY = -VY; PY += VY; }
+
+        // Clear to dark background
+        clear(10, 10, 20);
+
+        // Draw the square
+        fill_rect(PX, PY, 20, 20, 0, 200, 100);
+
+        // Draw border
+        for x in 0..W { set_pixel(x, 0, 40, 40, 60); set_pixel(x, H - 1, 40, 40, 60); }
+        for y in 0..H { set_pixel(0, y, 40, 40, 60); set_pixel(W - 1, y, 40, 40, 60); }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_key_down(code: i32) {
+    unsafe {
+        match code {
+            37 => KEY_LEFT = true,   // Left arrow
+            38 => KEY_UP = true,     // Up arrow
+            39 => KEY_RIGHT = true,  // Right arrow
+            40 => KEY_DOWN = true,   // Down arrow
+            _ => {}
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_key_up(code: i32) {
+    unsafe {
+        match code {
+            37 => KEY_LEFT = false,
+            38 => KEY_UP = false,
+            39 => KEY_RIGHT = false,
+            40 => KEY_DOWN = false,
+            _ => {}
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_get_framebuffer() -> *const u8 {
+    unsafe { FB.as_ptr() }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_get_width() -> i32 {
+    unsafe { W as i32 }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_get_height() -> i32 {
+    unsafe { H as i32 }
+}
+
+#[no_mangle]
+pub extern "C" fn x402_alloc(size: i32) -> *mut u8 {
+    let layout = core::alloc::Layout::from_size_align(size as usize, 1).unwrap();
+    unsafe { std::alloc::alloc(layout) }
+}
+"##;
+    template.replace("__SLUG__", slug)
+}

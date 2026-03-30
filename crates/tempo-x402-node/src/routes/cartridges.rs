@@ -326,9 +326,52 @@ pub async fn compile_cartridge(
     }
 }
 
+/// `GET /c/{slug}/wasm` — serve the raw WASM binary for client-side execution.
+///
+/// This enables WASM-within-WASM: the Leptos SPA fetches the binary and
+/// instantiates it client-side via `WebAssembly.instantiate()`.
+/// No payment gate — the binary is the app, execution happens in the browser.
+pub async fn serve_wasm_binary(
+    path: web::Path<String>,
+    state: web::Data<NodeState>,
+) -> HttpResponse {
+    let slug = path.into_inner();
+
+    let cartridge = match db::get_cartridge(&state.gateway.db, &slug) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": format!("cartridge '{slug}' not found")
+            }));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("{e}")
+            }));
+        }
+    };
+
+    if cartridge.wasm_path.is_empty() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("cartridge '{slug}' has no compiled binary")
+        }));
+    }
+
+    match std::fs::read(&cartridge.wasm_path) {
+        Ok(bytes) => HttpResponse::Ok()
+            .content_type("application/wasm")
+            .append_header(("Cache-Control", "public, max-age=3600"))
+            .body(bytes),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("failed to read WASM binary: {e}")
+        })),
+    }
+}
+
 /// Configure cartridge routes.
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/c", web::get().to(list_cartridges))
+        .route("/c/{slug}/wasm", web::get().to(serve_wasm_binary))
         .route("/c/{slug}", web::get().to(handle_cartridge))
         .route("/c/{slug}", web::post().to(handle_cartridge))
         .route("/c/{slug}/{path:.*}", web::get().to(handle_cartridge))

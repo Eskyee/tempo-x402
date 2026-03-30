@@ -3367,6 +3367,19 @@ html, body { margin: 0 !important; padding: 0 !important; }
 }
 .studio-feedback-good:hover { border-color: #22c55e; color: #22c55e; }
 .studio-feedback-bad:hover { border-color: #ef4444; color: #ef4444; }
+.studio-cartridge-output {
+    flex: 1; padding: 12px; overflow: auto;
+    background: #0a0a0a; color: #e2e8f0;
+}
+.studio-cartridge-logs {
+    padding: 6px 12px; background: #111; border-top: 1px solid #1e293b;
+    font-family: monospace; font-size: 11px; color: #64748b;
+    max-height: 80px; overflow-y: auto;
+}
+.studio-log-line { padding: 1px 0; }
+.studio-loading { color: #64748b; padding: 20px; text-align: center; }
+.studio-error { color: #ef4444; padding: 20px; }
+.studio-error pre { white-space: pre-wrap; font-size: 12px; margin-top: 8px; }
 .studio-file-path {
     padding: 4px 14px; font-size: 10px; color: #334155;
     font-family: monospace;

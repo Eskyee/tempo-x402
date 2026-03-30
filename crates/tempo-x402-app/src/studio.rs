@@ -38,8 +38,9 @@ struct ChatMsg {
 #[derive(Clone, Debug, PartialEq)]
 enum CenterView {
     Welcome,
-    AppPreview(String),       // slug
-    FileView(String, String), // path, content
+    AppPreview(String),            // slug (script — iframe fallback)
+    CartridgePreview(String),      // slug (WASM-within-WASM)
+    FileView(String, String),      // path, content
 }
 
 /// Studio page — the unified app workspace.
@@ -300,10 +301,17 @@ pub fn StudioPage() -> impl IntoView {
                                                     r();
                                                 });
                                             };
+                                            let kind_for_click = kind.clone();
                                             view! {
                                                 <div
                                                     class="studio-app-item"
-                                                    on:click=move |_| set_center.set(CenterView::AppPreview(slug_click.clone()))
+                                                    on:click=move |_| {
+                                                        if kind_for_click == "cartridge" {
+                                                            set_center.set(CenterView::CartridgePreview(slug_click.clone()));
+                                                        } else {
+                                                            set_center.set(CenterView::AppPreview(slug_click.clone()));
+                                                        }
+                                                    }
                                                 >
                                                     <span class="studio-app-name">{&slug}</span>
                                                     <span class="studio-app-badge">{&kind}</span>
@@ -434,6 +442,46 @@ pub fn StudioPage() -> impl IntoView {
                                             class="studio-preview-frame"
                                             sandbox="allow-scripts allow-same-origin"
                                         />
+                                    </div>
+                                }.into_view()
+                            },
+                            CenterView::CartridgePreview(ref slug) => {
+                                let slug_run = slug.clone();
+                                let (cartridge_html, set_cartridge_html) = create_signal(String::from("<div class='studio-loading'>Loading cartridge...</div>"));
+                                let (cartridge_logs, set_cartridge_logs) = create_signal(Vec::<String>::new());
+                                // Run the cartridge client-side via WASM-within-WASM
+                                spawn_local(async move {
+                                    match crate::cartridge_runner::run_cartridge(&slug_run).await {
+                                        Ok(output) => {
+                                            set_cartridge_html.set(output.body);
+                                            set_cartridge_logs.set(output.logs);
+                                        }
+                                        Err(e) => {
+                                            set_cartridge_html.set(format!(
+                                                "<div class='studio-error'><h3>Cartridge Error</h3><pre>{e}</pre></div>"
+                                            ));
+                                        }
+                                    }
+                                });
+                                view! {
+                                    <div class="studio-preview">
+                                        <div class="studio-preview-bar">
+                                            <span class="studio-preview-url">"/c/"{slug}" (WASM)"</span>
+                                            <a href={format!("/c/{slug}")} target="_blank" class="studio-preview-open">"Open \u{2197}"</a>
+                                        </div>
+                                        <div class="studio-cartridge-output" inner_html=move || cartridge_html.get() />
+                                        {move || {
+                                            let logs = cartridge_logs.get();
+                                            if logs.is_empty() {
+                                                view! { <div /> }.into_view()
+                                            } else {
+                                                view! {
+                                                    <div class="studio-cartridge-logs">
+                                                        {logs.iter().map(|l| view! { <div class="studio-log-line">{l}</div> }).collect_view()}
+                                                    </div>
+                                                }.into_view()
+                                            }
+                                        }}
                                     </div>
                                 }.into_view()
                             },

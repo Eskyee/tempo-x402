@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 
 mod api;
 mod cartridges;
+pub mod cartridge_runner;
 mod components;
 pub mod studio;
 #[allow(unused_braces)]

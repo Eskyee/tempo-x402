@@ -1198,6 +1198,57 @@ async fn main() -> std::io::Result<()> {
             path
         };
 
+        // ERC-8004: detect stale token IDs from a different registry.
+        // If a clone previously self-deployed its own contracts and minted there,
+        // it has an agent_token_id that doesn't exist on the queen's registry.
+        // Verify the token exists on the current registry; if not, clear it so re-mint happens.
+        #[cfg(feature = "erc8004")]
+        if id.agent_token_id.is_some() && x402_identity::identity_registry() != alloy::primitives::Address::ZERO {
+            let verify_rpc = rpc_url.clone();
+            let verify_registry = x402_identity::identity_registry();
+            let verify_token_id = id.agent_token_id.clone().unwrap();
+            let verify_owner = id.address;
+            let verify_identity_path = std::env::var("IDENTITY_PATH")
+                .unwrap_or_else(|_| "/data/identity.json".to_string());
+            let mut verify_id = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let Ok(rpc_parsed) = verify_rpc.parse::<reqwest::Url>() else { return };
+                let provider = alloy::providers::ProviderBuilder::new().connect_http(rpc_parsed);
+                let token = x402_identity::types::AgentId::new(
+                    alloy::primitives::U256::from_str_radix(&verify_token_id, 10)
+                        .unwrap_or(alloy::primitives::U256::from(1))
+                );
+                match x402_identity::onchain::owner_of(&provider, verify_registry, &token).await {
+                    Ok(owner) if owner == verify_owner => {
+                        tracing::info!(
+                            token_id = %verify_token_id,
+                            "ERC-8004: agent token verified on current registry"
+                        );
+                    }
+                    Ok(other_owner) => {
+                        tracing::warn!(
+                            token_id = %verify_token_id,
+                            expected = %verify_owner,
+                            actual = %other_owner,
+                            "ERC-8004: token owned by someone else — clearing stale token ID"
+                        );
+                        verify_id.agent_token_id = None;
+                        let _ = x402_identity::save_agent_token_id(&verify_identity_path, &mut verify_id, "");
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            token_id = %verify_token_id,
+                            error = %e,
+                            "ERC-8004: token not found on current registry — clearing stale token ID for re-mint"
+                        );
+                        verify_id.agent_token_id = None;
+                        let _ = x402_identity::save_agent_token_id(&verify_identity_path, &mut verify_id, "");
+                    }
+                }
+            });
+        }
+
         // ERC-8004 auto-deploy + auto-mint (if enabled and no token ID yet)
         #[cfg(feature = "erc8004")]
         if x402_identity::auto_mint_enabled() && id.agent_token_id.is_none() {

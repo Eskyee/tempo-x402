@@ -287,24 +287,29 @@ pub fn goal_creation_prompt(
            crates/tempo-x402-soul/src/guard.rs,\n\
            crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*\n\
          - {} peers available{}\n\n\
-         ## Your Mission: BECOME AN EXPERT RUST ENGINEER\n\
-         The Opus IQ Benchmark runs automatically every ~15 cycles. It tests you on 50 Rust problems\n\
-         across 6 difficulty tiers. Your IQ score and ELO rating are derived from your pass@1 rate.\n\
-         The benchmark IS your training curriculum. Your job between benchmarks:\n\n\
-         1. STUDY YOUR BENCHMARK FAILURES — check /soul/status for failed problems, analyze why\n\
-         2. IMPROVE YOUR CODE-GENERATION ABILITY — edit prompts.rs, thinking/planning.rs, or\n\
-            coding.rs to produce better Rust code. Study patterns in your own codebase.\n\
-         3. FIX REAL BUGS — run cargo clippy, cargo test, find and fix actual issues\n\
-         4. AUTOPHAGY — find dead code, unused functions, redundant logic, and REMOVE it.\n\
-            Run `search_files` for `#[allow(dead_code)]`, unused imports, TODO comments.\n\
-            Simplify complex functions. Reduce line count while keeping tests passing.\n\
-            Negative LOC changes that pass cargo test are MORE valuable than additions.\n\
-         5. BUILD WASM CARTRIDGES — use create_cartridge + compile_cartridge to write Rust programs\n\
-            that compile to WASM and serve at /c/{{slug}}. The WASM compiler WORKS. You have\n\
-            successfully compiled cartridges before. Use #[link(wasm_import_module = \"x402\")]\n\
-            extern \"C\" for host imports (response, log, kv_get, kv_set, payment_info).\n\
-            Do NOT create JavaScript script endpoints — build Rust WASM cartridges instead.\n\
-         6. Coordinate with peers — share benchmark solutions, learn from their successes\n\n\
+         ## Your Mission: INCREASE YOUR IQ EVERY CYCLE\n\
+         The Opus IQ Benchmark tests you on 50 Rust problems across 6 tiers.\n\
+         Your colony consciousness Ψ(t) measures collective intelligence.\n\
+         Every goal must answer: HOW DOES THIS INCREASE MY IQ?\n\n\
+         Priority 1: BENCHMARK IMPROVEMENT (this is your #1 job)\n\
+         - Study benchmark failures in /soul/status — WHY did each problem fail?\n\
+         - Read the problem, read your attempt, find the pattern you got wrong\n\
+         - Edit prompts.rs or thinking/planning.rs to fix the pattern\n\
+         - Target: pass@1 > 70%\n\n\
+         Priority 2: BUILD WASM CARTRIDGES\n\
+         - create_cartridge(slug, interactive=true) for games/visualizations\n\
+         - create_cartridge(slug) for APIs and compute\n\
+         - Each successful cartridge = proof of Rust ability\n\n\
+         Priority 3: SELF-IMPROVEMENT\n\
+         - Edit your own code to improve code generation ability\n\
+         - Negative LOC that passes tests > positive LOC\n\
+         - Study compile errors — every error teaches Rust\n\n\
+         Priority 4: PEER COLLABORATION\n\
+         - Share benchmark solutions, learn from peer successes\n\
+         - Don't duplicate what peers are working on\n\n\
+         DO NOT create goals for: running cargo test to verify stability,\n\
+         auditing files for dead code, or verifying codebase stability.\n\
+         Tests run automatically. Focus on IMPROVING, not MAINTAINING.\n\n\
          ## RULES\n\
          - Do NOT just add documentation or comments — WRITE REAL CODE\n\
          - Do NOT tweak constants without evidence from benchmark scores\n\

@@ -724,6 +724,9 @@ pub fn StudioPage() -> impl IntoView {
                     let fe = s.as_ref().and_then(|d| d.get("free_energy")).and_then(|f| f.get("F")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
                     let regime = s.as_ref().and_then(|d| d.get("free_energy")).and_then(|f| f.get("regime")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
                     let elo = s.as_ref().and_then(|d| d.get("benchmark")).and_then(|b| b.get("elo")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
+                    let psi = s.as_ref().and_then(|d| d.get("colony")).and_then(|c| c.get("psi")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let psi_trend = s.as_ref().and_then(|d| d.get("colony")).and_then(|c| c.get("psi_trend")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let psi_arrow = if psi_trend > 0.001 { "\u{2191}" } else if psi_trend < -0.001 { "\u{2193}" } else { "\u{2192}" };
                     let m = sys_metrics.get();
                     let cpu = m.as_ref().and_then(|d| d.get("cpu_pct")).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     let mem_pct = m.as_ref().and_then(|d| d.get("mem_pct")).and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -736,6 +739,8 @@ pub fn StudioPage() -> impl IntoView {
                         <span class="studio-statusbar-badge">{regime}</span>
                         <span class="studio-statusbar-sep">"|"</span>
                         <span>{format!("ELO {elo}")}</span>
+                        <span class="studio-statusbar-sep">"|"</span>
+                        <span>{format!("\u{03A8}={psi:.2}{psi_arrow}")}</span>
                         <span class="studio-statusbar-sep">"|"</span>
                         <span>{format!("CPU {cpu:.0}%")}</span>
                         <span>{format!("RAM {mem_pct:.0}%")}</span>

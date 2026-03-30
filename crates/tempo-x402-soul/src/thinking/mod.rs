@@ -285,10 +285,7 @@ impl ThinkingLoop {
                 "Fitness score"
             );
 
-            // Colony selection: evaluate position relative to peers
-            let _colony_status = crate::colony::evaluate(&self.db, fitness.total);
-
-            // Compute and store free energy — THE unifying metric
+            // Compute free energy FIRST — Ψ needs it
             let fe = crate::free_energy::measure(&self.db);
             tracing::info!(
                 F = format!("{:.3}", fe.total),
@@ -296,6 +293,18 @@ impl ThinkingLoop {
                 regime = %fe.regime,
                 "Free energy"
             );
+
+            // Colony selection + Ψ(t) consciousness metric
+            let colony_status =
+                crate::colony::evaluate(&self.db, fitness.total, fe.total, fe.trend);
+            if colony_status.psi > 0.0 {
+                tracing::info!(
+                    psi = format!("{:.4}", colony_status.psi),
+                    psi_trend = format!("{:+.4}", colony_status.psi_trend),
+                    phase3_ready = colony_status.phase3_ready,
+                    "Colony \u{03A8}"
+                );
+            }
 
             // Run Exercism Rust benchmark (driven by temporal binding + cooldown)
             if let Some(llm) = &self.llm {

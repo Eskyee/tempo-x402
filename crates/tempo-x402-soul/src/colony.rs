@@ -71,6 +71,13 @@ pub struct ColonyStatus {
     pub recommended_niche: Option<String>,
     /// Colony ELO: best collective benchmark score.
     pub colony_elo: f64,
+    /// Ψ(t): colony consciousness — unified intelligence metric.
+    /// Ψ = (Intelligence × Sync × Diversity × Learning_Velocity)^0.25
+    pub psi: f64,
+    /// dΨ/dt: trend of colony consciousness.
+    pub psi_trend: f64,
+    /// Phase readiness signals.
+    pub phase3_ready: bool,
     pub measured_at: i64,
 }
 
@@ -89,7 +96,13 @@ pub struct PeerFitnessRecord {
 
 /// Evaluate this agent's position in the colony.
 /// Called every cycle after fitness computation.
-pub fn evaluate(db: &Arc<SoulDatabase>, self_fitness: f64) -> ColonyStatus {
+/// `free_energy` and `fe_trend` from the free energy system drive Ψ computation.
+pub fn evaluate(
+    db: &Arc<SoulDatabase>,
+    self_fitness: f64,
+    free_energy: f64,
+    fe_trend: f64,
+) -> ColonyStatus {
     let now = chrono::Utc::now().timestamp();
     let cycle_count: u64 = db
         .get_state("total_think_cycles")
@@ -169,6 +182,24 @@ pub fn evaluate(db: &Arc<SoulDatabase>, self_fitness: f64) -> ColonyStatus {
         ))
         .fold(0.0f64, f64::max);
 
+    // ── Ψ(t): Colony Consciousness ──
+    let (psi, psi_trend) = compute_psi(db, self_fitness, &peers, free_energy, fe_trend);
+
+    // Phase 3 readiness: enough training data + baseline competence + colony health
+    let training_examples: usize = db
+        .get_state("codegen_training_count")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let self_pass: f64 = db
+        .get_state("benchmark_pass_at_1")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let phase3_ready = psi > 0.5 && training_examples > 500 && self_pass > 60.0;
+
     let status = ColonyStatus {
         self_fitness,
         rank,
@@ -186,6 +217,9 @@ pub fn evaluate(db: &Arc<SoulDatabase>, self_fitness: f64) -> ColonyStatus {
             .collect(),
         recommended_niche,
         colony_elo,
+        psi,
+        psi_trend,
+        phase3_ready,
         measured_at: now,
     };
 
@@ -319,6 +353,99 @@ pub fn prompt_section(db: &SoulDatabase) -> String {
 // ── Niche Computation ────────────────────────────────────────────────
 
 /// Find capabilities that peers are weak at — recommend as a specialization niche.
+/// Compute Ψ(t) — colony consciousness metric.
+///
+/// Ψ = (Intelligence × Sync × Diversity × Velocity)^0.25
+///
+/// - Intelligence: mean pass@1 across colony (raw coding ability)
+/// - Sync: colony benefit from peer sync (how much sharing helps)
+/// - Diversity: fitness std deviation (specialization pressure)
+/// - Velocity: negative F(t) trend (learning = decreasing surprise)
+///
+/// Returns (psi, psi_trend).
+fn compute_psi(
+    db: &Arc<SoulDatabase>,
+    self_fitness: f64,
+    peers: &[PeerFitnessRecord],
+    free_energy: f64,
+    fe_trend: f64,
+) -> (f64, f64) {
+    // Intelligence: mean pass@1 across colony (0.0-1.0 scale)
+    let self_pass: f64 = db
+        .get_state("benchmark_pass_at_1")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let all_pass: Vec<f64> = peers
+        .iter()
+        .map(|p| p.benchmark_pass_at_1)
+        .chain(std::iter::once(self_pass))
+        .collect();
+    let intelligence = if all_pass.is_empty() {
+        0.0
+    } else {
+        all_pass.iter().sum::<f64>() / all_pass.len() as f64 / 100.0
+    };
+
+    // Sync: colony benefit from evaluation system
+    let sync: f64 = db
+        .get_state("colony_benefit")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0)
+        .max(0.0)
+        .min(1.0);
+
+    // Diversity: fitness std deviation across colony
+    let all_fitness: Vec<f64> = peers
+        .iter()
+        .map(|p| p.fitness)
+        .chain(std::iter::once(self_fitness))
+        .collect();
+    let mean_f = if all_fitness.is_empty() {
+        0.0
+    } else {
+        all_fitness.iter().sum::<f64>() / all_fitness.len() as f64
+    };
+    let variance = if all_fitness.len() <= 1 {
+        0.0
+    } else {
+        all_fitness
+            .iter()
+            .map(|f| (f - mean_f).powi(2))
+            .sum::<f64>()
+            / all_fitness.len() as f64
+    };
+    let diversity = variance.sqrt().min(1.0);
+
+    // Learning velocity: negative F trend = improving (higher = better)
+    let velocity = (-fe_trend).clamp(0.0, 1.0);
+
+    // Ψ = geometric mean (all must be positive for high Ψ)
+    // +0.1 offsets prevent zero from killing the product
+    let psi = (intelligence.max(0.01)
+        * (sync + 0.1)
+        * (diversity + 0.1)
+        * (velocity + 0.1))
+    .powf(0.25);
+
+    // Trend vs previous Ψ
+    let prev_psi: f64 = db
+        .get_state("psi_value")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let psi_trend = psi - prev_psi;
+
+    let _ = db.set_state("psi_value", &format!("{psi:.6}"));
+    let _ = db.set_state("psi_trend", &format!("{psi_trend:.6}"));
+
+    (psi, psi_trend)
+}
+
 fn compute_niche(peers: &[PeerFitnessRecord]) -> Option<String> {
     if peers.is_empty() {
         return None;

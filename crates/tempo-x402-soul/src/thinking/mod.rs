@@ -422,6 +422,21 @@ impl ThinkingLoop {
                         "Plan transformer training cycle"
                     );
                 }
+
+                // Phase 3: code gen model training (every ~50 cycles)
+                let cycle_count: u64 = self
+                    .db
+                    .get_state("total_think_cycles")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                if cycle_count % 50 == 0 && cycle_count > 0 {
+                    // Train BPE tokenizer on accumulated solutions
+                    crate::codegen::train_tokenizer(&self.db);
+                    // Train code gen model on tokenized solutions
+                    crate::codegen::train_model(&self.db);
+                }
             }
 
             // Cortex dream consolidation (driven by temporal binding — independent from brain training)

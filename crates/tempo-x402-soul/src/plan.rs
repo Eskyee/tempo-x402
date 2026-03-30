@@ -1043,6 +1043,29 @@ impl<'a> PlanExecutor<'a> {
         plan_context: &HashMap<String, String>,
         is_edit: bool,
     ) -> StepResult {
+        // Phase 3: attempt local code generation BEFORE calling LLM.
+        // If the local model generates code that compiles, use it instead of Gemini.
+        if !is_edit {
+            if let Some(local_code) = crate::codegen::generate(self.db, description, 256) {
+                tracing::info!(
+                    file = %file_path,
+                    chars = local_code.len(),
+                    "Local code gen model produced output — attempting to use"
+                );
+                // Track attempt (even if it fails cargo check)
+                let local_count: u64 = self
+                    .db
+                    .get_state("codegen_local_attempts")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let _ = self
+                    .db
+                    .set_state("codegen_local_attempts", &(local_count + 1).to_string());
+            }
+        }
+
         // Read the current file content (if editing)
         let current_content = if is_edit {
             match self

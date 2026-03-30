@@ -1075,7 +1075,8 @@ pub async fn run_benchmark_session(
             passed += 1;
             earned_weight += weight;
 
-            // Phase 3: accumulate training data for local code gen model
+            // Phase 3: accumulate training data for local code gen model.
+            // Store actual solution code — ground truth Rust that passed tests.
             {
                 let count: u64 = db
                     .get_state("codegen_training_count")
@@ -1084,6 +1085,28 @@ pub async fn run_benchmark_session(
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
                 let _ = db.set_state("codegen_training_count", &(count + 1).to_string());
+
+                // Append solution to capped array (max 1000, prune oldest)
+                let entry = serde_json::json!({
+                    "problem_id": problem.slug,
+                    "difficulty": problem.difficulty,
+                    "code": last_solution,
+                    "ts": chrono::Utc::now().timestamp(),
+                });
+                let mut solutions: Vec<serde_json::Value> = db
+                    .get_state("codegen_solutions")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                solutions.push(entry);
+                // Keep last 1000 solutions (prune oldest)
+                if solutions.len() > 1000 {
+                    solutions.drain(..solutions.len() - 1000);
+                }
+                if let Ok(json) = serde_json::to_string(&solutions) {
+                    let _ = db.set_state("codegen_solutions", &json);
+                }
             }
 
             if used_review_fix {

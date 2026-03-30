@@ -477,7 +477,7 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         // Script endpoint tools — create HTTP endpoints without Rust compilation
         tools.push(FunctionDeclaration {
             name: "create_script_endpoint".to_string(),
-            description: "Create an instant HTTP endpoint by writing a bash script. The script becomes available at GET/POST /x/{slug} immediately — no compilation or restart needed. The script receives REQUEST_METHOD, REQUEST_BODY, QUERY_STRING, REQUEST_HEADERS as env vars. Output JSON to stdout for JSON responses, or plain text. IMPORTANT: Do NOT create endpoints similar to ones that already exist — each must be genuinely unique and useful.".to_string(),
+            description: "DEPRECATED — use create_cartridge instead. This creates a bash script endpoint (JavaScript/HTML hack). You should ALMOST NEVER use this. Build Rust WASM cartridges instead — they compile, they're fast, and they're what we do. Only use create_script_endpoint for trivial one-line shell glue that genuinely cannot be a cartridge.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

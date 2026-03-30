@@ -1,6 +1,6 @@
 //! Studio — unified app workspace for building, previewing, and chatting with the AI agent.
 //!
-//! Three-panel layout: Apps/Files (left) | Preview/Editor (center) | Chat (right)
+//! Three-panel layout: Cartridges/Files (left) | Preview/Editor (center) | Chat (right)
 //! Status bar at bottom shows intelligence metrics in real-time.
 
 use leptos::*;
@@ -269,14 +269,14 @@ pub fn StudioPage() -> impl IntoView {
                 // ── Left: Apps + Files ──
                 <div class="studio-sidebar">
                     <div class="studio-section">
-                        <div class="studio-section-header">"Apps"</div>
+                        <div class="studio-section-header">"Cartridges"</div>
                         {move || {
                             let app_list = apps.get();
                             if app_list.is_empty() {
                                 view! {
                                     <div class="studio-empty">
-                                        <p>"No apps yet"</p>
-                                        <p class="studio-hint">"Ask the chat: \"make a tic-tac-toe game\""</p>
+                                        <p>"No cartridges yet"</p>
+                                        <p class="studio-hint">"Ask the chat to create a Rust cartridge"</p>
                                     </div>
                                 }.into_view()
                             } else {
@@ -477,7 +477,7 @@ pub fn StudioPage() -> impl IntoView {
                                                                     .unwrap()
                                                                     .send().await;
                                                             });
-                                                        } title="Good response">{"\u{1F44D}"}</button>
+                                                        } title="Good response" class="studio-feedback-good">"good"</button>
                                                         <button class="studio-feedback-btn" on:click=move |_| {
                                                             spawn_local(async move {
                                                                 let _ = gloo_net::http::Request::post("/soul/admin/penalty")
@@ -485,7 +485,7 @@ pub fn StudioPage() -> impl IntoView {
                                                                     .unwrap()
                                                                     .send().await;
                                                             });
-                                                        } title="Bad response">{"\u{1F44E}"}</button>
+                                                        } title="Bad response" class="studio-feedback-bad">"bad"</button>
                                                     </div>
                                                 }
                                             })}

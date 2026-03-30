@@ -3361,11 +3361,12 @@ html, body { margin: 0 !important; padding: 0 !important; }
 }
 .studio-msg:hover .studio-msg-feedback { opacity: 1; }
 .studio-feedback-btn {
-    background: none; border: none; cursor: pointer;
-    font-size: 14px; padding: 2px; filter: grayscale(100%);
-    transition: filter 0.15s;
+    background: none; border: 1px solid #334155; border-radius: 3px;
+    cursor: pointer; font-size: 11px; padding: 1px 6px;
+    color: #64748b; font-family: monospace; transition: all 0.15s;
 }
-.studio-feedback-btn:hover { filter: grayscale(0%); }
+.studio-feedback-good:hover { border-color: #22c55e; color: #22c55e; }
+.studio-feedback-bad:hover { border-color: #ef4444; color: #ef4444; }
 .studio-file-path {
     padding: 4px 14px; font-size: 10px; color: #334155;
     font-family: monospace;

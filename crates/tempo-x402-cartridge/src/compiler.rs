@@ -153,19 +153,21 @@ pub fn default_lib_rs(slug: &str) -> String {
 //! The host calls `x402_handle` with a JSON request.
 //! Call `x402_response` to set the HTTP response.
 
-// Import host functions
+// Import host functions from the x402 namespace.
+// The #[link] attribute ensures WASM imports come from "x402" module, not "env".
+#[link(wasm_import_module = "x402")]
 extern "C" {
-    fn x402_response(status: i32, body_ptr: *const u8, body_len: i32, ct_ptr: *const u8, ct_len: i32);
-    fn x402_log(level: i32, msg_ptr: *const u8, msg_len: i32);
-    fn x402_kv_get(key_ptr: *const u8, key_len: i32) -> i64;
-    fn x402_kv_set(key_ptr: *const u8, key_len: i32, val_ptr: *const u8, val_len: i32) -> i32;
-    fn x402_payment_info() -> i64;
+    fn response(status: i32, body_ptr: *const u8, body_len: i32, ct_ptr: *const u8, ct_len: i32);
+    fn log(level: i32, msg_ptr: *const u8, msg_len: i32);
+    fn kv_get(key_ptr: *const u8, key_len: i32) -> i64;
+    fn kv_set(key_ptr: *const u8, key_len: i32, val_ptr: *const u8, val_len: i32) -> i32;
+    fn payment_info() -> i64;
 }
 
 /// Helper: send a response back to the host.
 fn respond(status: i32, body: &str, content_type: &str) {
     unsafe {
-        x402_response(
+        response(
             status,
             body.as_ptr(),
             body.len() as i32,
@@ -175,9 +177,9 @@ fn respond(status: i32, body: &str, content_type: &str) {
     }
 }
 
-/// Helper: log a message.
-fn log(level: i32, msg: &str) {
-    unsafe { x402_log(level, msg.as_ptr(), msg.len() as i32); }
+/// Helper: log a message to the host.
+fn host_log(level: i32, msg: &str) {
+    unsafe { log(level, msg.as_ptr(), msg.len() as i32); }
 }
 
 /// Entry point: handle an HTTP request.
@@ -186,7 +188,7 @@ fn log(level: i32, msg: &str) {
 /// {"method": "GET", "path": "/", "body": "", "headers": {}}
 #[no_mangle]
 pub extern "C" fn x402_handle(request_ptr: *const u8, request_len: i32) {
-    log(1, "__SLUG__ cartridge invoked");
+    host_log(1, "__SLUG__ cartridge invoked");
 
     // Read the request JSON from memory
     let request_bytes = unsafe {

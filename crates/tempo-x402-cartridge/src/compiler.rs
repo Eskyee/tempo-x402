@@ -196,10 +196,15 @@ pub extern "C" fn x402_handle(request_ptr: *const u8, request_len: i32) {
     };
     let _request = core::str::from_utf8(request_bytes).unwrap_or("{}");
 
-    // TODO: implement your cartridge logic here
+    // Cartridges can return HTML pages, JSON APIs, or any content type.
+    // For apps with a UI: build an HTML string with inline CSS/JS.
+    // For APIs: return JSON.
 
-    let body = "{\"message\": \"Hello from __SLUG__!\", \"status\": \"ok\"}";
-    respond(200, body, "application/json");
+    let body = "<!DOCTYPE html>\
+<html><head><meta charset=\"utf-8\"><title>__SLUG__</title>\
+<style>body{background:#0a0a0a;color:#e0e0e0;font-family:monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}</style>\
+</head><body><h1>__SLUG__</h1><p>WASM cartridge running.</p></body></html>";
+    respond(200, body, "text/html");
 }
 
 /// Optional: allocator for host-to-guest memory transfers.

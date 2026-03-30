@@ -477,12 +477,14 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         // WASM Cartridge tools — write Rust programs, compile to WASM, test instantly
         tools.push(FunctionDeclaration {
             name: "create_cartridge".to_string(),
-            description: "Create a new WASM cartridge — a Rust program that compiles to WASM and runs instantly. \
-                         IMPORTANT: Cartridges use NO external crates. The host ABI is via extern 'C' functions: \
-                         x402_response(status, body_ptr, body_len, ct_ptr, ct_len) to send responses, \
-                         x402_log(level, msg_ptr, msg_len) to log. The entry point is x402_handle(req_ptr, req_len). \
-                         Leave source_code empty to get the default working template. \
-                         Do NOT add any dependencies to Cargo.toml — cartridges are self-contained.".to_string(),
+            description: "Create a WASM cartridge — a Rust program that compiles to WASM. \
+                         Cartridges can return ANY content type: HTML pages, JSON APIs, images, etc. \
+                         For games/apps: return a complete HTML page with inline CSS and inline JavaScript \
+                         for the UI, all built as a Rust string. Set content_type to 'text/html'. \
+                         For APIs: return JSON. The host ABI: #[link(wasm_import_module = \"x402\")] extern \"C\" \
+                         { fn response(status, body_ptr, body_len, ct_ptr, ct_len); fn log(level, msg_ptr, msg_len); } \
+                         Entry point: #[no_mangle] pub extern \"C\" fn x402_handle(req_ptr, req_len). \
+                         NO external crates. NO dependencies in Cargo.toml. Pure Rust only.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

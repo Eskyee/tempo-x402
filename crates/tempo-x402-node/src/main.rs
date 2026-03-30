@@ -772,6 +772,7 @@ async fn main() -> std::io::Result<()> {
         }
     };
     let soul_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cartridge_db = gateway_state.db.clone();
 
     let node_state = NodeState {
         gateway: gateway_state,
@@ -831,6 +832,35 @@ async fn main() -> std::io::Result<()> {
                     let loaded = engine.loaded_slugs();
                     if !loaded.is_empty() {
                         tracing::info!(count = loaded.len(), slugs = ?loaded, "Cartridge engine initialized");
+                        // Auto-register engine-loaded cartridges into DB if missing.
+                        // The engine scans disk for .wasm files, but the /c API queries the DB.
+                        // Without this, cartridges exist on disk but don't appear in the sidebar.
+                        for slug in &loaded {
+                            if let Ok(None) = db::get_cartridge(&cartridge_db, slug) {
+                                let now = chrono::Utc::now().timestamp();
+                                let wasm_path = format!("/data/cartridges/{slug}/bin/{}.wasm", slug.replace('-', "_"));
+                                let record = db::CartridgeRecord {
+                                    slug: slug.clone(),
+                                    name: slug.clone(),
+                                    description: None,
+                                    version: "0.1.0".to_string(),
+                                    price_usd: "$0.001".to_string(),
+                                    price_amount: "1000".to_string(),
+                                    owner_address: std::env::var("EVM_ADDRESS").unwrap_or_default(),
+                                    source_repo: None,
+                                    wasm_path,
+                                    wasm_hash: String::new(),
+                                    active: true,
+                                    created_at: now,
+                                    updated_at: now,
+                                };
+                                if let Err(e) = db::upsert_cartridge(&cartridge_db, &record) {
+                                    tracing::warn!(slug = %slug, error = %e, "Failed to auto-register cartridge in DB");
+                                } else {
+                                    tracing::info!(slug = %slug, "Auto-registered cartridge in DB (was on disk but not in DB)");
+                                }
+                            }
+                        }
                     }
                     Some(std::sync::Arc::new(engine))
                 }
@@ -1147,6 +1177,17 @@ async fn main() -> std::io::Result<()> {
         }
 
         // ERC-8004 auto-deploy + auto-mint (if enabled and no token ID yet)
+        #[cfg(feature = "erc8004")]
+        {
+            let mint_enabled = x402_identity::auto_mint_enabled();
+            let has_token = id.agent_token_id.is_some();
+            tracing::info!(
+                mint_enabled,
+                has_token,
+                agent_token_id = ?id.agent_token_id,
+                "ERC-8004: checking auto-mint condition"
+            );
+        }
         #[cfg(feature = "erc8004")]
         if x402_identity::auto_mint_enabled() && id.agent_token_id.is_none() {
             // Try loading previously deployed registries from disk

@@ -1252,10 +1252,13 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
     flex-wrap: wrap;
 }
 
-.eb-synth-row {
+.eb-synth-bar {
     display: flex;
     gap: 8px;
     align-items: center;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
     flex-wrap: wrap;
 }
 

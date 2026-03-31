@@ -219,15 +219,11 @@ pub fn Mandala() -> impl IntoView {
                 }}
             </div>
 
-            // ═══ FLOW ARROWS: prediction → synthesis ═══
-            <div class="eb-flow">{"\u{25BC} \u{25BC} \u{25BC}"}</div>
-
-            // ═══ ROW 2: SYNTHESIS (metacognitive arbiter) ═══
+            // ═══ SYNTHESIS (compact inline — votes + state + Ψ) ═══
             {move || {
                 let s = soul.get().unwrap_or_default();
                 let sy = s.get("synthesis");
                 let state = sy.and_then(|s| s.get("state")).and_then(|v| v.as_str()).unwrap_or("--");
-                let preds = sy.and_then(|s| s.get("total_predictions")).and_then(|v| v.as_u64()).unwrap_or(0);
                 let weights = sy.and_then(|s| s.get("weights"));
                 let wb = weights.and_then(|w| w.get("brain")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
                 let wc = weights.and_then(|w| w.get("cortex")).and_then(|v| v.as_str()).unwrap_or("--").to_string();
@@ -237,21 +233,14 @@ pub fn Mandala() -> impl IntoView {
                 let psi = role.and_then(|r| r.get("psi")).and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let state_cls = match state { "coherent" | "exploiting" => "eb-state-ok", "exploring" => "eb-state-learn", "conflicted" => "eb-state-warn", _ => "eb-state-err" };
                 view! {
-                    <div class="eb-module eb-wide">
-                        <div class="eb-label">"SYNTHESIS"</div>
-                        <div class="eb-synth-row">
-                            <span class="eb-weight">{format!("B:{}", wb)}</span>
-                            <span class="eb-weight">{format!("C:{}", wc)}</span>
-                            <span class="eb-weight">{format!("G:{}", wg)}</span>
-                            <span class="eb-weight">{format!("H:{}", wh)}</span>
-                            <span class={format!("eb-state {}", state_cls)}>{state.to_string()}</span>
-                            <span class="eb-psi">{format!("\u{03A8}={:.3}", psi)}</span>
-                        </div>
+                    <div class="eb-synth-bar">
+                        <span class="eb-label" style="margin:0">"SYNTH"</span>
+                        <span class="eb-weight">{format!("B:{} C:{} G:{} H:{}", wb, wc, wg, wh)}</span>
+                        <span class={format!("eb-state {}", state_cls)}>{state.to_string()}</span>
+                        <span class="eb-psi">{format!("\u{03A8}={:.3}", psi)}</span>
                     </div>
                 }
             }}
-
-            <div class="eb-flow">{"\u{25BC}"}</div>
 
             // ═══ ROW 3: FREE ENERGY / HIVEMIND ═══
             <div class="eb-row">

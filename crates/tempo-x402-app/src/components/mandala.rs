@@ -70,15 +70,15 @@ pub fn Mandala() -> impl IntoView {
     });
     on_cleanup(move || drop(interval));
 
-    // Layout constants
-    let cx = 500.0f64;
+    // Layout constants — square viewBox, works in portrait + landscape
+    let cx = 400.0f64;
     let cy = 400.0f64;
-    let r_inner = 120.0f64; // model ring radius
-    let r_outer = 220.0f64; // system ring radius
-    let r_colony = 340.0f64; // colony ring radius
-    let r_spark_psi = 270.0f64;
-    let r_spark_fe = 285.0f64;
-    let r_spark_fit = 300.0f64;
+    let r_inner = 100.0f64;
+    let r_outer = 185.0f64;
+    let r_colony = 280.0f64;
+    let r_spark_psi = 225.0f64;
+    let r_spark_fe = 238.0f64;
+    let r_spark_fit = 251.0f64;
 
     // 9 cognitive systems
     let systems = [
@@ -93,7 +93,7 @@ pub fn Mandala() -> impl IntoView {
 
     view! {
         <div class="mandala-container">
-            <svg viewBox="0 0 1000 800" class="mandala-svg">
+            <svg viewBox="0 0 800 800" class="mandala-svg" preserveAspectRatio="xMidYMid meet">
                 <defs>
                     // Glow filters
                     <filter id="glow-green">
@@ -119,7 +119,7 @@ pub fn Mandala() -> impl IntoView {
                 </defs>
 
                 // ── Background grid (subtle) ──
-                {(0..20).map(|i| {
+                {(0..10).map(|i| {
                     let r = (i as f64 + 1.0) * 40.0;
                     view! {
                         <circle cx=cx.to_string() cy=cy.to_string() r=r.to_string()
@@ -368,7 +368,7 @@ pub fn Mandala() -> impl IntoView {
                         </text>
                         // Top right: nav
                         <a href="/studio">
-                            <text x="984" y="20" text-anchor="end" class="mandala-text-label" fill="#5a6a5a">
+                            <text x="784" y="20" text-anchor="end" class="mandala-text-label" fill="#5a6a5a">
                                 "STUDIO \u{2192}"
                             </text>
                         </a>
@@ -377,11 +377,11 @@ pub fn Mandala() -> impl IntoView {
                             {format!("fitness {:.0}%", fitness * 100.0)}
                         </text>
                         // Bottom center: pass@1 + ELO
-                        <text x="500" y="780" text-anchor="middle" class="mandala-text-label" fill="#5a6a5a">
+                        <text x="400" y="780" text-anchor="middle" class="mandala-text-label" fill="#5a6a5a">
                             {format!("pass@1 {:.1}% | ELO {:.0}", pass, elo)}
                         </text>
                         // Bottom right: version
-                        <text x="984" y="780" text-anchor="end" class="mandala-text-label" fill="#2a2a3a">
+                        <text x="784" y="780" text-anchor="end" class="mandala-text-label" fill="#2a2a3a">
                             {concat!("v", env!("CARGO_PKG_VERSION"))}
                         </text>
                         // Status dot

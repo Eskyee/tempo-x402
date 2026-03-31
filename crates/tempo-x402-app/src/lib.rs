@@ -83,7 +83,10 @@ pub fn App() -> impl IntoView {
     view! {
         <Html lang="en" />
         <Meta charset="utf-8" />
-        <Meta name="viewport" content="width=device-width, initial-scale=1" />
+        <Meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <Meta name="apple-mobile-web-app-capable" content="yes" />
+        <Meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <Meta name="theme-color" content="#040408" />
         <Title text="tempo-x402" />
         <Stylesheet href="/style.css" />
 

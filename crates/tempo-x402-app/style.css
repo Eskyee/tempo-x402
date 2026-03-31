@@ -1173,15 +1173,20 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
 /* ===== NEURAL MANDALA ===== */
 .mandala-container {
     width: 100vw;
-    height: 100vh;
+    height: 100dvh; /* dynamic viewport height — respects iOS safe areas */
     background: #040408;
     overflow: hidden;
     cursor: crosshair;
+    touch-action: manipulation; /* prevent double-tap zoom */
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .mandala-svg {
     width: 100%;
     height: 100%;
+    display: block;
 }
 
 .mandala-text-psi {
@@ -1221,41 +1226,49 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
 /* Mandala floating controls */
 .mandala-controls {
     position: fixed;
-    top: 12px;
-    right: 12px;
+    top: max(12px, env(safe-area-inset-top, 0px));
+    right: max(12px, env(safe-area-inset-right, 0px));
     z-index: 100;
 }
 
 .mandala-toggle {
-    width: 32px;
-    height: 32px;
-    background: rgba(10,10,22,0.8);
+    width: 44px;
+    height: 44px;
+    background: rgba(10,10,22,0.85);
     border: 1px solid var(--border);
+    border-radius: 12px;
     color: var(--text-dim);
-    font-size: 16px;
+    font-size: 18px;
     font-family: inherit;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: all 0.2s ease;
 }
 
-.mandala-toggle:hover {
+.mandala-toggle:hover, .mandala-toggle:active {
     color: var(--green);
     border-color: var(--green-dim);
+    background: rgba(0,255,65,0.08);
 }
 
 .mandala-panel {
-    background: rgba(8,8,16,0.92);
+    background: rgba(8,8,16,0.94);
     border: 1px solid var(--border);
-    margin-top: 4px;
-    padding: var(--gap-md);
-    min-width: 180px;
-    backdrop-filter: blur(8px);
+    border-radius: 12px;
+    margin-top: 8px;
+    padding: 16px;
+    min-width: 220px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
 }
 
 .mandala-panel-section {
-    padding: var(--gap-sm) 0;
+    padding: 10px 0;
     border-bottom: 1px solid var(--border);
 }
 
@@ -1264,22 +1277,24 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
 }
 
 .mandala-panel-label {
-    font-size: 8px;
+    font-size: 9px;
     font-weight: 700;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     color: var(--text-muted);
-    margin-bottom: 4px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
 }
 
 .mandala-nav-link {
     display: block;
-    font-size: 10px;
+    font-size: 13px;
     color: var(--text-dim);
     text-decoration: none;
-    padding: 3px 0;
+    padding: 8px 0;
+    transition: color 0.15s ease;
 }
 
-.mandala-nav-link:hover {
+.mandala-nav-link:hover, .mandala-nav-link:active {
     color: var(--green);
 }
 
@@ -1294,10 +1309,81 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
 }
 
 /* ===== RESPONSIVE ===== */
-@media (max-width: 900px) {
+
+/* Mobile: mandala + controls */
+@media (max-width: 768px) {
+    .mandala-container {
+        /* Ensure it fills the viewport on mobile Safari */
+        height: 100dvh;
+        height: -webkit-fill-available;
+    }
+
+    /* Panel goes full-width on mobile */
+    .mandala-panel {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        top: auto;
+        min-width: auto;
+        border-radius: 16px;
+        padding: 20px;
+    }
+
+    .mandala-nav-link {
+        font-size: 15px;
+        padding: 12px 0;
+    }
+
+    .mandala-panel .btn {
+        padding: 8px 16px;
+        font-size: 13px;
+        width: 100%;
+        border-radius: 8px;
+    }
+
+    /* Cockpit: stack columns */
     .cockpit-main {
         grid-template-columns: 1fr;
         grid-template-rows: auto 1fr auto;
     }
     .left-col, .right-col { max-height: 200px; }
+
+    /* Studio: stack panels */
+    .studio-layout, .studio-main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+    }
+}
+
+/* Small phones */
+@media (max-width: 400px) {
+    .mandala-toggle {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+    }
+
+    .mandala-panel {
+        left: 8px;
+        right: 8px;
+        padding: 16px;
+    }
+}
+
+/* Landscape mobile */
+@media (max-height: 500px) and (orientation: landscape) {
+    .mandala-panel {
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+}
+
+/* Safe area insets for notch phones */
+@supports (padding: max(0px)) {
+    .mandala-container {
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
 }

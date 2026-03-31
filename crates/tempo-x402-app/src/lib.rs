@@ -15,6 +15,7 @@ mod wallet;
 mod wallet_crypto;
 
 use components::cockpit::CockpitPage;
+use components::mandala::Mandala;
 
 /// Payment requirements from 402 response
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,14 +84,15 @@ pub fn App() -> impl IntoView {
         <Html lang="en" />
         <Meta charset="utf-8" />
         <Meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Title text="tempo-x402 cockpit" />
+        <Title text="tempo-x402" />
         <Stylesheet href="/style.css" />
 
         <Router>
             <Routes>
-                <Route path="/" view=CockpitPage />
+                <Route path="/" view=Mandala />
+                <Route path="/dashboard" view=CockpitPage />
                 <Route path="/studio" view=studio::StudioPage />
-                <Route path="/*any" view=CockpitPage />
+                <Route path="/*any" view=Mandala />
             </Routes>
         </Router>
     }

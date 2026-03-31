@@ -5,5 +5,6 @@ pub mod endpoints;
 pub mod header;
 pub mod home;
 pub mod instance;
+pub mod mandala;
 pub mod soul_panel;
 pub mod wallet_panel;

@@ -1218,6 +1218,71 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
     font-size: 9px;
 }
 
+/* Mandala floating controls */
+.mandala-controls {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 100;
+}
+
+.mandala-toggle {
+    width: 32px;
+    height: 32px;
+    background: rgba(10,10,22,0.8);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 16px;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mandala-toggle:hover {
+    color: var(--green);
+    border-color: var(--green-dim);
+}
+
+.mandala-panel {
+    background: rgba(8,8,16,0.92);
+    border: 1px solid var(--border);
+    margin-top: 4px;
+    padding: var(--gap-md);
+    min-width: 180px;
+    backdrop-filter: blur(8px);
+}
+
+.mandala-panel-section {
+    padding: var(--gap-sm) 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.mandala-panel-section:last-child {
+    border-bottom: none;
+}
+
+.mandala-panel-label {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.mandala-nav-link {
+    display: block;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 3px 0;
+}
+
+.mandala-nav-link:hover {
+    color: var(--green);
+}
+
 /* Psi orb pulse animation */
 .psi-orb {
     animation: psi-pulse 4s ease-in-out infinite;

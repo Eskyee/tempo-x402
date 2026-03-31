@@ -1,16 +1,25 @@
 use crate::api;
+use crate::WalletState;
 use gloo_timers::callback::Interval;
 use leptos::*;
+
+use super::wallet_panel::WalletButtons;
 
 /// Neural Mandala — alien intelligence visualization.
 /// Full viewport SVG. Ψ orb at center, cognitive systems orbiting,
 /// connections pulsing, sparkline rings, colony at the edges.
 #[component]
 pub fn Mandala() -> impl IntoView {
+    let (wallet, set_wallet) =
+        expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
+
     let (soul, set_soul) = create_signal(None::<serde_json::Value>);
     let (info, set_info) = create_signal(None::<serde_json::Value>);
     let (system, set_system) = create_signal(None::<serde_json::Value>);
     let (tick, set_tick) = create_signal(0u32);
+    let (panel_open, set_panel_open) = create_signal(false);
+    let (clone_loading, set_clone_loading) = create_signal(false);
+    let (clone_result, set_clone_result) = create_signal(None::<Result<String, String>>);
 
     // History buffers for sparkline rings
     let (psi_history, set_psi_history) = create_signal(Vec::<f64>::new());
@@ -415,6 +424,88 @@ pub fn Mandala() -> impl IntoView {
                     }).collect::<Vec<_>>()
                 }}
             </svg>
+
+            // ── Floating control panel (top-right) ──
+            <div class="mandala-controls">
+                <button class="mandala-toggle" on:click=move |_| set_panel_open.update(|v| *v = !*v)>
+                    {move || if panel_open.get() { "\u{2715}" } else { "\u{2630}" }}
+                </button>
+
+                <Show when=move || panel_open.get() fallback=|| ()>
+                    <div class="mandala-panel">
+                        // Wallet
+                        <div class="mandala-panel-section">
+                            <div class="mandala-panel-label">"ACCOUNT"</div>
+                            <WalletButtons wallet=wallet set_wallet=set_wallet />
+                        </div>
+
+                        // Balance + address
+                        {move || {
+                            let w = wallet.get();
+                            if !w.connected { return view! { <div></div> }.into_view(); }
+                            let addr = w.address.unwrap_or_default();
+                            let short = if addr.len() > 10 { format!("{}...{}", &addr[..6], &addr[addr.len()-4..]) } else { addr };
+                            view! {
+                                <div class="mandala-panel-section">
+                                    <div style="font-size:10px;color:var(--text-dim)">{short}</div>
+                                </div>
+                            }.into_view()
+                        }}
+
+                        // Clone button
+                        {move || {
+                            let d = info.get().unwrap_or_default();
+                            let clone_available = d.get("clone_available").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let clone_price = d.get("clone_price").and_then(|v| v.as_str()).unwrap_or("N/A").to_string();
+                            if !clone_available { return view! { <div></div> }.into_view(); }
+
+                            let do_clone = move |_: web_sys::MouseEvent| {
+                                if clone_loading.get() { return; }
+                                let w = wallet.get();
+                                if !w.connected { return; }
+                                set_clone_loading.set(true);
+                                set_clone_result.set(None);
+                                spawn_local(async move {
+                                    match api::clone_instance(&w).await {
+                                        Ok(resp) => {
+                                            let msg = format!("Clone {} at {}", resp.instance_id.unwrap_or_default(), resp.url.unwrap_or_default());
+                                            set_clone_result.set(Some(Ok(msg)));
+                                        }
+                                        Err(e) => set_clone_result.set(Some(Err(e))),
+                                    }
+                                    set_clone_loading.set(false);
+                                });
+                            };
+
+                            view! {
+                                <div class="mandala-panel-section">
+                                    <div class="mandala-panel-label">"CLONE"</div>
+                                    <button class="btn btn-primary"
+                                        on:click=do_clone
+                                        disabled=move || clone_loading.get() || !wallet.get().connected
+                                    >
+                                        {move || if clone_loading.get() { "Cloning..." } else { "Clone Node" }}
+                                    </button>
+                                    <div style="font-size:9px;color:var(--text-muted);margin-top:2px">
+                                        {format!("${}", clone_price)}
+                                    </div>
+                                    {move || clone_result.get().map(|r| match r {
+                                        Ok(msg) => view! { <div style="font-size:9px;color:var(--green);margin-top:4px">{msg}</div> }.into_view(),
+                                        Err(e) => view! { <div style="font-size:9px;color:var(--red);margin-top:4px">{e}</div> }.into_view(),
+                                    })}
+                                </div>
+                            }.into_view()
+                        }}
+
+                        // Navigation
+                        <div class="mandala-panel-section">
+                            <div class="mandala-panel-label">"NAVIGATE"</div>
+                            <a href="/dashboard" class="mandala-nav-link">"Dashboard"</a>
+                            <a href="/studio" class="mandala-nav-link">"Studio"</a>
+                        </div>
+                    </div>
+                </Show>
+            </div>
         </div>
     }
 }

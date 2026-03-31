@@ -1223,6 +1223,19 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
     font-size: 9px;
 }
 
+.mandala-text-alpha {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.mandala-text-regime {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+}
+
 /* Mandala floating controls */
 .mandala-controls {
     position: fixed;

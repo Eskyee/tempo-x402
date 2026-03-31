@@ -1,6 +1,6 @@
 [package]
 name = "tempo-x402-app"
-version = "6.4.0"
+version = "6.4.1"
 edition = "2021"
 description = "x402 kitchen sink web app - demo all payment features"
 license = "MIT"
@@ -46,6 +46,9 @@ web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d",
     "ImageData",
     "KeyboardEvent",
+    "EventSource",
+    "MessageEvent",
+    "EventTarget",
 ] }
 x402 = { path = "../tempo-x402", package = "tempo-x402", default-features = false, features = ["wasm", "demo"] }
 serde = { version = "1", features = ["derive"] }

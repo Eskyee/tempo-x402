@@ -2,30 +2,46 @@ use crate::api;
 use crate::WalletState;
 use gloo_timers::callback::Interval;
 use leptos::*;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 use super::wallet_panel::WalletButtons;
 
-/// Neural Mandala — alien intelligence visualization.
-/// Full viewport SVG. Ψ orb at center, cognitive systems orbiting,
-/// connections pulsing, sparkline rings, colony at the edges.
+/// Event from SSE stream, parsed into a usable struct.
+#[derive(Clone, Debug)]
+struct SoulEventMsg {
+    code: String,
+    _level: String,
+    message: String,
+    timestamp: i64,
+}
+
+/// Neural Mandala — event-driven intelligence visualization.
+/// Every visual change corresponds to a real cognitive event.
 #[component]
 pub fn Mandala() -> impl IntoView {
     let (wallet, set_wallet) =
         expect_context::<(ReadSignal<WalletState>, WriteSignal<WalletState>)>();
 
+    // ── Data signals (polled every 10s for state) ──
     let (soul, set_soul) = create_signal(None::<serde_json::Value>);
     let (info, set_info) = create_signal(None::<serde_json::Value>);
     let (system, set_system) = create_signal(None::<serde_json::Value>);
-    let (tick, set_tick) = create_signal(0u32);
     let (panel_open, set_panel_open) = create_signal(false);
     let (clone_loading, set_clone_loading) = create_signal(false);
     let (clone_result, set_clone_result) = create_signal(None::<Result<String, String>>);
 
-    // History buffers for sparkline rings
+    // ── Event-driven signals (from SSE) ──
+    let (events, set_events) = create_signal(Vec::<SoulEventMsg>::new());
+    // Track last-fired timestamp per event code prefix for connection pulses
+    let (pulses, set_pulses) = create_signal(std::collections::HashMap::<String, f64>::new());
+
+    // ── History buffers for sparkline rings ──
     let (psi_history, set_psi_history) = create_signal(Vec::<f64>::new());
     let (fe_history, set_fe_history) = create_signal(Vec::<f64>::new());
     let (fitness_history, set_fitness_history) = create_signal(Vec::<f64>::new());
 
+    // ── Fetch state data (polling, not events) ──
     let fetch_all = move || {
         spawn_local(async move {
             let base = api::gateway_base_url();
@@ -39,16 +55,13 @@ pub fn Mandala() -> impl IntoView {
                 }
             }
             if let Ok(data) = api::fetch_soul_status().await {
-                // Track history
                 let psi = data.get("role").and_then(|r| r.get("psi")).and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let fe = data.get("free_energy").and_then(|f| f.get("F")).and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
                 let fit = data.get("fitness").and_then(|f| f.get("total")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-
                 set_psi_history.update(|h| { h.push(psi); if h.len() > 60 { h.drain(..h.len()-60); } });
                 set_fe_history.update(|h| { h.push(fe); if h.len() > 60 { h.drain(..h.len()-60); } });
                 set_fitness_history.update(|h| { h.push(fit); if h.len() > 60 { h.drain(..h.len()-60); } });
-
                 set_soul.set(Some(data));
             }
             if let Ok(resp) = gloo_net::http::Request::get(&format!("{}/soul/system", base))
@@ -64,13 +77,49 @@ pub fn Mandala() -> impl IntoView {
     };
 
     fetch_all();
-    let interval = Interval::new(10_000, move || {
-        set_tick.update(|t| *t = t.wrapping_add(1));
-        fetch_all();
-    });
+    let interval = Interval::new(10_000, move || { fetch_all(); });
     on_cleanup(move || drop(interval));
 
-    // Layout constants — square viewBox, works in portrait + landscape
+    // ── SSE EventSource subscription ──
+    {
+        let base = api::gateway_base_url().to_string();
+        spawn_local(async move {
+            let url = format!("{}/soul/events/stream", base);
+            let es = match web_sys::EventSource::new(&url) {
+                Ok(es) => es,
+                Err(_) => return,
+            };
+
+            let on_msg = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
+                let data_str = ev.data().as_string().unwrap_or_default();
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                    let code = parsed.get("code").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let level = parsed.get("level").and_then(|v| v.as_str()).unwrap_or("info").to_string();
+                    let message = parsed.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let timestamp = parsed.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+
+                    if !code.is_empty() && code != "heartbeat" {
+                        // Add to event log (cap at 30)
+                        set_events.update(|evts| {
+                            evts.push(SoulEventMsg { code: code.clone(), _level: level, message, timestamp });
+                            if evts.len() > 30 { evts.drain(..evts.len() - 30); }
+                        });
+
+                        // Record pulse for connection visualization
+                        let now = js_sys::Date::now();
+                        set_pulses.update(|p| {
+                            p.insert(code, now);
+                        });
+                    }
+                }
+            });
+
+            es.add_event_listener_with_callback("soul_event", on_msg.as_ref().unchecked_ref()).ok();
+            on_msg.forget(); // Leak closure — lives for page lifetime
+        });
+    }
+
+    // Layout constants
     let cx = 400.0f64;
     let cy = 400.0f64;
     let r_inner = 100.0f64;
@@ -80,93 +129,97 @@ pub fn Mandala() -> impl IntoView {
     let r_spark_fe = 238.0f64;
     let r_spark_fit = 251.0f64;
 
-    // 9 cognitive systems
-    let systems = [
-        ("BRAIN", 0), ("CORTEX", 1), ("GENESIS", 2), ("HIVEMND", 3),
-        ("SYNTH", 4), ("EVAL", 5), ("AUTON", 6), ("FREE-E", 7), ("FEEDBACK", 8),
+    // 9 cognitive systems with their associated event code prefixes
+    let systems: [(& str, usize, &str); 9] = [
+        ("BRAIN", 0, "brain"),
+        ("CORTEX", 1, "cortex"),
+        ("GENESIS", 2, "genesis"),
+        ("HIVEMND", 3, "hivemind"),
+        ("SYNTH", 4, "synthesis"),
+        ("EVAL", 5, "evaluation"),
+        ("AUTON", 6, "autonomy"),
+        ("FREE-E", 7, "free_energy"),
+        ("FEEDBACK", 8, "plan"),
     ];
 
-    // 4 models
-    let models = [
-        ("brain", 0), ("xformer", 1), ("quality", 2), ("codegen", 3),
+    // 4 models with their event prefixes
+    let models: [(&str, usize, &str); 4] = [
+        ("brain", 0, "brain.trained"),
+        ("xformer", 1, "transformer.trained"),
+        ("quality", 2, "quality"),
+        ("codegen", 3, "codegen.trained"),
     ];
 
     view! {
         <div class="mandala-container">
             <svg viewBox="0 0 800 800" class="mandala-svg" preserveAspectRatio="xMidYMid meet">
                 <defs>
-                    // Glow filters
                     <filter id="glow-green">
                         <feGaussianBlur stdDeviation="4" result="blur"/>
                         <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
                     </filter>
-                    <filter id="glow-cyan">
-                        <feGaussianBlur stdDeviation="3" result="blur"/>
-                        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-                    </filter>
-                    <filter id="glow-psi">
-                        <feGaussianBlur stdDeviation="8" result="blur"/>
+                    <filter id="glow-pulse">
+                        <feGaussianBlur stdDeviation="6" result="blur"/>
                         <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
                     </filter>
                     <radialGradient id="psi-grad" cx="50%" cy="50%" r="50%">
                         <stop offset="0%" stop-color="#00ff41" stop-opacity="0.6"/>
                         <stop offset="100%" stop-color="#00ff41" stop-opacity="0"/>
                     </radialGradient>
-                    <radialGradient id="orb-inner" cx="40%" cy="35%" r="60%">
-                        <stop offset="0%" stop-color="#00ff88"/>
-                        <stop offset="100%" stop-color="#005522"/>
-                    </radialGradient>
                 </defs>
 
-                // ── Background grid (subtle) ──
-                {(0..10).map(|i| {
+                // ── Background rings (subtle) ──
+                {(0..8).map(|i| {
                     let r = (i as f64 + 1.0) * 40.0;
                     view! {
                         <circle cx=cx.to_string() cy=cy.to_string() r=r.to_string()
-                            fill="none" stroke="#0a0a1a" stroke-width="0.5"/>
+                            fill="none" stroke="#08081a" stroke-width="0.5"/>
                     }
                 }).collect::<Vec<_>>()}
 
-                // ── Connections: models ↔ center ──
+                // ── Connections: center ↔ models (event-driven brightness) ──
                 {move || {
-                    let t = tick.get();
-                    models.iter().map(|(_, i)| {
+                    let p = pulses.get();
+                    let now = js_sys::Date::now();
+                    models.iter().map(|(_, i, evt_code)| {
                         let angle = (*i as f64) * std::f64::consts::TAU / 4.0 - std::f64::consts::FRAC_PI_2;
                         let mx = cx + r_inner * angle.cos();
                         let my = cy + r_inner * angle.sin();
-                        // Animate dash offset
-                        let offset = (t as f64 * 2.0 + *i as f64 * 10.0) % 20.0;
+                        let intensity = pulse_intensity(&p, evt_code, now);
+                        let opacity = 0.08 + intensity * 0.7;
+                        let width = 0.5 + intensity * 2.5;
+                        let color = if intensity > 0.3 { "#00ff41" } else { "#00ff41" };
                         view! {
                             <line x1=cx.to_string() y1=cy.to_string()
                                 x2=mx.to_string() y2=my.to_string()
-                                stroke="#00ff41" stroke-width="0.8" stroke-opacity="0.15"
-                                stroke-dasharray="4 4"
-                                stroke-dashoffset=offset.to_string()
-                            />
+                                stroke=color stroke-width=width.to_string()
+                                stroke-opacity=opacity.to_string()
+                                {..} />
                         }
                     }).collect::<Vec<_>>()
                 }}
 
-                // ── Connections: systems ↔ models ──
+                // ── Connections: systems ↔ models (event-driven) ──
                 {move || {
-                    let t = tick.get();
-                    systems.iter().map(|(_, i)| {
+                    let p = pulses.get();
+                    let now = js_sys::Date::now();
+                    systems.iter().map(|(_, i, evt_prefix)| {
                         let angle = (*i as f64) * std::f64::consts::TAU / 9.0 - std::f64::consts::FRAC_PI_2;
                         let sx = cx + r_outer * angle.cos();
                         let sy = cy + r_outer * angle.sin();
-                        // Connect to nearest model
                         let mi = *i % 4;
                         let m_angle = (mi as f64) * std::f64::consts::TAU / 4.0 - std::f64::consts::FRAC_PI_2;
                         let mx = cx + r_inner * m_angle.cos();
                         let my = cy + r_inner * m_angle.sin();
-                        let offset = (t as f64 * 1.5 + *i as f64 * 7.0) % 16.0;
+                        let intensity = pulse_intensity(&p, evt_prefix, now);
+                        let opacity = 0.05 + intensity * 0.5;
+                        let width = 0.3 + intensity * 1.5;
                         view! {
                             <line x1=sx.to_string() y1=sy.to_string()
                                 x2=mx.to_string() y2=my.to_string()
-                                stroke="#00e5ff" stroke-width="0.5" stroke-opacity="0.1"
-                                stroke-dasharray="3 5"
-                                stroke-dashoffset=offset.to_string()
-                            />
+                                stroke="#00e5ff" stroke-width=width.to_string()
+                                stroke-opacity=opacity.to_string()
+                                {..} />
                         }
                     }).collect::<Vec<_>>()
                 }}
@@ -175,6 +228,31 @@ pub fn Mandala() -> impl IntoView {
                 {move || render_sparkline_ring(&psi_history.get(), cx, cy, r_spark_psi, "#00ff41", 0.4)}
                 {move || render_sparkline_ring(&fe_history.get(), cx, cy, r_spark_fe, "#00e5ff", 0.3)}
                 {move || render_sparkline_ring(&fitness_history.get(), cx, cy, r_spark_fit, "#ffa000", 0.3)}
+
+                // ── α compass (above center orb) ──
+                {move || {
+                    let s = soul.get().unwrap_or_default();
+                    let accel = s.get("acceleration");
+                    let alpha_str = accel.and_then(|a| a.get("alpha")).and_then(|v| v.as_str()).unwrap_or("0.0000");
+                    let alpha: f64 = alpha_str.parse().unwrap_or(0.0);
+                    let regime = accel.and_then(|a| a.get("regime")).and_then(|v| v.as_str()).unwrap_or("STALLED");
+                    let (color, symbol) = match regime {
+                        "ACCELERATING" => ("#00ff41", "\u{25B2}"),  // green ▲
+                        "CRUISING" => ("#00e5ff", "\u{25C6}"),       // cyan ◆
+                        "DECELERATING" => ("#ff1744", "\u{25BC}"),   // red ▼
+                        _ => ("#5a6a5a", "\u{25CB}"),                // dim ○
+                    };
+                    view! {
+                        <text x=cx.to_string() y="60" text-anchor="middle"
+                            class="mandala-text-alpha" fill=color>
+                            {format!("{} \u{03B1}={:+.4}", symbol, alpha)}
+                        </text>
+                        <text x=cx.to_string() y="74" text-anchor="middle"
+                            class="mandala-text-regime" fill=color opacity="0.6">
+                            {regime.to_string()}
+                        </text>
+                    }
+                }}
 
                 // ── Ψ center orb ──
                 {move || {
@@ -185,7 +263,7 @@ pub fn Mandala() -> impl IntoView {
                     let regime = fe.and_then(|f| f.get("regime")).and_then(|v| v.as_str()).unwrap_or("EXPLOIT");
                     let f_val = fe.and_then(|f| f.get("F")).and_then(|v| v.as_str()).unwrap_or("--");
 
-                    let orb_r = 25.0 + psi * 30.0; // 25-55px based on Ψ
+                    let orb_r = 25.0 + psi * 30.0;
                     let (orb_color, glow_color) = match regime {
                         "EXPLORE" => ("#00e5ff", "#003344"),
                         "LEARN" => ("#b388ff", "#2a1a44"),
@@ -193,32 +271,25 @@ pub fn Mandala() -> impl IntoView {
                         "ANOMALY" => ("#ff1744", "#440011"),
                         _ => ("#00ff41", "#003311"),
                     };
-
                     let iq = s.get("benchmark").and_then(|b| b.get("opus_iq")).and_then(|v| v.as_str()).unwrap_or("--");
 
                     view! {
-                        // Outer glow
                         <circle cx=cx.to_string() cy=cy.to_string() r=(orb_r * 2.5).to_string()
-                            fill="url(#psi-grad)" opacity="0.3" filter="url(#glow-psi)"/>
-                        // Orb
+                            fill="url(#psi-grad)" opacity="0.3"/>
                         <circle cx=cx.to_string() cy=cy.to_string() r=orb_r.to_string()
                             fill=glow_color stroke=orb_color stroke-width="2"
                             filter="url(#glow-green)" class="psi-orb"/>
-                        // Inner bright spot
                         <circle cx=(cx - orb_r * 0.2).to_string() cy=(cy - orb_r * 0.2).to_string()
                             r=(orb_r * 0.3).to_string()
                             fill=orb_color opacity="0.3"/>
-                        // Ψ label
                         <text x=cx.to_string() y=(cy - 2.0).to_string()
                             text-anchor="middle" class="mandala-text-psi" fill=orb_color>
                             {format!("\u{03A8} {:.3}", psi)}
                         </text>
-                        // F below
                         <text x=cx.to_string() y=(cy + 12.0).to_string()
                             text-anchor="middle" class="mandala-text-small" fill="#ffffff" opacity="0.5">
                             {format!("F={} {}", f_val, regime)}
                         </text>
-                        // IQ above orb
                         <text x=cx.to_string() y=(cy - orb_r - 12.0).to_string()
                             text-anchor="middle" class="mandala-text-iq" fill=orb_color>
                             {format!("IQ {}", iq)}
@@ -229,46 +300,54 @@ pub fn Mandala() -> impl IntoView {
                 // ── Model ring (inner) ──
                 {move || {
                     let s = soul.get().unwrap_or_default();
-                    models.iter().map(|(name, i)| {
+                    let p = pulses.get();
+                    let now = js_sys::Date::now();
+                    models.iter().map(|(name, i, evt_code)| {
                         let angle = (*i as f64) * std::f64::consts::TAU / 4.0 - std::f64::consts::FRAC_PI_2;
                         let mx = cx + r_inner * angle.cos();
                         let my = cy + r_inner * angle.sin();
+                        let pulse = pulse_intensity(&p, evt_code, now);
 
                         let (node_r, color, label) = match *name {
                             "brain" => {
                                 let b = s.get("brain");
                                 let loss = b.and_then(|b| b.get("running_loss")).and_then(|v| v.as_f64()).unwrap_or(1.0);
                                 let steps = b.and_then(|b| b.get("train_steps")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                let brightness = (1.0 - loss.min(1.0)) * 0.8 + 0.2;
-                                (8.0 + (steps as f64 / 5000.0).min(8.0), format!("rgba(0,255,65,{:.2})", brightness), format!("{}K", steps/1000))
+                                let brightness = (1.0 - loss.min(1.0)) * 0.8 + 0.2 + pulse * 0.3;
+                                (8.0 + (steps as f64 / 5000.0).min(8.0), format!("rgba(0,255,65,{:.2})", brightness.min(1.0)), format!("{}K", steps/1000))
                             }
                             "xformer" => {
                                 let t = s.get("transformer");
                                 let loss = t.and_then(|t| t.get("last_train_loss")).and_then(|v| v.as_f64()).unwrap_or(2.0);
                                 let steps = t.and_then(|t| t.get("train_steps")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                let brightness = (1.0 - (loss / 2.0).min(1.0)) * 0.8 + 0.2;
-                                (8.0 + (steps as f64 / 1000.0).min(8.0), format!("rgba(0,229,255,{:.2})", brightness), format!("{}K", steps/1000))
+                                let brightness = (1.0 - (loss / 2.0).min(1.0)) * 0.8 + 0.2 + pulse * 0.3;
+                                (8.0 + (steps as f64 / 1000.0).min(8.0), format!("rgba(0,229,255,{:.2})", brightness.min(1.0)), format!("{}K", steps/1000))
                             }
                             "quality" => {
                                 let q = s.get("quality");
                                 let steps = q.and_then(|q| q.get("train_steps")).and_then(|v| v.as_u64()).unwrap_or(0);
-                                (6.0 + (steps as f64 / 500.0).min(6.0), "rgba(179,136,255,0.6)".to_string(), format!("{}s", steps))
+                                (6.0 + (steps as f64 / 500.0).min(6.0), format!("rgba(179,136,255,{:.2})", 0.6 + pulse * 0.3), format!("{}s", steps))
                             }
                             "codegen" => {
                                 let cg = s.get("codegen");
                                 let steps = cg.and_then(|c| c.get("model_steps")).and_then(|v| v.as_u64()).unwrap_or(0);
                                 let sols = cg.and_then(|c| c.get("solutions_stored")).and_then(|v| v.as_u64()).unwrap_or(0);
                                 let can = cg.and_then(|c| c.get("can_generate")).and_then(|v| v.as_bool()).unwrap_or(false);
-                                let color = if can { "rgba(0,255,65,0.8)" } else if sols > 0 { "rgba(255,160,0,0.6)" } else { "rgba(255,23,68,0.3)" };
-                                (6.0 + (steps as f64 / 50.0).min(10.0), color.to_string(), format!("{}d", sols))
+                                let base_color = if can { 0.8 } else if sols > 0 { 0.5 } else { 0.2 };
+                                let brightness = base_color + pulse * 0.3;
+                                let color = if can { format!("rgba(0,255,65,{:.2})", brightness.min(1.0)) }
+                                    else if sols > 0 { format!("rgba(255,160,0,{:.2})", brightness.min(1.0)) }
+                                    else { format!("rgba(255,23,68,{:.2})", brightness.min(1.0)) };
+                                (6.0 + (steps as f64 / 50.0).min(10.0), color, format!("{}d", sols))
                             }
                             _ => (6.0, "rgba(100,100,100,0.5)".to_string(), String::new()),
                         };
 
+                        let filter = if pulse > 0.3 { "url(#glow-pulse)" } else { "" };
                         view! {
                             <circle cx=mx.to_string() cy=my.to_string() r=node_r.to_string()
                                 fill=color.clone() stroke=color stroke-width="1"
-                                filter="url(#glow-cyan)"/>
+                                filter=filter />
                             <text x=mx.to_string() y=(my + node_r + 10.0).to_string()
                                 text-anchor="middle" class="mandala-text-tiny" fill="#5a6a5a">
                                 {name.to_string()}
@@ -281,23 +360,24 @@ pub fn Mandala() -> impl IntoView {
                     }).collect::<Vec<_>>()
                 }}
 
-                // ── System ring (outer) ──
+                // ── System ring (outer) — health-driven, event-brightened ──
                 {move || {
                     let s = soul.get().unwrap_or_default();
-                    let synth = s.get("synthesis");
-                    systems.iter().map(|(name, i)| {
+                    let p = pulses.get();
+                    let now = js_sys::Date::now();
+                    systems.iter().map(|(name, i, evt_prefix)| {
                         let angle = (*i as f64) * std::f64::consts::TAU / 9.0 - std::f64::consts::FRAC_PI_2;
                         let sx = cx + r_outer * angle.cos();
                         let sy = cy + r_outer * angle.sin();
-
-                        // Get health color from system data
                         let (node_r, color) = system_health(&s, name);
+                        let pulse = pulse_intensity(&p, evt_prefix, now);
+                        let opacity = 0.7 + pulse * 0.3;
+                        let filter = if pulse > 0.3 { "url(#glow-pulse)" } else { "" };
 
                         view! {
                             <circle cx=sx.to_string() cy=sy.to_string() r=node_r.to_string()
                                 fill="none" stroke=color.clone() stroke-width="1.5"
-                                opacity="0.7"/>
-                            // Inner fill (dimmer)
+                                opacity=opacity.to_string() filter=filter />
                             <circle cx=sx.to_string() cy=sy.to_string() r=(node_r * 0.6).to_string()
                                 fill=color.clone() opacity="0.15"/>
                             <text x=sx.to_string() y=(sy + 1.0).to_string()
@@ -308,14 +388,11 @@ pub fn Mandala() -> impl IntoView {
                     }).collect::<Vec<_>>()
                 }}
 
-                // ── Colony peers (far ring) ──
+                // ── Colony peers ──
                 {move || {
                     let d = info.get().unwrap_or_default();
-                    let peers = d.get("peers")
-                        .or_else(|| d.get("children"))
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
+                    let peers = d.get("peers").or_else(|| d.get("children"))
+                        .and_then(|v| v.as_array()).cloned().unwrap_or_default();
                     if peers.is_empty() { return vec![]; }
                     let n = peers.len();
                     peers.iter().enumerate().map(|(i, p)| {
@@ -327,11 +404,9 @@ pub fn Mandala() -> impl IntoView {
                         let id = p.get("instance_id").and_then(|v| v.as_str()).unwrap_or("?");
                         let short = if id.len() > 6 { &id[..6] } else { id };
                         view! {
-                            // Sync line to center
                             <line x1=cx.to_string() y1=cy.to_string()
                                 x2=px.to_string() y2=py.to_string()
-                                stroke=color stroke-width="0.3" stroke-opacity="0.15"
-                                stroke-dasharray="2 6"/>
+                                stroke=color stroke-width="0.3" stroke-opacity="0.1"/>
                             <circle cx=px.to_string() cy=py.to_string() r="4"
                                 fill="none" stroke=color stroke-width="1" opacity="0.5"/>
                             <text x=px.to_string() y=(py + 12.0).to_string()
@@ -342,7 +417,7 @@ pub fn Mandala() -> impl IntoView {
                     }).collect::<Vec<_>>()
                 }}
 
-                // ── Fitness + key metrics overlay ──
+                // ── Metrics overlay ──
                 {move || {
                     let d = info.get().unwrap_or_default();
                     let s = soul.get().unwrap_or_default();
@@ -350,96 +425,60 @@ pub fn Mandala() -> impl IntoView {
                     let cycles = s.get("total_cycles").and_then(|v| v.as_u64()).unwrap_or(0);
                     let mode = s.get("mode").and_then(|v| v.as_str()).unwrap_or("--");
                     let active = s.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
-
                     let bench = s.get("benchmark");
                     let pass = bench.and_then(|b| b.get("pass_at_1")).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     let elo = bench.and_then(|b| b.get("elo_rating")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-
                     let sys = system.get().unwrap_or_default();
                     let cpu = sys.get("cpu_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     let mem = sys.get("mem_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
                     let status_color = if active { "#00ff41" } else { "#ff1744" };
 
                     view! {
-                        // Top left: identity
                         <text x="16" y="20" class="mandala-text-label" fill="#3a4a3a">
-                            {format!("tempo-x402 | {} | cycle {} | cpu {:.0}% mem {:.0}%", mode, cycles, cpu, mem)}
+                            {format!("{} | cycle {} | cpu {:.0}% mem {:.0}%", mode, cycles, cpu, mem)}
                         </text>
-                        // Top right: nav
-                        <a href="/studio">
-                            <text x="784" y="20" text-anchor="end" class="mandala-text-label" fill="#5a6a5a">
-                                "STUDIO \u{2192}"
-                            </text>
-                        </a>
-                        // Bottom left: fitness
                         <text x="16" y="780" class="mandala-text-label" fill="#ffa000">
                             {format!("fitness {:.0}%", fitness * 100.0)}
                         </text>
-                        // Bottom center: pass@1 + ELO
                         <text x="400" y="780" text-anchor="middle" class="mandala-text-label" fill="#5a6a5a">
                             {format!("pass@1 {:.1}% | ELO {:.0}", pass, elo)}
                         </text>
-                        // Bottom right: version
                         <text x="784" y="780" text-anchor="end" class="mandala-text-label" fill="#2a2a3a">
                             {concat!("v", env!("CARGO_PKG_VERSION"))}
                         </text>
-                        // Status dot
                         <circle cx="10" cy="16" r="3" fill=status_color/>
                     }
                 }}
 
-                // ── Recent thoughts as flowing particles ──
+                // ── Live event log (replaces fake orbiting particles) ──
                 {move || {
-                    let s = soul.get().unwrap_or_default();
-                    let thoughts: Vec<serde_json::Value> = s.get("recent_thoughts")
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    let t = tick.get();
-                    thoughts.iter().rev().take(12).enumerate().map(|(i, thought)| {
-                        let tt = thought.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-                        let color = match tt {
-                            "observation" => "#00e5ff",
-                            "reasoning" => "#00ff41",
-                            "decision" => "#ffa000",
-                            "reflection" => "#b388ff",
-                            "tool_execution" => "#ffa000",
-                            "mutation" => "#ff1744",
-                            "memory_consolidation" => "#5a6a5a",
-                            _ => "#3a4a3a",
-                        };
-                        // Particles orbit at different radii based on recency
-                        let orbit_r = 160.0 + (i as f64) * 12.0;
-                        let speed = 0.02 - (i as f64) * 0.001;
-                        let phase = (t as f64) * speed + (i as f64) * 0.7;
-                        let px = cx + orbit_r * phase.cos();
-                        let py = cy + orbit_r * phase.sin();
-                        let size = 2.5 - (i as f64) * 0.15;
-                        let opacity = 0.8 - (i as f64) * 0.05;
+                    let evts = events.get();
+                    evts.iter().rev().take(8).enumerate().map(|(i, evt)| {
+                        let y = 720.0 - (i as f64) * 12.0;
+                        let opacity = 0.7 - (i as f64) * 0.07;
+                        let color = event_color(&evt.code);
+                        let abbr = event_abbr(&evt.code);
+                        let msg: String = evt.message.chars().take(60).collect();
                         view! {
-                            <circle cx=px.to_string() cy=py.to_string() r=size.to_string()
-                                fill=color opacity=opacity.to_string()/>
+                            <text x="16" y=y.to_string() class="mandala-text-tiny" fill=color opacity=opacity.to_string()>
+                                {format!("[{}] {}", abbr, msg)}
+                            </text>
                         }
                     }).collect::<Vec<_>>()
                 }}
             </svg>
 
-            // ── Floating control panel (top-right) ──
+            // ── Floating control panel ──
             <div class="mandala-controls">
                 <button class="mandala-toggle" on:click=move |_| set_panel_open.update(|v| *v = !*v)>
                     {move || if panel_open.get() { "\u{2715}" } else { "\u{2630}" }}
                 </button>
-
                 <Show when=move || panel_open.get() fallback=|| ()>
                     <div class="mandala-panel">
-                        // Wallet
                         <div class="mandala-panel-section">
                             <div class="mandala-panel-label">"ACCOUNT"</div>
                             <WalletButtons wallet=wallet set_wallet=set_wallet />
                         </div>
-
-                        // Balance + address
                         {move || {
                             let w = wallet.get();
                             if !w.connected { return view! { <div></div> }.into_view(); }
@@ -451,14 +490,11 @@ pub fn Mandala() -> impl IntoView {
                                 </div>
                             }.into_view()
                         }}
-
-                        // Clone button
                         {move || {
                             let d = info.get().unwrap_or_default();
                             let clone_available = d.get("clone_available").and_then(|v| v.as_bool()).unwrap_or(false);
                             let clone_price = d.get("clone_price").and_then(|v| v.as_str()).unwrap_or("N/A").to_string();
                             if !clone_available { return view! { <div></div> }.into_view(); }
-
                             let do_clone = move |_: web_sys::MouseEvent| {
                                 if clone_loading.get() { return; }
                                 let w = wallet.get();
@@ -476,19 +512,14 @@ pub fn Mandala() -> impl IntoView {
                                     set_clone_loading.set(false);
                                 });
                             };
-
                             view! {
                                 <div class="mandala-panel-section">
                                     <div class="mandala-panel-label">"CLONE"</div>
-                                    <button class="btn btn-primary"
-                                        on:click=do_clone
-                                        disabled=move || clone_loading.get() || !wallet.get().connected
-                                    >
+                                    <button class="btn btn-primary" on:click=do_clone
+                                        disabled=move || clone_loading.get() || !wallet.get().connected>
                                         {move || if clone_loading.get() { "Cloning..." } else { "Clone Node" }}
                                     </button>
-                                    <div style="font-size:9px;color:var(--text-muted);margin-top:2px">
-                                        {format!("${}", clone_price)}
-                                    </div>
+                                    <div style="font-size:9px;color:var(--text-muted);margin-top:2px">{format!("${}", clone_price)}</div>
                                     {move || clone_result.get().map(|r| match r {
                                         Ok(msg) => view! { <div style="font-size:9px;color:var(--green);margin-top:4px">{msg}</div> }.into_view(),
                                         Err(e) => view! { <div style="font-size:9px;color:var(--red);margin-top:4px">{e}</div> }.into_view(),
@@ -496,8 +527,6 @@ pub fn Mandala() -> impl IntoView {
                                 </div>
                             }.into_view()
                         }}
-
-                        // Navigation
                         <div class="mandala-panel-section">
                             <div class="mandala-panel-label">"NAVIGATE"</div>
                             <a href="/dashboard" class="mandala-nav-link">"Dashboard"</a>
@@ -510,108 +539,115 @@ pub fn Mandala() -> impl IntoView {
     }
 }
 
-/// Render a sparkline as an arc ring around the center.
-fn render_sparkline_ring(
-    data: &[f64],
-    cx: f64,
-    cy: f64,
-    radius: f64,
-    color: &str,
-    opacity: f64,
-) -> impl IntoView {
+// ── Helper functions ──
+
+/// How bright a connection should be based on recent events (0.0 = baseline, 1.0 = just fired).
+fn pulse_intensity(pulses: &std::collections::HashMap<String, f64>, prefix: &str, now: f64) -> f64 {
+    let last = pulses.iter()
+        .filter(|(code, _)| code.starts_with(prefix))
+        .map(|(_, ts)| *ts)
+        .fold(0.0f64, f64::max);
+    if last == 0.0 { return 0.0; }
+    let age_ms = now - last;
+    if age_ms < 0.0 { return 1.0; }
+    // Fade over 10 seconds
+    (1.0 - (age_ms / 10_000.0)).max(0.0)
+}
+
+fn event_color(code: &str) -> &'static str {
+    if code.starts_with("brain") { "#00ff41" }
+    else if code.starts_with("transformer") { "#00e5ff" }
+    else if code.starts_with("codegen") { "#ffa000" }
+    else if code.starts_with("plan.step") { "#00e5ff" }
+    else if code.starts_with("plan") { "#b388ff" }
+    else if code.starts_with("benchmark") { "#00ff41" }
+    else if code.starts_with("peer") { "#00e5ff" }
+    else if code.starts_with("system") { "#5a6a5a" }
+    else { "#3a4a3a" }
+}
+
+fn event_abbr(code: &str) -> &'static str {
+    if code.starts_with("brain.trained") { "BRAIN" }
+    else if code.starts_with("transformer") { "XFORM" }
+    else if code.starts_with("codegen") { "COGEN" }
+    else if code.starts_with("plan.step.completed") { "STEP+" }
+    else if code.starts_with("plan.step.failed") { "STEP!" }
+    else if code.starts_with("plan.step.started") { "STEP>" }
+    else if code.starts_with("plan.completed") { "PLAN+" }
+    else if code.starts_with("plan.failed") { "PLAN!" }
+    else if code.starts_with("benchmark") { "BENCH" }
+    else if code.starts_with("peer") { "PEER" }
+    else if code.starts_with("acceleration") { "ACCEL" }
+    else { "EVENT" }
+}
+
+fn render_sparkline_ring(data: &[f64], cx: f64, cy: f64, radius: f64, color: &str, opacity: f64) -> leptos::View {
     if data.len() < 2 {
         return view! { <g></g> }.into_view();
     }
     let min = data.iter().cloned().fold(f64::INFINITY, f64::min);
     let max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let range = (max - min).max(0.001);
-
     let n = data.len();
     let arc_span = std::f64::consts::TAU * 0.75;
     let start_angle = std::f64::consts::FRAC_PI_2 + std::f64::consts::FRAC_PI_4;
-
-    let points: Vec<String> = data
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let t = i as f64 / (n - 1) as f64;
-            let angle = start_angle + t * arc_span;
-            let norm = (v - min) / range;
-            let r = radius + norm * 15.0 - 7.5;
-            let x = cx + r * angle.cos();
-            let y = cy + r * angle.sin();
-            format!("{:.1},{:.1}", x, y)
-        })
-        .collect();
-
+    let points: Vec<String> = data.iter().enumerate().map(|(i, v)| {
+        let t = i as f64 / (n - 1) as f64;
+        let angle = start_angle + t * arc_span;
+        let norm = (v - min) / range;
+        let r = radius + norm * 15.0 - 7.5;
+        format!("{:.1},{:.1}", cx + r * angle.cos(), cy + r * angle.sin())
+    }).collect();
     let path_d = format!("M {} L {}", points[0], points[1..].join(" L "));
     let color = color.to_string();
     let opacity = opacity.to_string();
-
     view! {
-        <path d=path_d fill="none" stroke=color stroke-width="1"
-            opacity=opacity stroke-linecap="round"/>
-    }
-    .into_view()
+        <path d=path_d fill="none" stroke=color stroke-width="1" opacity=opacity stroke-linecap="round"/>
+    }.into_view()
 }
 
-/// Get visual size and color for a cognitive system based on its health.
 fn system_health(soul: &serde_json::Value, name: &str) -> (f64, String) {
     match name {
         "BRAIN" => {
-            let b = soul.get("brain");
-            let loss = b.and_then(|b| b.get("running_loss")).and_then(|v| v.as_f64()).unwrap_or(1.0);
-            let health = 1.0 - loss.min(1.0);
-            (10.0 + health * 6.0, health_color(health))
+            let loss = soul.get("brain").and_then(|b| b.get("running_loss")).and_then(|v| v.as_f64()).unwrap_or(1.0);
+            (10.0 + (1.0 - loss.min(1.0)) * 6.0, health_color(1.0 - loss.min(1.0)))
         }
         "CORTEX" => {
-            let c = soul.get("cortex");
-            let acc = c.and_then(|c| c.get("prediction_accuracy")).and_then(|v| v.as_str())
+            let acc = soul.get("cortex").and_then(|c| c.get("prediction_accuracy")).and_then(|v| v.as_str())
                 .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok()).unwrap_or(0.0) / 100.0;
             (10.0 + acc * 6.0, health_color(acc))
         }
         "GENESIS" => {
-            let g = soul.get("genesis");
-            let gen = g.and_then(|g| g.get("generation")).and_then(|v| v.as_u64()).unwrap_or(0);
-            let health = (gen as f64 / 200.0).min(1.0);
-            (10.0 + health * 6.0, health_color(health))
+            let gen = soul.get("genesis").and_then(|g| g.get("generation")).and_then(|v| v.as_u64()).unwrap_or(0);
+            let h = (gen as f64 / 200.0).min(1.0);
+            (10.0 + h * 6.0, health_color(h))
         }
         "HIVEMND" => {
-            let h = soul.get("hivemind");
-            let trails = h.and_then(|h| h.get("total_trails")).and_then(|v| v.as_u64()).unwrap_or(0);
-            let health = (trails as f64 / 100.0).min(1.0);
-            (10.0 + health * 6.0, health_color(health))
+            let trails = soul.get("hivemind").and_then(|h| h.get("total_trails")).and_then(|v| v.as_u64()).unwrap_or(0);
+            let h = (trails as f64 / 100.0).min(1.0);
+            (10.0 + h * 6.0, health_color(h))
         }
         "SYNTH" => {
-            let s = soul.get("synthesis");
-            let state = s.and_then(|s| s.get("state")).and_then(|v| v.as_str()).unwrap_or("--");
-            let health = match state { "coherent" | "exploiting" => 0.9, "exploring" => 0.6, "conflicted" => 0.3, "stuck" => 0.1, _ => 0.5 };
-            (10.0 + health * 6.0, health_color(health))
+            let state = soul.get("synthesis").and_then(|s| s.get("state")).and_then(|v| v.as_str()).unwrap_or("--");
+            let h = match state { "coherent" | "exploiting" => 0.9, "exploring" => 0.6, "conflicted" => 0.3, "stuck" => 0.1, _ => 0.5 };
+            (10.0 + h * 6.0, health_color(h))
         }
         "EVAL" => {
-            let e = soul.get("evaluation");
-            let records = e.and_then(|e| e.get("total_records")).and_then(|v| v.as_u64()).unwrap_or(0);
-            let health = (records as f64 / 100.0).min(1.0);
-            (10.0 + health * 6.0, health_color(health))
+            let rec = soul.get("evaluation").and_then(|e| e.get("total_records")).and_then(|v| v.as_u64()).unwrap_or(0);
+            let h = (rec as f64 / 100.0).min(1.0);
+            (10.0 + h * 6.0, health_color(h))
         }
         "FREE-E" => {
-            let fe = soul.get("free_energy");
-            let f = fe.and_then(|f| f.get("F")).and_then(|v| v.as_str())
+            let f = soul.get("free_energy").and_then(|f| f.get("F")).and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0);
-            let health = 1.0 - f.min(1.0); // Lower F = healthier
-            (10.0 + health * 6.0, health_color(health))
+            (10.0 + (1.0 - f.min(1.0)) * 6.0, health_color(1.0 - f.min(1.0)))
         }
         _ => (10.0, "#3a4a3a".to_string()),
     }
 }
 
 fn health_color(health: f64) -> String {
-    // 0.0 = red, 0.5 = amber, 1.0 = green
-    if health > 0.7 {
-        format!("rgba(0,255,65,{:.2})", 0.4 + health * 0.4)
-    } else if health > 0.4 {
-        format!("rgba(255,160,0,{:.2})", 0.4 + health * 0.3)
-    } else {
-        format!("rgba(255,23,68,{:.2})", 0.3 + health * 0.3)
-    }
+    if health > 0.7 { format!("rgba(0,255,65,{:.2})", 0.4 + health * 0.4) }
+    else if health > 0.4 { format!("rgba(255,160,0,{:.2})", 0.4 + health * 0.3) }
+    else { format!("rgba(255,23,68,{:.2})", 0.3 + health * 0.3) }
 }

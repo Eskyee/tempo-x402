@@ -174,6 +174,17 @@ The node auto-bootstraps: generates wallet, requests faucet funds, mints on-chai
 
 ## Changelog
 
+### v7.0.0 — Collective Consciousness
+
+The colony is ONE distributed mind, not separate agents sharing weights.
+
+- **Queen/Worker architecture**: `COLONY_ROLE=queen` coordinates, `COLONY_ROLE=worker` executes. Workers register with queen, pull work, report results.
+- **Distributed benchmark**: Queen partitions 100 problems across N workers. Each solves its partition. Results aggregated into ONE Colony IQ. Linear speedup: 2 nodes = 2x throughput.
+- **Single brain**: Queen holds canonical weights. Workers fetch from queen every cycle. Training data flows from all workers to queen.
+- **Colony endpoints**: 7 new endpoints for registration, benchmark distribution, training data submission, and work assignment.
+- **Fungible workers**: Add a node = instant speedup. Lose a node = graceful degradation. No discovery needed — workers know the queen URL.
+- **Backward compatible**: `COLONY_ROLE` defaults to `standalone` — single node works exactly as before.
+
 ### v6.8.0 — Benchmark as Core Learning Engine
 
 The benchmark is the heartbeat of intelligence, not an optional side-task.

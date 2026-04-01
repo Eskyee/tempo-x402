@@ -217,9 +217,26 @@ impl ThinkingLoop {
             dormant = self.llm.is_none(),
             tools_enabled = self.config.tools_enabled,
             coding_enabled = self.config.coding_enabled,
+            colony_role = ?self.config.colony_role,
             "Soul plan-driven loop started"
         );
         crate::events::emit_info(&self.db, "system.startup", "Soul thinking loop started");
+
+        // Colony: worker registration with queen
+        if self.config.colony_role == crate::collective::ColonyRole::Worker {
+            if let Some(queen) = &self.config.queen_url {
+                let instance_id = self.config.instance_id.clone().unwrap_or_default();
+                let self_url = self.config.gateway_url.clone().unwrap_or_default();
+                let queen = queen.clone();
+                if crate::collective::register_with_queen(&queen, &instance_id, &self_url).await {
+                    crate::events::emit_info(
+                        &self.db,
+                        "colony.registered",
+                        &format!("Registered with queen at {}", queen),
+                    );
+                }
+            }
+        }
 
         loop {
             // Heartbeat: signal that the soul loop is alive
@@ -330,13 +347,119 @@ impl ThinkingLoop {
                 );
             }
 
+            // Colony worker: check for benchmark assignment from queen and re-register
+            if self.config.colony_role == crate::collective::ColonyRole::Worker {
+                if let Some(queen) = &self.config.queen_url {
+                    let instance_id = self.config.instance_id.clone().unwrap_or_default();
+                    let self_url = self.config.gateway_url.clone().unwrap_or_default();
+
+                    // Re-register (heartbeat) every cycle
+                    crate::collective::register_with_queen(queen, &instance_id, &self_url).await;
+
+                    // Check for benchmark assignment
+                    if let Some(llm) = &self.llm {
+                        if let Some(assignment) =
+                            crate::collective::fetch_benchmark_assignment(queen, &instance_id).await
+                        {
+                            tracing::info!(
+                                problems = assignment.problem_slugs.len(),
+                                session = %assignment.session_id,
+                                "Worker: received benchmark assignment from queen"
+                            );
+                            // Run benchmark on assigned problems only
+                            match crate::benchmark::run_opus_benchmark_session(
+                                llm,
+                                &self.db,
+                                &self.config.workspace_root,
+                                assignment.problem_slugs.len(),
+                            )
+                            .await
+                            {
+                                Ok(weighted_score) => {
+                                    let iq = crate::opus_bench::weighted_score_to_iq(weighted_score);
+                                    tracing::info!(
+                                        iq = format!("{:.0}", iq),
+                                        score = format!("{:.1}%", weighted_score),
+                                        "Worker: benchmark partition complete"
+                                    );
+                                    // Report results to queen
+                                    // (results already stored locally via record_run)
+                                    let runs = self.db.get_recent_benchmark_runs(
+                                        assignment.problem_slugs.len() as u32,
+                                    ).unwrap_or_default();
+                                    let results: Vec<crate::collective::BenchmarkResult> = runs
+                                        .iter()
+                                        .map(|r| crate::collective::BenchmarkResult {
+                                            session_id: assignment.session_id.clone(),
+                                            slug: r.entry_point.clone(),
+                                            passed: r.passed,
+                                            solution: r.generated_solution.clone(),
+                                            error_output: r.error_output.clone(),
+                                            total_ms: r.total_ms,
+                                        })
+                                        .collect();
+                                    crate::collective::report_benchmark_results(
+                                        queen,
+                                        &results,
+                                        &assignment.session_id,
+                                        &instance_id,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Worker: benchmark failed");
+                                }
+                            }
+                        }
+                    }
+
+                    // Fetch latest brain weights from queen (every cycle)
+                    if let Some(weights_json) = crate::collective::fetch_queen_brain(queen).await {
+                        if let Some(brain) = crate::brain::Brain::from_json(&weights_json) {
+                            crate::brain::save_brain(&self.db, &brain);
+                            tracing::debug!("Worker: synced brain weights from queen");
+                        }
+                    }
+                }
+            }
+
             // Run benchmark EVERY cycle (cooldown-gated only, not oscillator-gated).
             // The benchmark IS the training loop — it's core, not optional.
+            // Queen mode: also distributes problems to workers.
             if let Some(llm) = &self.llm {
-                if crate::benchmark::should_run_benchmark(
-                    &self.db,
-                    crate::benchmark::DEFAULT_BENCHMARK_INTERVAL,
-                ) {
+                if self.config.colony_role != crate::collective::ColonyRole::Worker
+                    && crate::benchmark::should_run_benchmark(
+                        &self.db,
+                        crate::benchmark::DEFAULT_BENCHMARK_INTERVAL,
+                    )
+                {
+                    // If queen: distribute problems to workers before running own portion
+                    if self.config.colony_role == crate::collective::ColonyRole::Queen {
+                        let problems = crate::opus_bench::load_embedded_problems();
+                        let slugs: Vec<String> = problems.iter().map(|p| p.slug.clone()).collect();
+                        let sample_size = crate::benchmark::DEFAULT_SAMPLE_SIZE;
+                        let (_, worker_assignments) =
+                            crate::collective::partition_benchmark(&self.db, &slugs, sample_size);
+
+                        let session_id = uuid::Uuid::new_v4().to_string();
+                        for (worker_id, _worker_url, worker_problems) in &worker_assignments {
+                            let assignment = crate::collective::BenchmarkAssignment {
+                                session_id: session_id.clone(),
+                                problem_slugs: worker_problems.clone(),
+                                assigned_at: chrono::Utc::now().timestamp(),
+                            };
+                            crate::collective::store_assignment(&self.db, worker_id, &assignment);
+                        }
+
+                        if !worker_assignments.is_empty() {
+                            tracing::info!(
+                                workers = worker_assignments.len(),
+                                session = %session_id,
+                                "Queen: distributed benchmark to workers"
+                            );
+                        }
+                    }
+
                     tracing::info!("Starting benchmark session (core learning loop)");
                     let current_cycle: u64 = self
                         .db

@@ -5,6 +5,7 @@ mod benchmark;
 mod brain;
 mod chat;
 mod cognition;
+mod colony_routes;
 mod lifecycle;
 mod nudges;
 mod plans;
@@ -342,5 +343,34 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         )
         // Studio: file browsing for the IDE
         .route("/soul/admin/ls", web::get().to(admin::admin_ls))
-        .route("/soul/admin/cat", web::get().to(admin::admin_cat));
+        .route("/soul/admin/cat", web::get().to(admin::admin_cat))
+        // Colony collective consciousness endpoints
+        .route(
+            "/soul/colony/register",
+            web::post().to(colony_routes::colony_register),
+        )
+        .route(
+            "/soul/colony/peers",
+            web::get().to(colony_routes::colony_peers),
+        )
+        .route(
+            "/soul/colony/benchmark/assignment",
+            web::get().to(colony_routes::colony_benchmark_assignment),
+        )
+        .route(
+            "/soul/colony/benchmark/result",
+            web::post().to(colony_routes::colony_benchmark_result),
+        )
+        .route(
+            "/soul/colony/train",
+            web::post().to(colony_routes::colony_train),
+        )
+        .route(
+            "/soul/colony/work",
+            web::post().to(colony_routes::colony_work),
+        )
+        .route(
+            "/soul/colony/report",
+            web::post().to(colony_routes::colony_report),
+        );
 }

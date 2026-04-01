@@ -60,6 +60,7 @@ pub mod chat;
 pub mod code_quality;
 pub mod codegen;
 pub mod coding;
+pub mod collective;
 pub mod colony;
 pub mod computer_use;
 pub mod config;

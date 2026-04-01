@@ -535,13 +535,26 @@ pub fn record_peer_fitness(
     }
 }
 
-/// Load peer fitness records.
+/// Load peer fitness records, filtering out stale entries.
+/// Peers older than 2 hours are considered dead (ghosts).
 pub fn load_peer_fitness(db: &SoulDatabase) -> Vec<PeerFitnessRecord> {
-    db.get_state("colony_peer_fitness")
+    let now = chrono::Utc::now().timestamp();
+    let max_age_secs: i64 = 7200; // 2 hours
+    let all: Vec<PeerFitnessRecord> = db
+        .get_state("colony_peer_fitness")
         .ok()
         .flatten()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let live: Vec<PeerFitnessRecord> = all
+        .into_iter()
+        .filter(|p| now - p.measured_at < max_age_secs)
+        .collect();
+    // If we filtered any, persist the cleaned list
+    if let Ok(json) = serde_json::to_string(&live) {
+        let _ = db.set_state("colony_peer_fitness", &json);
+    }
+    live
 }
 
 /// Load the current colony status.

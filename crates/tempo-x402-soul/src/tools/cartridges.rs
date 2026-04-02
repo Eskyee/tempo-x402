@@ -98,6 +98,16 @@ impl ToolExecutor {
                     .unwrap_or_else(|_| "unknown".to_string());
                 let size = std::fs::metadata(&wasm_path).map(|m| m.len()).unwrap_or(0);
 
+                // Load into the shared engine so /c/{slug} works immediately
+                // and the list endpoint can auto-register it in the DB.
+                let mut load_status = String::new();
+                if let Some(ref engine) = self.cartridge_engine {
+                    match engine.load_module(slug, &wasm_path) {
+                        Ok(()) => load_status = "Loaded into runtime.".to_string(),
+                        Err(e) => load_status = format!("Warning: failed to load into runtime: {e}"),
+                    }
+                }
+
                 Ok(ToolResult {
                     stdout: format!(
                         "Cartridge '{slug}' compiled successfully!\n\
@@ -105,6 +115,7 @@ impl ToolExecutor {
                          Size: {} bytes\n\
                          Hash: {hash}\n\
                          Build time: {duration_ms}ms\n\
+                         {load_status}\n\
                          The cartridge is ready to serve at /c/{slug}",
                         wasm_path.display(),
                         size

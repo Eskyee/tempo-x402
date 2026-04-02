@@ -12,7 +12,34 @@ use crate::db;
 use crate::state::NodeState;
 
 /// `GET /c` — list all registered cartridges.
+/// Also auto-registers any engine-loaded modules missing from DB (e.g. compiled at runtime by soul).
 pub async fn list_cartridges(state: web::Data<NodeState>) -> HttpResponse {
+    // Auto-register engine-loaded modules not yet in DB
+    if let Some(ref engine) = state.cartridge_engine {
+        let loaded = engine.loaded_slugs();
+        for slug in &loaded {
+            if let Ok(None) = db::get_cartridge(&state.gateway.db, slug) {
+                let now = chrono::Utc::now().timestamp();
+                let record = db::CartridgeRecord {
+                    slug: slug.clone(),
+                    name: slug.clone(),
+                    description: None,
+                    version: "0.1.0".to_string(),
+                    price_usd: "$0.001".to_string(),
+                    price_amount: "1000".to_string(),
+                    owner_address: String::new(),
+                    source_repo: None,
+                    wasm_path: format!("/data/cartridges/{slug}/bin/{slug}.wasm"),
+                    wasm_hash: String::new(),
+                    active: true,
+                    created_at: now,
+                    updated_at: now,
+                };
+                let _ = db::upsert_cartridge(&state.gateway.db, &record);
+            }
+        }
+    }
+
     match db::list_cartridges(&state.gateway.db) {
         Ok(cartridges) => {
             let summary: Vec<serde_json::Value> = cartridges

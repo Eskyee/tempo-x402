@@ -232,14 +232,6 @@ pub fn StudioPage() -> impl IntoView {
         });
     };
 
-    let clear_all = move |_| {
-        let refresh = refresh_apps;
-        spawn_local(async move {
-            let _ = api::clear_all_cartridges().await;
-            refresh();
-        });
-    };
-
     view! {
         <div class="studio">
             // ── Header ──
@@ -274,7 +266,6 @@ pub fn StudioPage() -> impl IntoView {
                     <div class="studio-section">
                         <div class="studio-section-header">
                             <span>"Cartridges"</span>
-                            <button class="btn btn-xs studio-clear-btn" on:click=clear_all title="Clear all">"Clear"</button>
                         </div>
                         {move || {
                             let app_list = apps.get();

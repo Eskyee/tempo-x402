@@ -63,6 +63,7 @@ pub(super) async fn soul_chat(
         config,
         soul_db,
         observer,
+        state.cartridge_engine.as_ref(),
     )
     .await
     {

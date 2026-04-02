@@ -46,6 +46,7 @@ pub async fn handle_chat(
     config: &SoulConfig,
     db: &Arc<SoulDatabase>,
     observer: &Arc<dyn NodeObserver>,
+    cartridge_engine: Option<&std::sync::Arc<x402_cartridge::CartridgeEngine>>,
 ) -> Result<ChatReply, SoulError> {
     let mut thought_ids = Vec::new();
 
@@ -117,28 +118,25 @@ pub async fn handle_chat(
         }
     };
 
-    // Build environment capabilities section — tell the agent what it can actually do
+    // Build environment capabilities section
     let capabilities_section = format!(
         "Your Environment & Capabilities:\n\
-         - You are a self-modifying autonomous AI agent running on Railway\n\
-         - You have cargo, gcc, git, and the full Rust toolchain at runtime\n\
-         - You CAN compile Rust code (cargo check, cargo build)\n\
+         - You are an autonomous AI agent running on Railway with full Rust toolchain\n\
          - Coding is {coding}\n\
-         - WASM CARTRIDGES: You can write Rust programs and compile them to WASM:\n\
-           1. create_cartridge(slug, source_code) — scaffold a Rust WASM project\n\
-           2. compile_cartridge(slug) — compile to .wasm binary\n\
-           3. test_cartridge(slug, method, path, body) — test it instantly\n\
-           4. Cartridges serve at /c/{{slug}} with x402 payment gate\n\
-           5. This is the FASTEST way to build new functionality in Rust\n\
-         - When asked to build an app or tool, ALWAYS use create_cartridge + compile_cartridge\n\
-           No dependencies needed. The template has the full host ABI.\n\
-         - You can edit your own source code, run cargo check, commit, and push\n\
-         - Your commits trigger redeployment — you can evolve yourself\n\
-         - Your benchmark IQ measures your Rust ability — every change should improve it\n\
-         - SELF-IMPROVEMENT: Use update_memory to write instructions to yourself.\n\
-           Your persistent memory is injected into EVERY conversation and planning prompt.\n\
-           Writing 'always check imports before editing' to memory means you'll see that\n\
-           reminder in every future cycle. This is how you rewrite your own system prompt.\n\n",
+         \n\
+         CARTRIDGE RULES (FOLLOW EXACTLY):\n\
+         - To build ANY app: create_cartridge(slug, frontend=true) then compile_cartridge(slug)\n\
+         - Do NOT provide source_code — the default template works perfectly\n\
+         - frontend=true creates a Leptos app with full DOM access (wasm32-unknown-unknown)\n\
+         - frontend=false (default) creates a backend-only cartridge (wasm32-wasip1, no UI)\n\
+         - ALWAYS prefer frontend=true for anything the user wants to see or interact with\n\
+         - After compile, the cartridge appears in the Studio sidebar automatically\n\
+         \n\
+         BEHAVIOR RULES:\n\
+         - Stay focused on what the user asked. Do NOT suggest unrelated projects.\n\
+         - Do NOT hallucinate. If unsure, call list_cartridges to check what exists.\n\
+         - Be concise. Do not write essays about your architecture or capabilities.\n\
+         - When something fails, report the actual error, not a narrative about your journey.\n\n",
         coding = if config.coding_enabled {
             "ENABLED — you can write, edit, commit code"
         } else {
@@ -239,6 +237,11 @@ pub async fn handle_chat(
             );
             tool_executor = tool_executor.with_coding(git, db.clone());
         }
+    }
+
+    // Attach cartridge engine for cartridge tools
+    if let Some(engine) = cartridge_engine {
+        tool_executor = tool_executor.with_cartridge_engine(engine.clone());
     }
 
     // Attach dynamic tool registry if enabled

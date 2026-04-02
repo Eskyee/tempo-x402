@@ -1205,22 +1205,6 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
     border: 1px solid var(--border);
     background: linear-gradient(180deg, #0a0a16 0%, #060610 100%);
 }
-.org-solved {
-    text-align: center;
-    min-width: 70px;
-}
-.org-solved-num {
-    font-size: 32px;
-    font-weight: 800;
-    color: var(--green);
-    line-height: 1;
-    text-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
-}
-.org-solved-label {
-    font-size: 9px;
-    color: var(--text-dim);
-    margin-top: 2px;
-}
 .org-iq-chart {
     flex: 1;
     min-width: 0;
@@ -1272,21 +1256,21 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
     flex-shrink: 0;
 }
 .org-ring-svg {
-    width: 70px;
-    height: 70px;
+    width: 80px;
+    height: 80px;
 }
 .org-ring-progress {
     transition: stroke-dasharray 1s ease;
 }
-.org-ring-pct {
+.org-ring-count {
     font-family: inherit;
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 800;
     fill: var(--green);
 }
 .org-ring-label {
     font-family: inherit;
-    font-size: 6px;
+    font-size: 8px;
     fill: var(--text-dim);
 }
 
@@ -1316,8 +1300,9 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
 }
 .org-nerve-svg {
     width: 100%;
-    max-width: 400px;
+    max-width: 500px;
     height: auto;
+    min-height: 300px;
 }
 .org-psi-text {
     font-family: inherit;
@@ -1332,13 +1317,13 @@ h3 { font-size: 11px; color: var(--text); font-weight: 600; }
 }
 .org-node-name {
     font-family: inherit;
-    font-size: 5.5px;
+    font-size: 7px;
     font-weight: 700;
     letter-spacing: 0.05em;
 }
 .org-node-detail {
     font-family: inherit;
-    font-size: 4.5px;
+    font-size: 5.5px;
     fill: var(--text-dim);
 }
 

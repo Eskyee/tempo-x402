@@ -122,13 +122,7 @@ pub fn Mandala() -> impl IntoView {
 
                 view! {
                     <div class="org-mind">
-                        // Left: solved count (the anchor)
-                        <div class="org-solved">
-                            <div class="org-solved-num">{format!("{}", solved)}</div>
-                            <div class="org-solved-label">{format!("/{} solved", total)}</div>
-                        </div>
-
-                        // Center: IQ chart
+                        // Center: IQ chart (hero element)
                         <div class="org-iq-chart">
                             <div class="org-iq-header">
                                 <span class="org-iq-current">{format!("IQ {:.0}", current_iq)}</span>
@@ -233,14 +227,14 @@ pub fn Mandala() -> impl IntoView {
                 ];
 
                 // SVG circle layout
-                let cx = 160.0_f64;
-                let cy = 130.0_f64;
-                let radius = 95.0_f64;
+                let cx = 200.0_f64;
+                let cy = 170.0_f64;
+                let radius = 130.0_f64;
                 let n = organs.len() as f64;
 
                 view! {
                     <div class="org-nervous">
-                        <svg viewBox="0 0 320 260" class="org-nerve-svg">
+                        <svg viewBox="0 0 400 340" class="org-nerve-svg">
                             // Center: Psi
                             <circle cx=cx.to_string() cy=cy.to_string() r="18"
                                 fill="none" stroke="#00ff41"
@@ -441,25 +435,25 @@ pub fn Mandala() -> impl IntoView {
 
 fn render_progress_ring(solved: u64, total: u64) -> impl IntoView {
     let pct = if total > 0 { solved as f64 / total as f64 } else { 0.0 };
-    let r = 28.0_f64;
+    let r = 32.0_f64;
     let circumference = 2.0 * std::f64::consts::PI * r;
     let filled = circumference * pct;
     let gap = circumference - filled;
     view! {
-        <svg viewBox="0 0 70 70" class="org-ring-svg">
+        <svg viewBox="0 0 80 80" class="org-ring-svg">
             // Background ring
-            <circle cx="35" cy="35" r=r.to_string()
-                fill="none" stroke="#1a1a2e" stroke-width="4"/>
+            <circle cx="40" cy="40" r=r.to_string()
+                fill="none" stroke="#1a1a2e" stroke-width="3"/>
             // Progress ring
-            <circle cx="35" cy="35" r=r.to_string()
-                fill="none" stroke="#00ff41" stroke-width="4"
+            <circle cx="40" cy="40" r=r.to_string()
+                fill="none" stroke="#00ff41" stroke-width="3"
                 stroke-dasharray=format!("{:.1} {:.1}", filled, gap)
                 stroke-dashoffset=format!("{:.1}", circumference * 0.25)
                 stroke-linecap="round"
                 class="org-ring-progress"/>
-            // Percentage text
-            <text x="35" y="33" text-anchor="middle" class="org-ring-pct">{format!("{:.0}%", pct * 100.0)}</text>
-            <text x="35" y="44" text-anchor="middle" class="org-ring-label">"solved"</text>
+            // Count (the number that matters)
+            <text x="40" y="37" text-anchor="middle" class="org-ring-count">{format!("{}", solved)}</text>
+            <text x="40" y="48" text-anchor="middle" class="org-ring-label">{format!("/{}", total)}</text>
         </svg>
     }
 }

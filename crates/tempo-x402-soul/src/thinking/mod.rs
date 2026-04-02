@@ -226,7 +226,10 @@ impl ThinkingLoop {
         if self.config.colony_role == crate::collective::ColonyRole::Worker {
             if let Some(queen) = &self.config.queen_url {
                 let instance_id = self.config.instance_id.clone().unwrap_or_default();
-                let self_url = self.config.gateway_url.clone().unwrap_or_default();
+                // Derive self URL: prefer GATEWAY_URL, fall back to RAILWAY_PUBLIC_DOMAIN
+                let self_url = self.config.gateway_url.clone()
+                    .or_else(|| std::env::var("RAILWAY_PUBLIC_DOMAIN").ok().map(|d| format!("https://{}", d)))
+                    .unwrap_or_default();
                 let queen = queen.clone();
                 if crate::collective::register_with_queen(&queen, &instance_id, &self_url).await {
                     crate::events::emit_info(
@@ -351,7 +354,9 @@ impl ThinkingLoop {
             if self.config.colony_role == crate::collective::ColonyRole::Worker {
                 if let Some(queen) = &self.config.queen_url {
                     let instance_id = self.config.instance_id.clone().unwrap_or_default();
-                    let self_url = self.config.gateway_url.clone().unwrap_or_default();
+                    let self_url = self.config.gateway_url.clone()
+                        .or_else(|| std::env::var("RAILWAY_PUBLIC_DOMAIN").ok().map(|d| format!("https://{}", d)))
+                        .unwrap_or_default();
 
                     // Re-register (heartbeat) every cycle
                     crate::collective::register_with_queen(queen, &instance_id, &self_url).await;

@@ -1,7 +1,7 @@
 //! Studio — unified app workspace for building, previewing, and chatting with the AI agent.
 //!
 //! Three-panel layout: Cartridges/Files (left) | Preview/Editor (center) | Chat (right)
-//! Status bar at bottom shows intelligence metrics in real-time.
+//! Status bar at bottom shows intelligence metrics. Mobile collapses to single-panel with drawer.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,7 +20,7 @@ struct AppEntry {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
-    kind: String, // "script" or "cartridge"
+    kind: String,
 }
 
 /// File entry from the workspace.
@@ -32,88 +32,76 @@ struct FileEntry {
     size: Option<u64>,
 }
 
-/// Chat message in a session.
+/// Chat message with tool execution visibility.
 #[derive(Clone, Debug)]
 struct ChatMsg {
     role: String,
     content: String,
+    tools: Vec<serde_json::Value>,
 }
 
 /// What the center panel is showing.
 #[derive(Clone, Debug, PartialEq)]
 enum CenterView {
     Welcome,
-    AppPreview(String),            // slug (script — iframe fallback)
-    CartridgePreview(String),      // slug (backend WASM — text output)
-    InteractivePreview(String),    // slug (interactive WASM — canvas 60fps)
-    FileView(String, String),      // path, content
+    AppPreview(String),
+    CartridgePreview(String),
+    InteractivePreview(String),
+    FileView(String, String),
 }
 
 /// Studio page — the unified app workspace.
 #[component]
 pub fn StudioPage() -> impl IntoView {
-    // State
+    // ── Core state ──
     let (apps, set_apps) = create_signal(Vec::<AppEntry>::new());
     let (center, set_center) = create_signal(CenterView::Welcome);
     let (messages, set_messages) = create_signal(Vec::<ChatMsg>::new());
     let (input, set_input) = create_signal(String::new());
     let (sending, set_sending) = create_signal(false);
     let (session_id, set_session_id) = create_signal(None::<String>);
-    let (sessions, set_sessions) = create_signal(Vec::<serde_json::Value>::new());
     let (soul_status, set_soul_status) = create_signal(None::<serde_json::Value>);
     let (sys_metrics, set_sys_metrics) = create_signal(None::<serde_json::Value>);
     let (file_tree, set_file_tree) = create_signal(Vec::<FileEntry>::new());
     let (current_path, set_current_path) = create_signal("crates".to_string());
     let (files_expanded, set_files_expanded) = create_signal(false);
+    let (file_error, set_file_error) = create_signal(None::<String>);
+    let (sidebar_open, set_sidebar_open) = create_signal(false);
+    let messages_ref = create_node_ref::<html::Div>();
 
-    // Fetch apps (scripts + cartridges unified)
+    // ── Scroll to bottom ──
+    let scroll_bottom = move || {
+        request_animation_frame(move || {
+            if let Some(el) = messages_ref.get() {
+                el.set_scroll_top(el.scroll_height());
+            }
+        });
+    };
+
+    // ── Fetch apps ──
     let refresh_apps = move || {
         spawn_local(async move {
             let mut all_apps = Vec::new();
 
-            // Fetch script endpoints
             if let Ok(data) = api::fetch_json("/x").await {
                 if let Some(eps) = data.get("endpoints").and_then(|v| v.as_array()) {
                     for ep in eps {
-                        let slug = ep
-                            .get("slug")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let desc = ep
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
+                        let slug = ep.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let desc = ep.get("description").and_then(|v| v.as_str()).map(String::from);
                         if !slug.is_empty() {
-                            all_apps.push(AppEntry {
-                                slug,
-                                description: desc,
-                                kind: "script".to_string(),
-                            });
+                            all_apps.push(AppEntry { slug, description: desc, kind: "script".into() });
                         }
                     }
                 }
             }
 
-            // Fetch WASM cartridges
             if let Ok(data) = api::fetch_json("/c").await {
                 if let Some(carts) = data.get("cartridges").and_then(|v| v.as_array()) {
                     for c in carts {
-                        let slug = c
-                            .get("slug")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let desc = c
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
+                        let slug = c.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let desc = c.get("description").and_then(|v| v.as_str()).map(String::from);
                         if !slug.is_empty() {
-                            all_apps.push(AppEntry {
-                                slug,
-                                description: desc,
-                                kind: "cartridge".to_string(),
-                            });
+                            all_apps.push(AppEntry { slug, description: desc, kind: "cartridge".into() });
                         }
                     }
                 }
@@ -124,19 +112,7 @@ pub fn StudioPage() -> impl IntoView {
     };
     refresh_apps();
 
-    // Fetch chat sessions
-    {
-        spawn_local(async move {
-            if let Ok(data) = api::list_chat_sessions().await {
-                if let Some(arr) = data.get("sessions").and_then(|v| v.as_array()) {
-                    set_sessions.set(arr.clone());
-                }
-            }
-        });
-    }
-
-    // Fetch soul status + system metrics ONCE on load — no polling.
-    // Refreshed after each chat message send.
+    // ── Fetch status (once on load, then after each chat) ──
     let refresh_status = move || {
         spawn_local(async move {
             if let Ok(data) = api::fetch_soul_status().await {
@@ -151,13 +127,13 @@ pub fn StudioPage() -> impl IntoView {
     };
     refresh_status();
 
-    // New conversation
+    // ── New conversation ──
     let new_conversation = move |_| {
         set_session_id.set(None);
         set_messages.set(Vec::new());
     };
 
-    // Send chat message
+    // ── Send chat ──
     let send_message = move || {
         let msg = input.get_untracked();
         if msg.trim().is_empty() || sending.get_untracked() {
@@ -167,66 +143,51 @@ pub fn StudioPage() -> impl IntoView {
         set_input.set(String::new());
 
         set_messages.update(|msgs| {
-            msgs.push(ChatMsg {
-                role: "user".to_string(),
-                content: msg.clone(),
-            });
+            msgs.push(ChatMsg { role: "user".into(), content: msg.clone(), tools: vec![] });
         });
+        scroll_bottom();
 
         let sid = session_id.get_untracked();
-        let refresh = refresh_apps.clone();
+        let refresh = refresh_apps;
         spawn_local(async move {
             match api::send_soul_chat(&msg, sid.as_deref()).await {
                 Ok(resp) => {
-                    let reply = resp
-                        .get("reply")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("(no response)")
-                        .to_string();
+                    let reply = resp.get("reply").and_then(|v| v.as_str()).unwrap_or("(no response)").to_string();
                     if let Some(new_sid) = resp.get("session_id").and_then(|v| v.as_str()) {
                         set_session_id.set(Some(new_sid.to_string()));
                     }
-                    set_messages.update(|msgs| {
-                        msgs.push(ChatMsg {
-                            role: "assistant".to_string(),
-                            content: reply,
-                        });
-                    });
-                    // Reactively refresh apps ONLY if a tool modified endpoints
-                    let modified_endpoints = resp
-                        .get("tool_executions")
+                    let tools = resp.get("tool_executions")
                         .and_then(|v| v.as_array())
-                        .map(|execs| {
-                            execs.iter().any(|e| {
-                                let cmd = e.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                                cmd.contains("create_script_endpoint")
-                                    || cmd.contains("delete_endpoint")
-                                    || cmd.contains("create_cartridge")
-                                    || cmd.contains("compile_cartridge")
-                                    || cmd.contains("delete_cartridge")
-                            })
-                        })
+                        .cloned()
+                        .unwrap_or_default();
+                    set_messages.update(|msgs| {
+                        msgs.push(ChatMsg { role: "assistant".into(), content: reply, tools });
+                    });
+                    // Refresh apps if tools modified endpoints
+                    let modified = resp.get("tool_executions")
+                        .and_then(|v| v.as_array())
+                        .map(|execs| execs.iter().any(|e| {
+                            let cmd = e.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                            cmd.contains("create_script") || cmd.contains("delete_endpoint")
+                                || cmd.contains("create_cartridge") || cmd.contains("compile_cartridge")
+                                || cmd.contains("delete_cartridge")
+                        }))
                         .unwrap_or(false);
-                    if modified_endpoints {
-                        refresh();
-                    }
+                    if modified { refresh(); }
                 }
                 Err(e) => {
                     set_messages.update(|msgs| {
-                        msgs.push(ChatMsg {
-                            role: "assistant".to_string(),
-                            content: format!("Error: {e}"),
-                        });
+                        msgs.push(ChatMsg { role: "assistant".into(), content: format!("Error: {e}"), tools: vec![] });
                     });
                 }
             }
             set_sending.set(false);
-            // Refresh status after chat (no polling — event-driven)
             refresh_status();
+            scroll_bottom();
         });
     };
 
-    let send_for_key = send_message.clone();
+    let send_for_key = send_message;
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
@@ -234,19 +195,21 @@ pub fn StudioPage() -> impl IntoView {
         }
     };
 
-    // Load file tree
+    // ── File browser ──
     let load_tree = move |path: String| {
-        let set_tree = set_file_tree.clone();
-        let set_path = set_current_path.clone();
         spawn_local(async move {
-            set_path.set(path.clone());
-            if let Ok(files) = fetch_file_tree(&path).await {
-                set_tree.set(files);
+            set_current_path.set(path.clone());
+            set_file_error.set(None);
+            match fetch_file_tree(&path).await {
+                Ok(files) => set_file_tree.set(files),
+                Err(e) => {
+                    set_file_tree.set(vec![]);
+                    set_file_error.set(Some(e));
+                }
             }
         });
     };
 
-    // Load file content
     let load_file = move |path: String| {
         spawn_local(async move {
             if let Ok(content) = fetch_file_content(&path).await {
@@ -255,11 +218,36 @@ pub fn StudioPage() -> impl IntoView {
         });
     };
 
+    // ── Delete cartridge ──
+    let delete_app = move |slug: String, kind: String| {
+        let refresh = refresh_apps;
+        spawn_local(async move {
+            if kind == "cartridge" {
+                let _ = api::delete_cartridge(&slug).await;
+            } else {
+                let _ = gloo_net::http::Request::delete(&format!("/admin/endpoints/script-{}", slug))
+                    .send().await;
+            }
+            refresh();
+        });
+    };
+
+    let clear_all = move |_| {
+        let refresh = refresh_apps;
+        spawn_local(async move {
+            let _ = api::clear_all_cartridges().await;
+            refresh();
+        });
+    };
+
     view! {
         <div class="studio">
             // ── Header ──
             <div class="studio-header">
                 <div class="studio-header-left">
+                    <button class="studio-mobile-toggle" on:click=move |_| set_sidebar_open.update(|v| *v = !*v)>
+                        {move || if sidebar_open.get() { "\u{2715}" } else { "\u{2630}" }}
+                    </button>
                     <h2>"Studio"</h2>
                     <button class="btn btn-sm" on:click=new_conversation>"+ New Chat"</button>
                 </div>
@@ -281,17 +269,20 @@ pub fn StudioPage() -> impl IntoView {
             // ── Three-panel layout ──
             <div class="studio-layout">
 
-                // ── Left: Apps + Files ──
-                <div class="studio-sidebar">
+                // ── Left: Sidebar ──
+                <div class="studio-sidebar" class:open=move || sidebar_open.get()>
                     <div class="studio-section">
-                        <div class="studio-section-header">"Cartridges"</div>
+                        <div class="studio-section-header">
+                            <span>"Cartridges"</span>
+                            <button class="btn btn-xs studio-clear-btn" on:click=clear_all title="Clear all">"Clear"</button>
+                        </div>
                         {move || {
                             let app_list = apps.get();
                             if app_list.is_empty() {
                                 view! {
                                     <div class="studio-empty">
                                         <p>"No cartridges yet"</p>
-                                        <p class="studio-hint">"Ask the chat to create a Rust cartridge"</p>
+                                        <p class="studio-hint">"Ask the chat to create one"</p>
                                     </div>
                                 }.into_view()
                             } else {
@@ -303,23 +294,13 @@ pub fn StudioPage() -> impl IntoView {
                                             let desc = app.description.clone().unwrap_or_default();
                                             let slug_click = slug.clone();
                                             let slug_del = slug.clone();
-                                            let refresh_for_del = refresh_apps.clone();
-                                            let delete_app = move |ev: web_sys::MouseEvent| {
-                                                ev.stop_propagation();
-                                                let s = slug_del.clone();
-                                                let r = refresh_for_del.clone();
-                                                spawn_local(async move {
-                                                    let _ = gloo_net::http::Request::delete(
-                                                        &format!("/admin/endpoints/script-{}", s)
-                                                    ).send().await;
-                                                    r();
-                                                });
-                                            };
+                                            let kind_del = kind.clone();
                                             let kind_for_click = kind.clone();
                                             view! {
                                                 <div
                                                     class="studio-app-item"
                                                     on:click=move |_| {
+                                                        set_sidebar_open.set(false);
                                                         if kind_for_click == "cartridge" {
                                                             set_center.set(CenterView::CartridgePreview(slug_click.clone()));
                                                         } else {
@@ -329,7 +310,10 @@ pub fn StudioPage() -> impl IntoView {
                                                 >
                                                     <span class="studio-app-name">{&slug}</span>
                                                     <span class="studio-app-badge">{&kind}</span>
-                                                    <button class="studio-app-delete" on:click=delete_app title="Delete">{"\u{00D7}"}</button>
+                                                    <button class="studio-app-delete" on:click=move |ev: web_sys::MouseEvent| {
+                                                        ev.stop_propagation();
+                                                        delete_app(slug_del.clone(), kind_del.clone());
+                                                    } title="Delete">{"\u{00D7}"}</button>
                                                     {(!desc.is_empty()).then(|| view! {
                                                         <span class="studio-app-desc">{&desc}</span>
                                                     })}
@@ -349,9 +333,7 @@ pub fn StudioPage() -> impl IntoView {
                             on:click=move |_| {
                                 let expanded = !files_expanded.get_untracked();
                                 set_files_expanded.set(expanded);
-                                if expanded {
-                                    load_tree("crates".to_string());
-                                }
+                                if expanded { load_tree("crates".to_string()); }
                             }
                         >
                             {move || if files_expanded.get() { "Files \u{25BE}" } else { "Files \u{25B8}" }}
@@ -362,15 +344,16 @@ pub fn StudioPage() -> impl IntoView {
                             }
                             view! {
                                 <div class="studio-file-path">{move || current_path.get()}</div>
+                                {move || file_error.get().map(|e| view! {
+                                    <div class="studio-file-error">{e}</div>
+                                })}
                                 <div class="studio-file-list">
-                                    // Back button
                                     {move || {
                                         let path = current_path.get();
                                         if path != "crates" && path.contains('/') {
                                             let parent = path.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or_else(|| "crates".to_string());
-                                            let lt = load_tree.clone();
                                             Some(view! {
-                                                <div class="studio-file studio-file--dir" on:click=move |_| lt(parent.clone())>
+                                                <div class="studio-file studio-file--dir" on:click=move |_| load_tree(parent.clone())>
                                                     <span>"\u{2190} .."</span>
                                                 </div>
                                             })
@@ -384,14 +367,12 @@ pub fn StudioPage() -> impl IntoView {
                                             let is_dir = entry.entry_type == "directory";
                                             let full_path = format!("{}/{}", current_path.get_untracked(), name);
                                             let path_for_click = full_path.clone();
-                                            let lt = load_tree.clone();
-                                            let lf = load_file.clone();
                                             view! {
                                                 <div
                                                     class=if is_dir { "studio-file studio-file--dir" } else { "studio-file" }
                                                     on:click=move |_| {
-                                                        if is_dir { lt(path_for_click.clone()); }
-                                                        else { lf(path_for_click.clone()); }
+                                                        if is_dir { load_tree(path_for_click.clone()); }
+                                                        else { load_file(path_for_click.clone()); }
                                                     }
                                                 >
                                                     <span>{if is_dir { "\u{1F4C1} " } else { "" }}</span>
@@ -406,49 +387,27 @@ pub fn StudioPage() -> impl IntoView {
                     </div>
                 </div>
 
-                // ── Center: Preview / Editor / Welcome ──
+                // ── Center: Preview ──
                 <div class="studio-center">
                     {move || {
                         match center.get() {
                             CenterView::Welcome => view! {
                                 <div class="studio-welcome">
                                     <h2>"Build something"</h2>
-                                    <p>"Select an app to preview, or ask the AI to create one."</p>
+                                    <p>"Select a cartridge to preview, or ask the AI to create one."</p>
                                     <div class="studio-suggestions">
                                         <code>"\"make a snake game\""</code>
-                                        <code>"\"build a todo list app\""</code>
+                                        <code>"\"build a todo list\""</code>
                                         <code>"\"create a calculator\""</code>
                                     </div>
                                 </div>
                             }.into_view(),
                             CenterView::AppPreview(ref slug) => {
                                 let url = format!("/app/{slug}");
-                                let slug_for_src = slug.clone();
-                                let set_center_for_src = set_center.clone();
-                                let view_source = move |_| {
-                                    let s = slug_for_src.clone();
-                                    let set_c = set_center_for_src.clone();
-                                    spawn_local(async move {
-                                        let path = format!("/data/endpoints/{s}.sh");
-                                        if let Ok(content) = fetch_file_content(&format!("..{}", path)).await {
-                                            set_c.set(CenterView::FileView(path, content));
-                                        } else {
-                                            // Try without prefix
-                                            let resp = gloo_net::http::Request::get(&format!("/soul/admin/cat?path=/data/endpoints/{}.sh", s))
-                                                .send().await;
-                                            if let Ok(r) = resp {
-                                                if let Ok(text) = r.text().await {
-                                                    set_c.set(CenterView::FileView(format!("/data/endpoints/{s}.sh"), text));
-                                                }
-                                            }
-                                        }
-                                    });
-                                };
                                 view! {
                                     <div class="studio-preview">
                                         <div class="studio-preview-bar">
                                             <span class="studio-preview-url">{&url}</span>
-                                            <button class="studio-preview-btn" on:click=view_source>"Source"</button>
                                             <a href={url.clone()} target="_blank" class="studio-preview-open">"Open \u{2197}"</a>
                                         </div>
                                         <iframe
@@ -462,27 +421,23 @@ pub fn StudioPage() -> impl IntoView {
                             CenterView::CartridgePreview(ref slug) => {
                                 let slug_run = slug.clone();
                                 let slug_for_switch = slug.clone();
-                                let set_center_for_switch = set_center.clone();
-                                let (cartridge_html, set_cartridge_html) = create_signal(String::from("<div class='studio-loading'>Loading cartridge...</div>"));
+                                let (cartridge_html, set_cartridge_html) = create_signal(String::from("<div class='studio-loading'>Loading...</div>"));
                                 let (cartridge_logs, set_cartridge_logs) = create_signal(Vec::<String>::new());
-                                // Detect type then run accordingly
                                 spawn_local(async move {
                                     match crate::cartridge_runner::detect_type(&slug_run).await {
                                         Ok((crate::cartridge_runner::CartridgeType::Interactive, _)) => {
-                                            // Switch to interactive canvas mode
-                                            set_center_for_switch.set(CenterView::InteractivePreview(slug_for_switch));
+                                            set_center.set(CenterView::InteractivePreview(slug_for_switch));
                                         }
                                         Ok((crate::cartridge_runner::CartridgeType::Backend, _)) => {
-                                            // Run as text cartridge
                                             match crate::cartridge_runner::run_cartridge(&slug_run).await {
                                                 Ok(output) => {
                                                     set_cartridge_html.set(output.body);
                                                     set_cartridge_logs.set(output.logs);
                                                 }
-                                                Err(e) => set_cartridge_html.set(format!("<div class='studio-error'><pre>{e}</pre></div>")),
+                                                Err(e) => set_cartridge_html.set(format!("<pre class='error'>{e}</pre>")),
                                             }
                                         }
-                                        Err(e) => set_cartridge_html.set(format!("<div class='studio-error'><pre>{e}</pre></div>")),
+                                        Err(e) => set_cartridge_html.set(format!("<pre class='error'>{e}</pre>")),
                                     }
                                 });
                                 view! {
@@ -494,15 +449,11 @@ pub fn StudioPage() -> impl IntoView {
                                         <div class="studio-cartridge-output" inner_html=move || cartridge_html.get() />
                                         {move || {
                                             let logs = cartridge_logs.get();
-                                            if logs.is_empty() {
-                                                view! { <div /> }.into_view()
-                                            } else {
-                                                view! {
-                                                    <div class="studio-cartridge-logs">
-                                                        {logs.iter().map(|l| view! { <div class="studio-log-line">{l}</div> }).collect_view()}
-                                                    </div>
-                                                }.into_view()
-                                            }
+                                            (!logs.is_empty()).then(|| view! {
+                                                <div class="studio-cartridge-logs">
+                                                    {logs.iter().map(|l| view! { <div class="studio-log-line">{l}</div> }).collect_view()}
+                                                </div>
+                                            })
                                         }}
                                     </div>
                                 }.into_view()
@@ -511,18 +462,19 @@ pub fn StudioPage() -> impl IntoView {
                                 let slug_run = slug.clone();
                                 let (error_msg, set_error) = create_signal(Option::<String>::None);
                                 let canvas_ref = create_node_ref::<leptos::html::Canvas>();
+                                let raf_id = Rc::new(RefCell::new(0i32));
 
-                                // Launch the interactive runtime on mount
                                 let slug_for_init = slug.clone();
+                                let raf_id_clone = raf_id.clone();
                                 create_effect(move |_| {
                                     let canvas_el = canvas_ref.get();
                                     if canvas_el.is_none() { return; }
                                     let canvas = canvas_el.unwrap();
                                     let slug = slug_for_init.clone();
                                     let set_err = set_error;
+                                    let raf_id = raf_id_clone.clone();
 
                                     spawn_local(async move {
-                                        // Fetch and detect (we know it's interactive, but need the bytes)
                                         let bytes = match crate::cartridge_runner::detect_type(&slug).await {
                                             Ok((_, b)) => b,
                                             Err(e) => { set_err.set(Some(e)); return; }
@@ -530,8 +482,6 @@ pub fn StudioPage() -> impl IntoView {
 
                                         let width = 320u32;
                                         let height = 240u32;
-
-                                        // Set canvas dimensions
                                         canvas.set_width(width);
                                         canvas.set_height(height);
                                         let _ = canvas.focus();
@@ -542,19 +492,13 @@ pub fn StudioPage() -> impl IntoView {
                                         };
 
                                         let ctx: web_sys::CanvasRenderingContext2d = canvas
-                                            .get_context("2d")
-                                            .unwrap()
-                                            .unwrap()
-                                            .dyn_into()
-                                            .unwrap();
+                                            .get_context("2d").unwrap().unwrap().dyn_into().unwrap();
 
-                                        // Share cartridge across closures
                                         let cart = Rc::new(cart);
                                         let cart_for_loop = cart.clone();
                                         let cart_for_kd = cart.clone();
                                         let cart_for_ku = cart.clone();
 
-                                        // Keyboard handlers
                                         let kd = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
                                             ev.prevent_default();
                                             if let Some(ref f) = cart_for_kd.key_down_fn {
@@ -571,19 +515,14 @@ pub fn StudioPage() -> impl IntoView {
                                         kd.forget();
                                         ku.forget();
 
-                                        // requestAnimationFrame loop
                                         let window = web_sys::window().unwrap();
                                         let f: Rc<RefCell<Option<wasm_bindgen::closure::Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
                                         let g = f.clone();
+                                        let raf_id_inner = raf_id.clone();
 
                                         *g.borrow_mut() = Some(wasm_bindgen::closure::Closure::new(move || {
-                                            // Tick
                                             let _ = cart_for_loop.tick_fn.call0(&JsValue::undefined());
-
-                                            // Read framebuffer
                                             let pixels = crate::cartridge_runner::read_framebuffer(&cart_for_loop);
-
-                                            // Blit to canvas
                                             if let Ok(img_data) = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
                                                 wasm_bindgen::Clamped(pixels.as_slice()),
                                                 cart_for_loop.width,
@@ -591,18 +530,26 @@ pub fn StudioPage() -> impl IntoView {
                                             ) {
                                                 let _ = ctx.put_image_data(&img_data, 0.0, 0.0);
                                             }
-
-                                            // Next frame
                                             let win = web_sys::window().unwrap();
-                                            let _ = win.request_animation_frame(
+                                            let id = win.request_animation_frame(
                                                 f.borrow().as_ref().unwrap().as_ref().unchecked_ref()
-                                            );
+                                            ).unwrap_or(0);
+                                            *raf_id_inner.borrow_mut() = id;
                                         }));
 
-                                        let _ = window.request_animation_frame(
+                                        let id = window.request_animation_frame(
                                             g.borrow().as_ref().unwrap().as_ref().unchecked_ref()
-                                        );
+                                        ).unwrap_or(0);
+                                        *raf_id.borrow_mut() = id;
                                     });
+                                });
+
+                                // Cancel animation on cleanup
+                                let raf_for_cleanup = raf_id;
+                                on_cleanup(move || {
+                                    if let Some(window) = web_sys::window() {
+                                        let _ = window.cancel_animation_frame(*raf_for_cleanup.borrow());
+                                    }
                                 });
 
                                 view! {
@@ -637,7 +584,7 @@ pub fn StudioPage() -> impl IntoView {
 
                 // ── Right: Chat ──
                 <div class="studio-chat">
-                    <div class="studio-chat-messages">
+                    <div class="studio-chat-messages" node_ref=messages_ref>
                         {move || {
                             let msgs = messages.get();
                             if msgs.is_empty() {
@@ -651,39 +598,70 @@ pub fn StudioPage() -> impl IntoView {
                                 msgs.iter().map(|msg| {
                                     let is_user = msg.role == "user";
                                     let content = msg.content.clone();
+                                    let tools = msg.tools.clone();
                                     view! {
                                         <div class=if is_user { "studio-msg studio-msg--user" } else { "studio-msg studio-msg--ai" }>
                                             <div class="studio-msg-role">{if is_user { "You" } else { "Soul" }}</div>
                                             <div class="studio-msg-content">{content}</div>
+                                            // Tool executions
+                                            {(!tools.is_empty()).then(|| {
+                                                view! {
+                                                    <div class="studio-msg-tools">
+                                                        {tools.iter().map(|t| {
+                                                            let cmd = t.get("command").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                                                            let stdout = t.get("stdout").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let stderr = t.get("stderr").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let exit_code = t.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+                                                            let (expanded, set_expanded) = create_signal(false);
+                                                            let output = if !stderr.is_empty() {
+                                                                format!("{stdout}\n{stderr}")
+                                                            } else {
+                                                                stdout.clone()
+                                                            };
+                                                            let output_for_view = output.clone();
+                                                            view! {
+                                                                <div class="chat-tool-block">
+                                                                    <button class="chat-tool-header" on:click=move |_| set_expanded.update(|v| *v = !*v)>
+                                                                        <span class="chat-tool-cmd">"$ "{&cmd}</span>
+                                                                        <span class="chat-tool-exit">{format!("exit {exit_code}")}</span>
+                                                                    </button>
+                                                                    {move || expanded.get().then(|| {
+                                                                        let o = output_for_view.clone();
+                                                                        view! { <pre class="chat-tool-output">{o}</pre> }
+                                                                    })}
+                                                                </div>
+                                                            }
+                                                        }).collect_view()}
+                                                    </div>
+                                                }
+                                            })}
+                                            // Feedback buttons (AI messages only)
                                             {(!is_user).then(|| {
-                                                // Per-message feedback state: None, "good", or "bad"
                                                 let (feedback_given, set_feedback_given) = create_signal(Option::<String>::None);
                                                 view! {
                                                     <div class="studio-msg-feedback">
                                                         {move || {
                                                             match feedback_given.get() {
                                                                 Some(ref fb) => view! {
-                                                                    <span class={format!("studio-feedback-locked studio-feedback-{fb}")}>{fb.clone()}</span>
+                                                                    <span class="studio-feedback-done">{fb.clone()}</span>
                                                                 }.into_view(),
                                                                 None => view! {
-                                                                    <button class="studio-feedback-btn studio-feedback-good" on:click=move |_| {
-                                                                        set_feedback_given.set(Some("good".to_string()));
+                                                                    <button class="studio-feedback-btn" on:click=move |_| {
+                                                                        set_feedback_given.set(Some("good".into()));
                                                                         spawn_local(async move {
                                                                             let _ = gloo_net::http::Request::post("/soul/admin/reward")
-                                                                                .json(&serde_json::json!({"commit_sha": "chat-feedback"}))
-                                                                                .unwrap()
+                                                                                .json(&serde_json::json!({"commit_sha": "chat-feedback"})).unwrap()
                                                                                 .send().await;
                                                                         });
-                                                                    } title="Good response">"good"</button>
-                                                                    <button class="studio-feedback-btn studio-feedback-bad" on:click=move |_| {
-                                                                        set_feedback_given.set(Some("bad".to_string()));
+                                                                    } title="Good">"+"</button>
+                                                                    <button class="studio-feedback-btn" on:click=move |_| {
+                                                                        set_feedback_given.set(Some("bad".into()));
                                                                         spawn_local(async move {
                                                                             let _ = gloo_net::http::Request::post("/soul/admin/penalty")
-                                                                                .json(&serde_json::json!({"commit_sha": "chat-feedback"}))
-                                                                                .unwrap()
+                                                                                .json(&serde_json::json!({"commit_sha": "chat-feedback"})).unwrap()
                                                                                 .send().await;
                                                                         });
-                                                                    } title="Bad response">"bad"</button>
+                                                                    } title="Bad">"-"</button>
                                                                 }.into_view(),
                                                             }
                                                         }}
@@ -760,7 +738,7 @@ async fn fetch_file_tree(path: &str) -> Result<Vec<FileEntry>, String> {
         .map_err(|e| format!("Failed: {e}"))?;
 
     if !resp.ok() {
-        return Ok(vec![]);
+        return Err(format!("HTTP {}", resp.status()));
     }
 
     resp.json::<Vec<FileEntry>>()

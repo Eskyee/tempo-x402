@@ -368,15 +368,66 @@ pub async fn serve_wasm_binary(
     }
 }
 
+/// `DELETE /c/{slug}` — deactivate a cartridge and unload from engine.
+pub async fn delete_cartridge_handler(
+    state: web::Data<NodeState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let slug = path.into_inner();
+
+    match db::delete_cartridge(&state.gateway.db, &slug) {
+        Ok(true) => {
+            // Unload from engine if loaded
+            if let Some(ref engine) = state.cartridge_engine {
+                engine.unload_module(&slug);
+            }
+            HttpResponse::Ok().json(serde_json::json!({
+                "deleted": slug
+            }))
+        }
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("cartridge '{slug}' not found")
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("{e}")
+        })),
+    }
+}
+
+/// `DELETE /admin/cartridges` — deactivate all cartridges.
+pub async fn delete_all_cartridges_handler(
+    state: web::Data<NodeState>,
+) -> HttpResponse {
+    match db::delete_all_cartridges(&state.gateway.db) {
+        Ok(count) => {
+            // Unload all from engine
+            if let Some(ref engine) = state.cartridge_engine {
+                engine.unload_all();
+            }
+            HttpResponse::Ok().json(serde_json::json!({
+                "deleted": count
+            }))
+        }
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("{e}")
+        })),
+    }
+}
+
 /// Configure cartridge routes.
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/c", web::get().to(list_cartridges))
         .route("/c/{slug}/wasm", web::get().to(serve_wasm_binary))
         .route("/c/{slug}", web::get().to(handle_cartridge))
         .route("/c/{slug}", web::post().to(handle_cartridge))
+        .route("/c/{slug}", web::delete().to(delete_cartridge_handler))
         .route("/c/{slug}/{path:.*}", web::get().to(handle_cartridge))
         .route("/c/{slug}/{path:.*}", web::post().to(handle_cartridge))
         .route("/admin/cartridges", web::post().to(upload_cartridge))
+        .route(
+            "/admin/cartridges",
+            web::delete().to(delete_all_cartridges_handler),
+        )
         .route(
             "/admin/cartridges/{slug}/compile",
             web::post().to(compile_cartridge),

@@ -687,6 +687,19 @@ pub fn delete_cartridge(db: &Database, slug: &str) -> Result<bool, GatewayError>
     })
 }
 
+/// Deactivate all cartridges.
+pub fn delete_all_cartridges(db: &Database) -> Result<u64, GatewayError> {
+    db.with_connection(|conn| {
+        let rows = conn
+            .execute(
+                "UPDATE cartridges SET active = 0, updated_at = ?1 WHERE active = 1",
+                params![chrono::Utc::now().timestamp()],
+            )
+            .map_err(|e| GatewayError::Internal(format!("delete all cartridges: {e}")))?;
+        Ok(rows as u64)
+    })
+}
+
 /// Get a KV value for a cartridge.
 pub fn cartridge_kv_get(
     db: &Database,

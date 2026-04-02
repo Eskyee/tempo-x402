@@ -1,10 +1,5 @@
-pub mod chat;
 pub mod cockpit;
-pub mod dashboard;
-pub mod endpoints;
 pub mod header;
-pub mod home;
-pub mod instance;
 pub mod mandala;
-pub mod soul_panel;
+pub mod nav;
 pub mod wallet_panel;

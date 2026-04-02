@@ -5,17 +5,15 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod api;
-mod cartridges;
 pub mod cartridge_runner;
 mod components;
 pub mod studio;
-#[allow(unused_braces)]
-mod timeline;
 mod wallet;
 mod wallet_crypto;
 
 use components::cockpit::CockpitPage;
 use components::mandala::Mandala;
+use components::nav::NavBar;
 
 /// Payment requirements from 402 response
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,12 +89,17 @@ pub fn App() -> impl IntoView {
         <Stylesheet href="/style.css" />
 
         <Router>
-            <Routes>
-                <Route path="/" view=Mandala />
-                <Route path="/dashboard" view=CockpitPage />
-                <Route path="/studio" view=studio::StudioPage />
-                <Route path="/*any" view=Mandala />
-            </Routes>
+            <div class="app-shell">
+                <NavBar />
+                <main class="app-content">
+                    <Routes>
+                        <Route path="/" view=Mandala />
+                        <Route path="/dashboard" view=CockpitPage />
+                        <Route path="/studio" view=studio::StudioPage />
+                        <Route path="/*any" view=Mandala />
+                    </Routes>
+                </main>
+            </div>
         </Router>
     }
 }

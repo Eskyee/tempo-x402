@@ -736,6 +736,36 @@ pub async fn fetch_json(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("Parse failed: {e}"))
 }
 
+/// Delete a single cartridge by slug.
+pub async fn delete_cartridge(slug: &str) -> Result<(), String> {
+    let resp = Request::delete(&format!("{}/c/{}", GATEWAY_URL, slug))
+        .send()
+        .await
+        .map_err(|e| format!("Delete failed: {e}"))?;
+    if !resp.ok() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", resp.status(), err));
+    }
+    Ok(())
+}
+
+/// Delete all cartridges.
+pub async fn clear_all_cartridges() -> Result<u64, String> {
+    let resp = Request::delete(&format!("{}/admin/cartridges", GATEWAY_URL))
+        .send()
+        .await
+        .map_err(|e| format!("Clear failed: {e}"))?;
+    if !resp.ok() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", resp.status(), err));
+    }
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse failed: {e}"))?;
+    Ok(data.get("deleted").and_then(|v| v.as_u64()).unwrap_or(0))
+}
+
 /// Simple hex encoding
 mod hex {
     pub fn encode(bytes: &[u8]) -> String {

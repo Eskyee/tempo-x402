@@ -85,6 +85,11 @@ impl CartridgeEngine {
         self.modules.remove(slug);
     }
 
+    /// Unload all cached modules.
+    pub fn unload_all(&self) {
+        self.modules.clear();
+    }
+
     /// List loaded module slugs.
     pub fn loaded_slugs(&self) -> Vec<String> {
         self.modules.iter().map(|e| e.key().clone()).collect()

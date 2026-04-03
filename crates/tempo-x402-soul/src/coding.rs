@@ -18,6 +18,144 @@ pub struct CommitResult {
     pub error_output: Option<String>,
 }
 
+/// Maximum cumulative deletions per file over a rolling window.
+/// Prevents the "incremental lobotomy" where an agent deletes <50% per commit
+/// but cumulatively guts a file across many commits.
+const MAX_CUMULATIVE_DELETION_PCT: f64 = 70.0;
+
+/// Commit readiness gate — not a timer, a state machine.
+///
+/// The agent can't commit again until it has MEASURED the impact of its last commit.
+/// The state machine:
+///   READY → commit → AWAITING_BENCHMARK → benchmark runs → score recorded → READY
+///
+/// If the last commit's benchmark showed regression, the agent is told.
+/// If the benchmark hasn't run yet, the commit is blocked with explanation.
+///
+/// This replaces dumb hardcoded cooldowns with an intelligent feedback loop
+/// that ties into the actual system state.
+pub fn check_commit_readiness(db: &crate::db::SoulDatabase) -> Result<(), String> {
+    // Check if we're awaiting benchmark results from the last commit
+    let awaiting: bool = db
+        .get_state("commit_awaiting_benchmark")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
+    if !awaiting {
+        return Ok(()); // Ready to commit
+    }
+
+    // How long have we been waiting?
+    let commit_at: i64 = db
+        .get_state("last_commit_at")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let now = chrono::Utc::now().timestamp();
+    let elapsed = now - commit_at;
+
+    // Safety valve: if benchmark hasn't run in 30 minutes, clear the gate.
+    // Something may be wrong with the benchmark system — don't block forever.
+    if elapsed > 1800 {
+        tracing::warn!(
+            elapsed_secs = elapsed,
+            "Commit gate safety valve: benchmark didn't run in 30min, clearing gate"
+        );
+        let _ = db.set_state("commit_awaiting_benchmark", "0");
+        return Ok(());
+    }
+
+    // Check if benchmark ran since our last commit
+    let last_benchmark_at: i64 = db
+        .get_state("last_benchmark_at")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    if last_benchmark_at > commit_at {
+        // Benchmark has run since our commit — check the result
+        let _ = db.set_state("commit_awaiting_benchmark", "0");
+
+        // Get the score delta
+        let pre_score: f64 = db
+            .get_state("pre_commit_benchmark_score")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        let current_score: f64 = db
+            .get_state("last_benchmark_score")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+
+        let delta = current_score - pre_score;
+        if delta < -5.0 {
+            tracing::warn!(
+                pre = format!("{:.1}%", pre_score),
+                post = format!("{:.1}%", current_score),
+                delta = format!("{:+.1}%", delta),
+                "Last commit REGRESSED benchmark score"
+            );
+            // Don't block — but the brain will learn from the negative signal
+        } else if delta > 0.0 {
+            tracing::info!(
+                delta = format!("{:+.1}%", delta),
+                "Last commit IMPROVED benchmark score"
+            );
+        }
+
+        return Ok(()); // Gate cleared
+    }
+
+    // Benchmark hasn't run yet — tell the agent to wait
+    let wait_secs = elapsed;
+    Err(format!(
+        "Commit gate: waiting for benchmark to measure impact of last commit \
+         ({wait_secs}s ago). The benchmark runs every ~15 cycles. \
+         Study your code, read files, think about improvements while you wait. \
+         Do NOT commit again until you know if your last change helped."
+    ))
+}
+
+/// Record that a commit was made — enter AWAITING_BENCHMARK state.
+pub fn record_commit(db: &crate::db::SoulDatabase) {
+    let now = chrono::Utc::now().timestamp();
+    let _ = db.set_state("last_commit_at", &now.to_string());
+    let _ = db.set_state("commit_awaiting_benchmark", "1");
+
+    // Snapshot current benchmark score for delta comparison
+    let current_score: f64 = db
+        .get_state("last_benchmark_score")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let _ = db.set_state("pre_commit_benchmark_score", &current_score.to_string());
+
+    // Force next benchmark to run ASAP
+    let _ = db.set_state("benchmark_force_next", "1");
+
+    // Track cumulative commit count for this deploy
+    let commit_count: u64 = db
+        .get_state("deploy_commit_count")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let _ = db.set_state("deploy_commit_count", &(commit_count + 1).to_string());
+
+    tracing::info!(
+        pre_score = format!("{:.1}%", current_score),
+        "Commit recorded — awaiting benchmark to measure impact"
+    );
+}
+
 /// Orchestrate a validated commit: stage → cargo check → cargo test → commit → push.
 ///
 /// If validation fails at any step, reverts changes and returns the error.
@@ -27,6 +165,9 @@ pub async fn validated_commit(
     files: &[&str],
     message: &str,
 ) -> Result<CommitResult, String> {
+    // 0. Check commit cooldown — don't rapid-fire commits
+    // (The db param isn't available here, so the caller should check cooldown before calling)
+
     // 1. Validate all files pass the guard
     for file in files {
         guard::validate_write_target(file).map_err(|e| e.to_string())?;
@@ -152,7 +293,9 @@ pub async fn validated_commit(
 // ── Destruction Guard ─────────────────────────────────────────────────
 
 /// Block commits that delete more than 50% of any existing file's content.
-/// This prevents the "lobotomy" failure mode where an agent guts a critical file.
+/// Also checks cumulative changes: compares against the ORIGINAL file from
+/// the deploy baseline (not just HEAD), preventing incremental lobotomy
+/// where many small commits cumulatively gut a file.
 async fn check_destruction_guard(workspace_root: &str, _files: &[&str]) -> Result<(), String> {
     // Get the staged diff with stats
     let output = tokio::process::Command::new("git")
@@ -205,7 +348,78 @@ async fn check_destruction_guard(workspace_root: &str, _files: &[&str]) -> Resul
         }
     }
 
+    // ── Cumulative destruction check ──
+    // Compare current staged version against the DEPLOY baseline (first commit on this deploy).
+    // This catches incremental lobotomy: each commit deletes <50%, but across 10 commits
+    // the file loses 90% of its content.
+    let deploy_base = get_deploy_baseline_sha(workspace_root).await;
+    if let Some(base_sha) = deploy_base {
+        // Get cumulative diff against deploy baseline
+        let cumulative = tokio::process::Command::new("git")
+            .args(["diff", "--numstat", &base_sha, "HEAD"])
+            .current_dir(workspace_root)
+            .output()
+            .await;
+
+        if let Ok(cum_output) = cumulative {
+            let cum_stdout = String::from_utf8_lossy(&cum_output.stdout);
+            for line in cum_stdout.lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() < 3 {
+                    continue;
+                }
+                let _added: usize = parts[0].parse().unwrap_or(0);
+                let deleted: usize = parts[1].parse().unwrap_or(0);
+                let file_path = parts[2];
+
+                if deleted < 20 {
+                    continue;
+                }
+
+                // Get the ORIGINAL file size at deploy baseline
+                let orig = tokio::process::Command::new("git")
+                    .args(["show", &format!("{base_sha}:{file_path}")])
+                    .current_dir(workspace_root)
+                    .output()
+                    .await;
+
+                if let Ok(orig_output) = orig {
+                    if orig_output.status.success() {
+                        let orig_lines =
+                            String::from_utf8_lossy(&orig_output.stdout).lines().count();
+                        if orig_lines > 0 {
+                            let cum_deletion_pct = (deleted as f64 / orig_lines as f64) * 100.0;
+                            if cum_deletion_pct > MAX_CUMULATIVE_DELETION_PCT {
+                                return Err(format!(
+                                    "CUMULATIVE DESTRUCTION BLOCKED: '{file_path}' has lost {deleted}/{orig_lines} lines \
+                                     ({cum_deletion_pct:.0}%) since deploy baseline. Cumulative deletions exceed {MAX_CUMULATIVE_DELETION_PCT}%. \
+                                     You are incrementally gutting this file. Stop and reconsider your approach."
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Get the git SHA from when this deploy started (for cumulative destruction check).
+async fn get_deploy_baseline_sha(workspace_root: &str) -> Option<String> {
+    // The deploy build SHA is stored in soul_state by reset_deploy_counters.
+    // We can also just use the tag/SHA from DEPLOY_BUILD env var.
+    // Fallback: use git log to find the commit from ~24h ago.
+    let output = tokio::process::Command::new("git")
+        .args(["log", "--since=24.hours.ago", "--reverse", "--format=%H"])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().next().map(|s| s.to_string())
 }
 
 // ── Colony Peer Review ──────────────────────────────────────────────
@@ -402,9 +616,9 @@ pub async fn run_cargo_check(workspace_root: &str) -> (bool, Option<String>) {
 async fn run_cargo_test(workspace_root: &str) -> (bool, Option<String>) {
     tracing::info!("running cargo test -p tempo-x402-soul...");
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(600),
         tokio::process::Command::new("cargo")
-            .args(["test", "-p", "tempo-x402-soul"])
+            .args(["test", "-p", "tempo-x402-soul", "--", "--nocapture"])
             .current_dir(workspace_root)
             .env("CARGO_TARGET_DIR", "/tmp/x402_cargo_target")
             .output(),

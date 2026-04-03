@@ -51,12 +51,16 @@
 //!
 //! Part of the [`tempo-x402`](https://docs.rs/tempo-x402) workspace.
 
+pub mod acceleration;
 pub mod autonomy;
 pub mod benchmark;
 pub mod brain;
 pub mod capability;
 pub mod chat;
+pub mod code_quality;
+pub mod codegen;
 pub mod coding;
+pub mod collective;
 pub mod colony;
 pub mod computer_use;
 pub mod config;
@@ -90,6 +94,7 @@ pub mod prompts;
 pub mod synthesis;
 pub mod temporal;
 pub mod thinking;
+pub mod toon;
 pub mod tool_decl;
 pub mod tool_registry;
 pub mod tools;
@@ -116,13 +121,28 @@ use tokio::task::JoinHandle;
 pub struct Soul {
     db: Arc<SoulDatabase>,
     config: SoulConfig,
+    /// Cartridge engine for cognitive cartridge execution (Phase 4).
+    cartridge_engine: Option<std::sync::Arc<x402_cartridge::CartridgeEngine>>,
 }
 
 impl Soul {
     /// Create a new Soul from config. Opens the soul database.
     pub fn new(config: SoulConfig) -> Result<Self, SoulError> {
         let db = Arc::new(SoulDatabase::new(&config.db_path)?);
-        Ok(Self { db, config })
+        Ok(Self {
+            db,
+            config,
+            cartridge_engine: None,
+        })
+    }
+
+    /// Set the cartridge engine for cognitive cartridges (Phase 4).
+    pub fn with_cartridge_engine(
+        mut self,
+        engine: std::sync::Arc<x402_cartridge::CartridgeEngine>,
+    ) -> Self {
+        self.cartridge_engine = Some(engine);
+        self
     }
 
     /// Spawn the thinking loop as a background tokio task.
@@ -132,13 +152,17 @@ impl Soul {
         let alive_for_task = alive;
         let config = self.config;
         let db = self.db;
+        let cartridge_engine = self.cartridge_engine;
 
         let handle = tokio::spawn(async move {
             let mut consecutive_panics: u32 = 0;
             loop {
                 alive_for_task.store(true, Ordering::Relaxed);
                 let alive_for_loop = alive_for_task.clone();
-                let loop_instance = ThinkingLoop::new(config.clone(), db.clone(), observer.clone());
+                let mut loop_instance = ThinkingLoop::new(config.clone(), db.clone(), observer.clone());
+                if let Some(ref engine) = cartridge_engine {
+                    loop_instance.set_cartridge_engine(engine.clone());
+                }
 
                 // Spawn the thinking loop in an inner task so panics become JoinErrors
                 let inner = tokio::spawn(async move {

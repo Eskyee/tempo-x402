@@ -119,11 +119,32 @@ pub fn validate_plan_with_coding(
     // Plans that edit/generate files without reading them first almost always fail.
     check_read_before_write(steps, &mut violations);
 
-    // ── Rule 2: No commit without cargo_check ──
+    // ── Rule 2: Commit Gate Check ──
+    // Soft warning only — the actual gate with safety valve is in coding.rs check_commit_readiness().
+    // Previously this was Hard severity which blocked plans before the tool-level safety valve
+    // could fire (30-min auto-clear), causing 0% git ops success.
+    if let Ok(Some(awaiting)) = db.get_state("commit_awaiting_benchmark") {
+        if awaiting == "1" {
+            for (i, step) in steps.iter().enumerate() {
+                if matches!(step, PlanStep::Commit { .. }) {
+                    violations.push(PlanViolation {
+                        rule: "commit-gate",
+                        step_index: Some(i),
+                        detail: "Commit gated: awaiting benchmark results from previous commit. \
+                                 The tool-level gate will block or auto-clear after 30 minutes."
+                            .to_string(),
+                        severity: Severity::Soft,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Rule 3: No commit without cargo_check ──
     // Commits without validation always break the build.
     check_cargo_before_commit(steps, &mut violations);
 
-    // ── Rule 3: Plans must start with investigation ──
+    // ── Rule 4: Plans must start with investigation ──
     // Plans that jump straight to editing without understanding context fail.
     check_starts_with_investigation(steps, &mut violations);
 
@@ -1105,12 +1126,12 @@ mod tests {
         let db = make_db();
         let steps = vec![
             PlanStep::ReadFile {
-                path: "crates/tempo-x402-soul/src/tools.rs".to_string(),
+                path: "crates/tempo-x402-soul/src/guard.rs".to_string(),
                 store_as: Some("src".to_string()),
             },
             PlanStep::EditCode {
-                file_path: "crates/tempo-x402-soul/src/tools.rs".to_string(),
-                description: "modify tools".to_string(),
+                file_path: "crates/tempo-x402-soul/src/guard.rs".to_string(),
+                description: "modify guard".to_string(),
                 context_keys: vec![],
             },
         ];

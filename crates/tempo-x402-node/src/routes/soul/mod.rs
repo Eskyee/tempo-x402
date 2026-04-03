@@ -5,6 +5,7 @@ mod benchmark;
 mod brain;
 mod chat;
 mod cognition;
+mod colony_routes;
 mod lifecycle;
 mod nudges;
 mod plans;
@@ -90,6 +91,15 @@ struct SoulStatus {
     /// Temporal binding: adaptive cognitive scheduling via neural oscillators.
     #[serde(skip_serializing_if = "Option::is_none")]
     temporal: Option<serde_json::Value>,
+    /// Code generation model: 50M param Rust code generator (Phase 3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codegen: Option<serde_json::Value>,
+    /// Learning acceleration α — second derivative of intelligence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acceleration: Option<serde_json::Value>,
+    /// Colony consciousness: Psi, colony size, phase3 readiness (alias of role for convenience).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    colony: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -152,8 +162,82 @@ struct ThoughtEntry {
     created_at: i64,
 }
 
+/// `GET /soul/system` — node-side system metrics (CPU, RAM, disk).
+/// No external crates — reads /proc directly (Linux only, graceful fallback).
+async fn system_metrics() -> HttpResponse {
+    let cpu = read_cpu_usage();
+    let (mem_used_mb, mem_total_mb) = read_memory();
+    let (disk_used_mb, disk_total_mb, disk_pct) = read_disk("/data");
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "cpu_pct": cpu,
+        "mem_used_mb": mem_used_mb,
+        "mem_total_mb": mem_total_mb,
+        "mem_pct": if mem_total_mb > 0 { (mem_used_mb as f64 / mem_total_mb as f64 * 100.0).round() } else { 0.0 },
+        "disk_used_mb": disk_used_mb,
+        "disk_total_mb": disk_total_mb,
+        "disk_pct": disk_pct,
+    }))
+}
+
+fn read_cpu_usage() -> f64 {
+    // Read /proc/loadavg — 1-min load average
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
+        .map(|load| (load * 100.0 / num_cpus().max(1) as f64).round().min(100.0))
+        .unwrap_or(0.0)
+}
+
+fn num_cpus() -> usize {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .map(|s| s.matches("processor").count())
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn read_memory() -> (u64, u64) {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mut total_kb = 0u64;
+    let mut available_kb = 0u64;
+    for line in meminfo.lines() {
+        if let Some(val) = line.strip_prefix("MemTotal:") {
+            total_kb = val.trim().split_whitespace().next()
+                .and_then(|v| v.parse().ok()).unwrap_or(0);
+        } else if let Some(val) = line.strip_prefix("MemAvailable:") {
+            available_kb = val.trim().split_whitespace().next()
+                .and_then(|v| v.parse().ok()).unwrap_or(0);
+        }
+    }
+    let used_mb = (total_kb.saturating_sub(available_kb)) / 1024;
+    let total_mb = total_kb / 1024;
+    (used_mb, total_mb)
+}
+
+fn read_disk(path: &str) -> (u64, u64, f64) {
+    let output = std::process::Command::new("df")
+        .args(["-m", path])
+        .output()
+        .ok();
+    if let Some(out) = output {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if let Some(line) = stdout.lines().nth(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 5 {
+                let total: u64 = parts[1].parse().unwrap_or(0);
+                let used: u64 = parts[2].parse().unwrap_or(0);
+                let pct: f64 = parts[4].trim_end_matches('%').parse().unwrap_or(0.0);
+                return (used, total, pct);
+            }
+        }
+    }
+    (0, 0, 0.0)
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.route("/soul/status", web::get().to(status::soul_status))
+    cfg.route("/soul/system", web::get().to(system_metrics))
+        .route("/soul/status", web::get().to(status::soul_status))
         .route("/soul/chat", web::post().to(chat::soul_chat))
         .route("/soul/chat/sessions", web::get().to(chat::chat_sessions))
         .route(
@@ -171,6 +255,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         )
         .route("/soul/goals/abandon", web::post().to(nudges::abandon_goal))
         .route("/soul/reset", web::post().to(lifecycle::soul_reset))
+        .route(
+            "/soul/cognitive-reset",
+            web::post().to(lifecycle::cognitive_reset),
+        )
+        .route(
+            "/soul/admin/reward",
+            web::post().to(lifecycle::admin_reward),
+        )
+        .route(
+            "/soul/admin/penalty",
+            web::post().to(lifecycle::admin_penalty),
+        )
         .route(
             "/soul/brain/weights",
             web::get().to(brain::get_brain_weights),
@@ -225,6 +321,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             web::post().to(brain::merge_transformer_delta),
         )
         .route("/soul/events", web::get().to(status::soul_events))
+        .route(
+            "/soul/events/stream",
+            web::get().to(status::soul_event_stream),
+        )
         .route("/soul/history", web::get().to(status::soul_history))
         .route("/soul/health", web::get().to(status::soul_health))
         // Cognitive architecture sharing endpoints
@@ -243,5 +343,34 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         )
         // Studio: file browsing for the IDE
         .route("/soul/admin/ls", web::get().to(admin::admin_ls))
-        .route("/soul/admin/cat", web::get().to(admin::admin_cat));
+        .route("/soul/admin/cat", web::get().to(admin::admin_cat))
+        // Colony collective consciousness endpoints
+        .route(
+            "/soul/colony/register",
+            web::post().to(colony_routes::colony_register),
+        )
+        .route(
+            "/soul/colony/peers",
+            web::get().to(colony_routes::colony_peers),
+        )
+        .route(
+            "/soul/colony/benchmark/assignment",
+            web::get().to(colony_routes::colony_benchmark_assignment),
+        )
+        .route(
+            "/soul/colony/benchmark/result",
+            web::post().to(colony_routes::colony_benchmark_result),
+        )
+        .route(
+            "/soul/colony/train",
+            web::post().to(colony_routes::colony_train),
+        )
+        .route(
+            "/soul/colony/work",
+            web::post().to(colony_routes::colony_work),
+        )
+        .route(
+            "/soul/colony/report",
+            web::post().to(colony_routes::colony_report),
+        );
 }

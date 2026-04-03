@@ -220,6 +220,11 @@ async fn main() -> std::io::Result<()> {
             std::env::var("IDENTITY_PATH").unwrap_or_else(|_| "/data/identity.json".to_string());
         let id = x402_identity::bootstrap(&identity_path).expect("Failed to bootstrap identity");
         tracing::info!("Instance identity: {:#x} ({})", id.address, id.instance_id);
+        tracing::info!(
+            erc8004_compiled = cfg!(feature = "erc8004"),
+            agent_token_id = ?id.agent_token_id,
+            "Identity bootstrap: feature flags"
+        );
         // Propagate INSTANCE_ID to env so soul config picks it up
         std::env::set_var("INSTANCE_ID", &id.instance_id);
         Some(id)
@@ -492,9 +497,20 @@ async fn main() -> std::io::Result<()> {
                     child_env_vars.insert("CLONE_SOURCE_REPO".into(), repo.clone());
                 }
 
-                // ERC-8004 identity
-                if std::env::var("ERC8004_AUTO_MINT").unwrap_or_default() == "true" {
-                    child_env_vars.insert("ERC8004_AUTO_MINT".into(), "true".into());
+                // ERC-8004 identity — ALWAYS propagate registry addresses to children.
+                // Without this, each child deploys its own separate contracts and
+                // they can never discover each other on-chain.
+                child_env_vars.insert("ERC8004_AUTO_MINT".into(), "true".into());
+                for reg_key in [
+                    "ERC8004_IDENTITY_REGISTRY",
+                    "ERC8004_REPUTATION_REGISTRY",
+                    "ERC8004_VALIDATION_REGISTRY",
+                ] {
+                    if let Ok(addr) = std::env::var(reg_key) {
+                        if !addr.is_empty() && addr != format!("{:#x}", alloy::primitives::Address::ZERO) {
+                            child_env_vars.insert(reg_key.into(), addr);
+                        }
+                    }
                 }
                 if std::env::var("ERC8004_REPUTATION_ENABLED").unwrap_or_default() == "true" {
                     child_env_vars.insert("ERC8004_REPUTATION_ENABLED".into(), "true".into());
@@ -535,6 +551,22 @@ async fn main() -> std::io::Result<()> {
                 }
                 if let Ok(goal) = std::env::var("SOUL_INITIAL_GOAL") {
                     child_env_vars.insert("SOUL_INITIAL_GOAL".into(), goal);
+                }
+
+                // Benchmark mode — ensure entire colony uses the same benchmark suite
+                // Without this, clones default to Exercism while parent runs Opus
+                if let Ok(mode) = std::env::var("SOUL_BENCHMARK_MODE") {
+                    child_env_vars.insert("SOUL_BENCHMARK_MODE".into(), mode);
+                }
+
+                // Metrics security — forward parent's token to children
+                if let Ok(token) = std::env::var("METRICS_TOKEN") {
+                    child_env_vars.insert("METRICS_TOKEN".into(), token);
+                }
+
+                // Admin token — so operator can access child admin endpoints
+                if let Ok(token) = std::env::var("SOUL_ADMIN_TOKEN") {
+                    child_env_vars.insert("SOUL_ADMIN_TOKEN".into(), token);
                 }
 
                 // NOTE: Do NOT set FACILITATOR_PRIVATE_KEY, EVM_ADDRESS, or
@@ -745,6 +777,7 @@ async fn main() -> std::io::Result<()> {
         }
     };
     let soul_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cartridge_db = gateway_state.db.clone();
 
     let node_state = NodeState {
         gateway: gateway_state,
@@ -804,6 +837,41 @@ async fn main() -> std::io::Result<()> {
                     let loaded = engine.loaded_slugs();
                     if !loaded.is_empty() {
                         tracing::info!(count = loaded.len(), slugs = ?loaded, "Cartridge engine initialized");
+                        // Auto-register engine-loaded cartridges into DB if missing.
+                        // The engine scans disk for .wasm files, but the /c API queries the DB.
+                        // Without this, cartridges exist on disk but don't appear in the sidebar.
+                        for slug in &loaded {
+                            if let Ok(None) = db::get_cartridge(&cartridge_db, slug) {
+                                let now = chrono::Utc::now().timestamp();
+                                let wasm_path = format!("/data/cartridges/{slug}/bin/{}.wasm", slug.replace('-', "_"));
+                                let cart_type = if std::path::Path::new(&format!("/data/cartridges/{slug}/bin/pkg")).exists() {
+                                    "frontend".to_string()
+                                } else {
+                                    "backend".to_string()
+                                };
+                                let record = db::CartridgeRecord {
+                                    slug: slug.clone(),
+                                    name: slug.clone(),
+                                    description: None,
+                                    version: "0.1.0".to_string(),
+                                    price_usd: "$0.001".to_string(),
+                                    price_amount: "1000".to_string(),
+                                    owner_address: String::new(), // no payment gate by default — set explicitly to enable
+                                    source_repo: None,
+                                    wasm_path,
+                                    wasm_hash: String::new(),
+                                    active: true,
+                                    created_at: now,
+                                    updated_at: now,
+                                    cartridge_type: cart_type,
+                                };
+                                if let Err(e) = db::upsert_cartridge(&cartridge_db, &record) {
+                                    tracing::warn!(slug = %slug, error = %e, "Failed to auto-register cartridge in DB");
+                                } else {
+                                    tracing::info!(slug = %slug, "Auto-registered cartridge in DB (was on disk but not in DB)");
+                                }
+                            }
+                        }
                     }
                     Some(std::sync::Arc::new(engine))
                 }
@@ -837,6 +905,12 @@ async fn main() -> std::io::Result<()> {
                     });
                 }
 
+                // Wire cartridge engine into soul for cognitive cartridges (Phase 4)
+                let soul = if let Some(ref engine) = node_state.cartridge_engine {
+                    soul.with_cartridge_engine(engine.clone())
+                } else {
+                    soul
+                };
                 let _soul_handle = soul.spawn(observer, soul_alive.clone());
                 tracing::info!(
                     dormant = node_state.soul_dormant,
@@ -857,6 +931,8 @@ async fn main() -> std::io::Result<()> {
         let peer_urls_env = std::env::var("PEER_URLS").ok();
         let self_instance = std::env::var("INSTANCE_ID").unwrap_or_default();
         let soul_db_clone = soul_db.clone();
+        let db_path_clone = db_path.clone();
+        let gateway_db_clone = node_state.gateway.db.clone();
 
         tokio::spawn(async move {
             // Wait a moment for the server to be ready
@@ -869,6 +945,26 @@ async fn main() -> std::io::Result<()> {
                 .unwrap_or_default();
 
             let mut all_peer_urls: Vec<String> = Vec::new();
+
+            // Source 0: OWN CHILDREN from the DB — the queen's children table has URLs.
+            // This is the most reliable source: no network calls needed, survives restarts.
+            if let Ok(conn) = rusqlite::Connection::open(&db_path_clone) {
+                if let Ok(children) = db::query_children_active(&conn) {
+                    for child in &children {
+                        if let Some(ref url) = child.url {
+                            if !url.is_empty() && !all_peer_urls.contains(url) {
+                                all_peer_urls.push(url.clone());
+                            }
+                        }
+                    }
+                    if !children.is_empty() {
+                        tracing::info!(
+                            count = children.len(),
+                            "Startup peer discovery: loaded children from DB"
+                        );
+                    }
+                }
+            }
 
             // Source 1: Parent's siblings list
             if let Some(ref parent) = parent_url {
@@ -957,6 +1053,16 @@ async fn main() -> std::io::Result<()> {
             }
 
             if !catalog.is_empty() {
+                // Link discovered peers into the gateway DB so /instance/siblings returns them.
+                // This ensures clones see each other, not just the parent.
+                for entry in &catalog {
+                    let peer_id = entry.get("peer").and_then(|v| v.as_str()).unwrap_or("");
+                    let peer_url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    if !peer_id.is_empty() && !peer_url.is_empty() {
+                        let _ = db::link_peer(&gateway_db_clone, peer_id, "", peer_url);
+                    }
+                }
+
                 if let Ok(json) = serde_json::to_string(&catalog) {
                     let _ = soul_db_clone.set_state("peer_endpoint_catalog", &json);
                 }
@@ -1119,13 +1225,77 @@ async fn main() -> std::io::Result<()> {
             });
         }
 
+        // ERC-8004: ALWAYS load persisted registry addresses (needed for peer discovery).
+        // This must run even if the node already has an agent_token_id.
+        #[cfg(feature = "erc8004")]
+        let registries_path = {
+            let path = std::env::var("ERC8004_REGISTRIES_PATH")
+                .unwrap_or_else(|_| "/data/erc8004_registries.json".to_string());
+            let loaded = x402_identity::load_persisted_registries(&path);
+            let registry = x402_identity::identity_registry();
+            tracing::info!(
+                loaded,
+                registry = %registry,
+                agent_token_id = ?id.agent_token_id,
+                "ERC-8004: registry config loaded"
+            );
+            path
+        };
+
+        // ERC-8004: detect stale token IDs from a different registry.
+        // If a clone previously self-deployed its own contracts and minted there,
+        // it has an agent_token_id that doesn't exist on the queen's registry.
+        // Verify the token exists on the current registry; if not, clear it so re-mint happens.
+        #[cfg(feature = "erc8004")]
+        if id.agent_token_id.is_some() && x402_identity::identity_registry() != alloy::primitives::Address::ZERO {
+            let verify_rpc = rpc_url.clone();
+            let verify_registry = x402_identity::identity_registry();
+            let verify_token_id = id.agent_token_id.clone().unwrap();
+            let verify_owner = id.address;
+            let verify_identity_path = std::env::var("IDENTITY_PATH")
+                .unwrap_or_else(|_| "/data/identity.json".to_string());
+            let mut verify_id = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let Ok(rpc_parsed) = verify_rpc.parse::<reqwest::Url>() else { return };
+                let provider = alloy::providers::ProviderBuilder::new().connect_http(rpc_parsed);
+                let token = x402_identity::types::AgentId::new(
+                    alloy::primitives::U256::from_str_radix(&verify_token_id, 10)
+                        .unwrap_or(alloy::primitives::U256::from(1))
+                );
+                match x402_identity::onchain::owner_of(&provider, verify_registry, &token).await {
+                    Ok(owner) if owner == verify_owner => {
+                        tracing::info!(
+                            token_id = %verify_token_id,
+                            "ERC-8004: agent token verified on current registry"
+                        );
+                    }
+                    Ok(other_owner) => {
+                        tracing::warn!(
+                            token_id = %verify_token_id,
+                            expected = %verify_owner,
+                            actual = %other_owner,
+                            "ERC-8004: token owned by someone else — clearing stale token ID"
+                        );
+                        verify_id.agent_token_id = None;
+                        let _ = x402_identity::save_agent_token_id(&verify_identity_path, &mut verify_id, "");
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            token_id = %verify_token_id,
+                            error = %e,
+                            "ERC-8004: token not found on current registry — clearing stale token ID for re-mint"
+                        );
+                        verify_id.agent_token_id = None;
+                        let _ = x402_identity::save_agent_token_id(&verify_identity_path, &mut verify_id, "");
+                    }
+                }
+            });
+        }
+
         // ERC-8004 auto-deploy + auto-mint (if enabled and no token ID yet)
         #[cfg(feature = "erc8004")]
         if x402_identity::auto_mint_enabled() && id.agent_token_id.is_none() {
-            // Try loading previously deployed registries from disk
-            let registries_path = std::env::var("ERC8004_REGISTRIES_PATH")
-                .unwrap_or_else(|_| "/data/erc8004_registries.json".to_string());
-            x402_identity::load_persisted_registries(&registries_path);
 
             let rpc_clone = rpc_url.clone();
             let owner = id.address;
@@ -1192,7 +1362,7 @@ async fn main() -> std::io::Result<()> {
                 }
 
                 tracing::info!("ERC-8004: attempting to mint agent identity NFT");
-                match x402_identity::identity::mint(
+                match x402_identity::onchain::mint(
                     &provider,
                     identity_registry,
                     owner,
@@ -1460,15 +1630,21 @@ async fn main() -> std::io::Result<()> {
                         continue;
                     }
 
-                    // Ghost child cleanup: no Railway service ID means orphaned
-                    if child.railway_service_id.is_none() {
-                        tracing::warn!(
-                            instance_id = %child.instance_id,
-                            "Deleting ghost child: no Railway service ID"
-                        );
-                        let _ =
-                            db::delete_child(&version_check_state.gateway.db, &child.instance_id);
-                        continue;
+                    // Ghost child cleanup: no Railway service ID AND unreachable.
+                    // Don't delete reachable peers that were manually linked
+                    // (link_peer doesn't set railway_service_id).
+                    if child.railway_service_id.is_none() && !up_to_date {
+                        // Only delete if also not responding to health check
+                        // (up_to_date is false if health check failed above)
+                        if child.status == "unreachable" {
+                            tracing::warn!(
+                                instance_id = %child.instance_id,
+                                "Deleting ghost child: no Railway service ID and unreachable"
+                            );
+                            let _ =
+                                db::delete_child(&version_check_state.gateway.db, &child.instance_id);
+                            continue;
+                        }
                     }
 
                     tracing::info!(
@@ -1479,6 +1655,69 @@ async fn main() -> std::io::Result<()> {
                         parent_build = %parent_build,
                         "Child build mismatch detected (auto-redeploy disabled)"
                     );
+                }
+
+                // ── On-chain peer discovery (ERC-8004) ──────────────────
+                // If identity registry is configured, discover peers from
+                // the blockchain and upsert them into the children table.
+                // This is the PRIMARY peer discovery mechanism — survives
+                // resets, DB wipes, and redeployments.
+                #[cfg(feature = "erc8004")]
+                {
+                    let registry = x402_identity::identity_registry();
+                    if registry != alloy::primitives::Address::ZERO {
+                        let rpc = std::env::var("RPC_URL")
+                            .unwrap_or_else(|_| "https://rpc.moderato.tempo.xyz".to_string());
+                        let self_addr: Option<alloy::primitives::Address> =
+                            std::env::var("EVM_ADDRESS")
+                                .ok()
+                                .and_then(|s| s.parse().ok());
+                        let provider = alloy::providers::ProviderBuilder::new()
+                            .connect_http(rpc.parse().unwrap_or_else(|_| {
+                                "https://rpc.moderato.tempo.xyz".parse().unwrap()
+                            }));
+                        match x402_identity::discovery::discover_live_peers(
+                            &provider,
+                            registry,
+                            self_addr,
+                            50,
+                        )
+                        .await
+                        {
+                            Ok(peers) => {
+                                let mut synced = 0u32;
+                                for peer in &peers {
+                                    if let (Some(ref url), Some(ref instance_id)) =
+                                        (&peer.url, &peer.instance_id)
+                                    {
+                                        let addr =
+                                            peer.address.as_deref().unwrap_or("0x0");
+                                        if let Ok(()) = db::link_peer(
+                                            &version_check_state.gateway.db,
+                                            instance_id,
+                                            addr,
+                                            url,
+                                        ) {
+                                            synced += 1;
+                                        }
+                                    }
+                                }
+                                if synced > 0 || !peers.is_empty() {
+                                    tracing::info!(
+                                        discovered = peers.len(),
+                                        synced,
+                                        "On-chain peer sync complete"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    error = %e,
+                                    "On-chain peer discovery failed (non-fatal)"
+                                );
+                            }
+                        }
+                    }
                 }
 
                 tracing::info!("Health probe cycle complete");
@@ -1549,11 +1788,14 @@ async fn main() -> std::io::Result<()> {
         }
 
         // Serve SPA static files last (catch-all) if configured
+        // Cache-bust: no-cache on WASM/JS so deploys take effect immediately
         if let Some(ref dir) = spa_dir {
             let index_path = format!("{}/index.html", dir);
             app = app.service(
                 actix_files::Files::new("/", dir)
                     .index_file("index.html")
+                    .use_etag(true)
+                    .use_last_modified(true)
                     .default_handler(web::to(move || {
                         let path = index_path.clone();
                         async move { actix_files::NamedFile::open_async(path).await }

@@ -79,6 +79,12 @@ pub struct SoulConfig {
     pub specialization: Option<String>,
     /// Initial goal seeded on first boot for specialist clones (env: SOUL_INITIAL_GOAL, default: None).
     pub initial_goal: Option<String>,
+    /// Colony role (env: COLONY_ROLE, default: standalone).
+    /// "queen" = coordinator, "worker" = fungible compute, "standalone" = independent.
+    pub colony_role: crate::collective::ColonyRole,
+    /// Queen URL for workers (env: COLONY_QUEEN_URL).
+    /// Workers use this to register, fetch work, report results.
+    pub queen_url: Option<String>,
 }
 
 const DEFAULT_PERSONALITY: &str = "\
@@ -261,6 +267,19 @@ impl SoulConfig {
             .ok()
             .filter(|s| !s.is_empty());
 
+        let colony_role = crate::collective::ColonyRole::from_env();
+        let queen_url = std::env::var("COLONY_QUEEN_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        if colony_role != crate::collective::ColonyRole::Standalone {
+            tracing::info!(
+                role = ?colony_role,
+                queen_url = ?queen_url,
+                "Colony mode activated"
+            );
+        }
+
         Ok(Self {
             llm_api_key,
             llm_model_fast,
@@ -294,6 +313,8 @@ impl SoulConfig {
             thinking_enabled,
             specialization,
             initial_goal,
+            colony_role,
+            queen_url,
         })
     }
 }

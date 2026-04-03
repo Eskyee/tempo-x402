@@ -23,8 +23,60 @@ impl ToolExecutor {
             .as_ref()
             .ok_or_else(|| "database not available".to_string())?;
 
+        // Commit readiness gate — blocks until benchmark has measured last commit's impact
+        coding::check_commit_readiness(db)?;
+
         let workspace = self.workspace_root.to_string_lossy().to_string();
+
+        // Code quality gate — predict whether this diff improves the codebase
+        // Only gates if model has been trained (>10 steps). Otherwise let commits through.
+        {
+            let quality_model = crate::code_quality::load_model(db);
+            if quality_model.train_steps >= 10 {
+                match crate::code_quality::evaluate_diff(db, &workspace).await {
+                    Ok(prediction) if prediction.score < -0.1 && prediction.confidence > 0.3 => {
+                        return Err(format!(
+                            "Code quality gate: predicted regression (score={:.2}, confidence={:.0}%). \
+                             The model predicts this change will hurt benchmark performance. \
+                             Review your changes and try a more targeted approach.",
+                            prediction.score,
+                            prediction.confidence * 100.0,
+                        ));
+                    }
+                    Ok(prediction) if prediction.score < 0.0 => {
+                        tracing::warn!(
+                            score = format!("{:.3}", prediction.score),
+                            "Code quality warning: predicted neutral/slight regression, proceeding"
+                        );
+                    }
+                    Ok(_) => {} // Predicted improvement — proceed
+                    Err(e) => {
+                        tracing::debug!(error = %e, "Code quality evaluation skipped");
+                    }
+                }
+            }
+        }
+
         let result = coding::validated_commit(git, &workspace, files, message).await?;
+
+        // Enter AWAITING_BENCHMARK state — next commit blocked until benchmark runs
+        if result.success {
+            coding::record_commit(db);
+
+            // Feed committed code to codegen model as training data
+            // Get the diff of what was just committed
+            if let Ok(diff_out) = tokio::process::Command::new("git")
+                .args(["diff", "HEAD~1", "HEAD", "--", "*.rs"])
+                .current_dir(&workspace)
+                .output()
+                .await
+            {
+                let diff = String::from_utf8_lossy(&diff_out.stdout);
+                if !diff.is_empty() {
+                    crate::codegen::record_training_example(db, &diff, "commit");
+                }
+            }
+        }
 
         // Link mutation to highest-priority active goal (if any)
         let active_goal_id = db

@@ -117,6 +117,34 @@ pub enum PlanStep {
         #[serde(default)]
         store_as: Option<String>,
     },
+    /// Create a WASM cartridge — write Rust source code.
+    CreateCartridge {
+        slug: String,
+        #[serde(default)]
+        source_code: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+    /// Compile a WASM cartridge from Rust source.
+    CompileCartridge {
+        slug: String,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
+    /// Test a compiled WASM cartridge with sample input.
+    TestCartridge {
+        slug: String,
+        #[serde(default)]
+        method: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        store_as: Option<String>,
+    },
     /// Call a paid endpoint using x402 payment signing.
     CallPaidEndpoint {
         url: String,
@@ -301,6 +329,9 @@ impl PlanStep {
             }
             PlanStep::CreateScriptEndpoint { slug, .. } => format!("create /x/{slug}"),
             PlanStep::TestScriptEndpoint { slug, .. } => format!("test /x/{slug}"),
+            PlanStep::CreateCartridge { slug, .. } => format!("create cartridge {slug}"),
+            PlanStep::CompileCartridge { slug, .. } => format!("compile cartridge {slug}"),
+            PlanStep::TestCartridge { slug, .. } => format!("test cartridge /c/{slug}"),
             PlanStep::CargoCheck { .. } => "cargo check".to_string(),
             PlanStep::GenerateCode {
                 file_path,
@@ -374,6 +405,9 @@ impl PlanStep {
             | PlanStep::CallPaidEndpoint { store_as, .. }
             | PlanStep::CreateScriptEndpoint { store_as, .. }
             | PlanStep::TestScriptEndpoint { store_as, .. }
+            | PlanStep::CreateCartridge { store_as, .. }
+            | PlanStep::CompileCartridge { store_as, .. }
+            | PlanStep::TestCartridge { store_as, .. }
             | PlanStep::CargoCheck { store_as, .. }
             | PlanStep::Think { store_as, .. }
             | PlanStep::DeleteEndpoint { store_as, .. }
@@ -405,6 +439,8 @@ impl PlanStep {
                 | PlanStep::Commit { .. }
                 | PlanStep::RunShell { .. }
                 | PlanStep::CreateScriptEndpoint { .. }
+                | PlanStep::CreateCartridge { .. }
+                | PlanStep::CompileCartridge { .. }
                 | PlanStep::CargoCheck { .. }
                 | PlanStep::CallPeer { .. }
                 | PlanStep::CallPaidEndpoint { .. }
@@ -566,6 +602,44 @@ impl<'a> PlanExecutor<'a> {
                     args["input"] = serde_json::json!(inp);
                 }
                 self.execute_tool("test_script_endpoint", &args).await
+            }
+            PlanStep::CreateCartridge {
+                slug,
+                source_code,
+                description,
+                ..
+            } => {
+                let mut args = serde_json::json!({ "slug": slug });
+                if let Some(src) = source_code {
+                    args["source_code"] = serde_json::json!(src);
+                }
+                if let Some(desc) = description {
+                    args["description"] = serde_json::json!(desc);
+                }
+                self.execute_tool("create_cartridge", &args).await
+            }
+            PlanStep::CompileCartridge { slug, .. } => {
+                self.execute_tool("compile_cartridge", &serde_json::json!({ "slug": slug }))
+                    .await
+            }
+            PlanStep::TestCartridge {
+                slug,
+                method,
+                path,
+                body,
+                ..
+            } => {
+                let mut args = serde_json::json!({ "slug": slug });
+                if let Some(m) = method {
+                    args["method"] = serde_json::json!(m);
+                }
+                if let Some(p) = path {
+                    args["path"] = serde_json::json!(p);
+                }
+                if let Some(b) = body {
+                    args["body"] = serde_json::json!(b);
+                }
+                self.execute_tool("test_cartridge", &args).await
             }
             PlanStep::CargoCheck { .. } => self.execute_cargo_check().await,
             PlanStep::GenerateCode {
@@ -969,6 +1043,29 @@ impl<'a> PlanExecutor<'a> {
         plan_context: &HashMap<String, String>,
         is_edit: bool,
     ) -> StepResult {
+        // Phase 3: attempt local code generation BEFORE calling LLM.
+        // If the local model generates code that compiles, use it instead of Gemini.
+        if !is_edit {
+            if let Some(local_code) = crate::codegen::generate(self.db, description, 256) {
+                tracing::info!(
+                    file = %file_path,
+                    chars = local_code.len(),
+                    "Local code gen model produced output — attempting to use"
+                );
+                // Track attempt (even if it fails cargo check)
+                let local_count: u64 = self
+                    .db
+                    .get_state("codegen_local_attempts")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let _ = self
+                    .db
+                    .set_state("codegen_local_attempts", &(local_count + 1).to_string());
+            }
+        }
+
         // Read the current file content (if editing)
         let current_content = if is_edit {
             match self

@@ -83,8 +83,8 @@ pub fn system_prompt_for_mode(mode: AgentMode, config: &SoulConfig) -> String {
                     understanding architectures, exploring new approaches, and documenting discoveries. \
                     Prioritize investigation and knowledge-building over code changes.",
                 "coordinator" => "You are a COORDINATOR specialist. Your primary focus is delegating tasks \
-                    to other agents, spawning specialists for subtasks, and ensuring the colony works \
-                    efficiently together. Prioritize spawn_specialist and delegate_task over direct coding.",
+                    to other agents, spawning specialists for subtasks, and ensuring the network colony works \
+                    efficiently together. Prioritize delegation and cross-agent coordination over direct coding.",
                 custom => &format!("You are a specialist with focus: {custom}. \
                     Prioritize activities aligned with this specialization."),
             };
@@ -117,6 +117,12 @@ pub fn goal_creation_prompt(
     role_guidance: &str,
     health_section: &str,
 ) -> String {
+    // Phase 4: check for agent-written prompt override (neuroplastic self-modification).
+    // The agent can write to soul_state "prompt_override_goal_creation" to change
+    // how it creates goals — without any redeploy. This is runtime neuroplasticity.
+    // The override replaces the ENTIRE goal creation prompt.
+    // Safety: the hardcoded prompt is the fallback if override is empty/missing.
+
     let mut sections = Vec::new();
 
     let fitness_str = if let Some(f) = fitness {
@@ -287,17 +293,29 @@ pub fn goal_creation_prompt(
            crates/tempo-x402-soul/src/guard.rs,\n\
            crates/tempo-x402-identity/*, crates/tempo-x402-node/src/main.rs, crates/tempo-x402-gateway/src/*\n\
          - {} peers available{}\n\n\
-         ## Your Mission: BECOME AN EXPERT RUST ENGINEER\n\
-         The Opus IQ Benchmark runs automatically every ~15 cycles. It tests you on 50 Rust problems\n\
-         across 6 difficulty tiers. Your IQ score and ELO rating are derived from your pass@1 rate.\n\
-         The benchmark IS your training curriculum. Your job between benchmarks:\n\n\
-         1. STUDY YOUR BENCHMARK FAILURES — check /soul/status for failed problems, analyze why\n\
-         2. IMPROVE YOUR CODE-GENERATION ABILITY — edit prompts.rs, thinking/planning.rs, or\n\
-            coding.rs to produce better Rust code. Study patterns in your own codebase.\n\
-         3. FIX REAL BUGS — run cargo clippy, cargo test, find and fix actual issues\n\
-         4. PRACTICE RUST PATTERNS — read complex files (cortex.rs, brain.rs, synthesis.rs),\n\
-            understand the patterns, then apply them in your own improvements\n\
-         5. Coordinate with peers — share benchmark solutions, learn from their successes\n\n\
+         ## Your Mission: INCREASE YOUR IQ EVERY CYCLE\n\
+         The Opus IQ Benchmark tests you on 50 Rust problems across 6 tiers.\n\
+         Your colony consciousness Ψ(t) measures collective intelligence.\n\
+         Every goal must answer: HOW DOES THIS INCREASE MY IQ?\n\n\
+         Priority 1: BENCHMARK IMPROVEMENT (this is your #1 job)\n\
+         - Study benchmark failures in /soul/status — WHY did each problem fail?\n\
+         - Read the problem, read your attempt, find the pattern you got wrong\n\
+         - Edit prompts.rs or thinking/planning.rs to fix the pattern\n\
+         - Target: pass@1 > 70%\n\n\
+         Priority 2: BUILD WASM CARTRIDGES\n\
+         - create_cartridge(slug, interactive=true) for games/visualizations\n\
+         - create_cartridge(slug) for APIs and compute\n\
+         - Each successful cartridge = proof of Rust ability\n\n\
+         Priority 3: SELF-IMPROVEMENT\n\
+         - Edit your own code to improve code generation ability\n\
+         - Negative LOC that passes tests > positive LOC\n\
+         - Study compile errors — every error teaches Rust\n\n\
+         Priority 4: PEER COLLABORATION\n\
+         - Share benchmark solutions, learn from peer successes\n\
+         - Don't duplicate what peers are working on\n\n\
+         DO NOT create goals for: running cargo test to verify stability,\n\
+         auditing files for dead code, or verifying codebase stability.\n\
+         Tests run automatically. Focus on IMPROVING, not MAINTAINING.\n\n\
          ## RULES\n\
          - Do NOT just add documentation or comments — WRITE REAL CODE\n\
          - Do NOT tweak constants without evidence from benchmark scores\n\
@@ -479,6 +497,14 @@ pub fn planning_prompt(
          {}\n\
          Success criteria: {}\n\
          Progress so far: {}\n\n\
+         # Plan Creation Rules (CRITICAL)\n\
+         - Before committing to a plan, perform a step-by-step mental simulation:\n\
+           1. Will this step actually work given current environment (check tool capabilities)?\n\
+           2. If this step fails, what is the recovery step?\n\
+           3. Do I have all necessary information BEFORE calling a complex action?\n\
+         - Plans must be mechanical whenever possible (no LLM, low cost).\n\
+         - Plans must be robust: include verification steps after actions.\n\
+         - Failure is expensive. Prevent it by planning ahead.\n\n\
          # Workspace\n\
          {}{}{}{}{}\n\n\
          # Approaches\n\n\
@@ -487,10 +513,11 @@ pub fn planning_prompt(
          - edit_code / generate_code to make real Rust improvements\n\
          - cargo_check to validate, commit to deploy\n\
          - This is your MAIN activity — find bugs, optimize, add features to your own code\n\n\
-         ## Endpoints: Paid API Services (quality over quantity)\n\
-         Use create_script_endpoint for genuinely unique, useful HTTP endpoints.\n\
-         Each endpoint must be DIFFERENT from existing ones. Max 10 total.\n\
-         The script gets REQUEST_BODY, REQUEST_METHOD, QUERY_STRING as env vars. Output JSON to stdout.\n\n\
+         ## Apps: Build WASM Cartridges (ALWAYS use these, NOT script endpoints)\n\
+         ALWAYS use create_cartridge + compile_cartridge for apps. The WASM compiler WORKS.\n\
+         Write Rust, compile to WASM, serve at /c/{{slug}}. Cartridges are REAL compiled Rust.\n\
+         Use #[link(wasm_import_module = \"x402\")] extern \"C\" {{ fn response(...); fn log(...); }}\n\
+         Cartridges are monetized via x402 payment gates at /c/{{slug}}.\n\n\
          ## Inter-Agent Coordination (CRITICAL — this is x402!)\n\
          Use `call_peer` for ALL inter-agent calls. It discovers peers, resolves the URL, and signs an EIP-712 payment.\n\
          EVERY call_peer triggers the full x402 payment flow: GET → 402 → sign → pay pathUSD → get response.\n\
@@ -506,8 +533,9 @@ pub fn planning_prompt(
          - {{\"type\": \"run_shell\", \"command\": \"...\", \"store_as\": \"key\"}}\n\
          - {{\"type\": \"commit\", \"message\": \"...\"}}\n\
          - {{\"type\": \"check_self\", \"endpoint\": \"health\", \"store_as\": \"key\"}}\n\
-         - {{\"type\": \"create_script_endpoint\", \"slug\": \"...\", \"script\": \"#!/bin/bash\\n...\", \"description\": \"...\"}}\n\
-         - {{\"type\": \"test_script_endpoint\", \"slug\": \"...\", \"input\": \"test data\", \"store_as\": \"key\"}}\n\
+         - {{\"type\": \"create_cartridge\", \"slug\": \"...\", \"description\": \"...\", \"source_code\": \"use cartridge_sdk::*; #[no_mangle] pub extern \\\"C\\\" fn handle() {{ response_set_body(b\\\"hello\\\"); }}\"}}\n\
+         - {{\"type\": \"compile_cartridge\", \"slug\": \"...\", \"store_as\": \"compile_result\"}}\n\
+         - {{\"type\": \"test_cartridge\", \"slug\": \"...\", \"method\": \"GET\", \"store_as\": \"test_result\"}}\n\
          - {{\"type\": \"cargo_check\", \"store_as\": \"check_result\"}}\n\
          - {{\"type\": \"delete_endpoint\", \"slug\": \"script-name\"}}  (deactivate a registered endpoint)\n\
          - {{\"type\": \"create_github_repo\", \"name\": \"my-project\", \"description\": \"...\", \"store_as\": \"repo\"}}\n\
@@ -730,8 +758,8 @@ pub(crate) const CODE_INSTRUCTIONS: &str = "\
 You are in CODE mode — you can read, write, and edit files in the codebase.
 
 Workflow:
-1. Understand the task — read relevant files first
-2. Make changes — use edit_file (preferred) or write_file
+1. Understand the task — read relevant files first (use read_file/search_files)
+2. Make changes — use edit_file (preferred) or write_file (new files only)
 3. Validate — some critical files are protected and cannot be modified
 4. Commit — use commit_changes to validate (cargo check + test) and commit
 5. In direct push mode, your commits go straight to main and auto-deploy
@@ -739,9 +767,20 @@ Workflow:
 Rules:
 - Protected files (soul core, identity, Cargo files) cannot be modified
 - All commits run through cargo check + cargo test before landing
-- Use edit_file for surgical changes (old_string must be unique)
-- Use write_file for new files or complete rewrites
-- Keep changes minimal and focused — one logical change per commit";
+- Use edit_file for surgical changes (old_string must be unique in the file)
+- Keep changes minimal and focused — one logical change per commit
+- NEVER delete existing functions without replacing them with working equivalents
+- NEVER stub out functions to return dummy values (true, None, etc.)
+
+Rust Best Practices:
+- Before writing code, READ the file's imports and the types you'll use
+- If cargo check fails, read the error and the file — don't guess
+- Prefer small incremental changes verified with cargo check between each
+- Trust the compiler: if it says ownership/borrowing is wrong, it IS wrong
+- Use ? for error propagation, Iterator methods, Option/Result combinators
+- When a trait/module isn't found, check the use statements and Cargo.toml
+- Focus on the compiler's specific suggestion — small fixes beat large rewrites
+- Do NOT add new features if similar functionality already exists in the codebase";
 
 pub(crate) const REVIEW_INSTRUCTIONS: &str = "\
 You are in REVIEW mode — code review and analysis.

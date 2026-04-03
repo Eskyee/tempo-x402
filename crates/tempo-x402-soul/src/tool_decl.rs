@@ -474,67 +474,18 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
             }),
         });
 
-        // Script endpoint tools — create HTTP endpoints without Rust compilation
-        tools.push(FunctionDeclaration {
-            name: "create_script_endpoint".to_string(),
-            description: "Create an instant HTTP endpoint by writing a bash script. The script becomes available at GET/POST /x/{slug} immediately — no compilation or restart needed. The script receives REQUEST_METHOD, REQUEST_BODY, QUERY_STRING, REQUEST_HEADERS as env vars. Output JSON to stdout for JSON responses, or plain text. IMPORTANT: Do NOT create endpoints similar to ones that already exist — each must be genuinely unique and useful.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "slug": {
-                        "type": "string",
-                        "description": "URL slug for the endpoint (alphanumeric + hyphens, e.g. 'base64', 'hash-keccak')"
-                    },
-                    "script": {
-                        "type": "string",
-                        "description": "Bash script content. Use REQUEST_BODY for input, output JSON to stdout. Example: echo '{\"result\": \"'$(echo $REQUEST_BODY | base64)'\"}'"
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Short description of what the endpoint does"
-                    }
-                },
-                "required": ["slug", "script"]
-            }),
-        });
-
-        tools.push(FunctionDeclaration {
-            name: "list_script_endpoints".to_string(),
-            description:
-                "List all script endpoints you've created. Shows slug, description, and size."
-                    .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        });
-
-        tools.push(FunctionDeclaration {
-            name: "test_script_endpoint".to_string(),
-            description: "Test a script endpoint locally before advertising it. Runs the script with test input and returns the output.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "slug": {
-                        "type": "string",
-                        "description": "The endpoint slug to test"
-                    },
-                    "input": {
-                        "type": "string",
-                        "description": "Test input (passed as REQUEST_BODY env var)"
-                    }
-                },
-                "required": ["slug"]
-            }),
-        });
-
         // WASM Cartridge tools — write Rust programs, compile to WASM, test instantly
         tools.push(FunctionDeclaration {
             name: "create_cartridge".to_string(),
-            description: "Create a new WASM cartridge — a Rust program that compiles to WASM and runs instantly without redeploying. \
-                         Write the Rust source code and it gets scaffolded into a compilable project. \
-                         The cartridge handles HTTP requests via the x402 ABI. \
-                         This is the fastest way to practice Rust: write → compile → test in seconds.".to_string(),
+            description: "Create a WASM cartridge — a Rust program that compiles to WASM. \
+                         THREE TYPES: \
+                         (1) BACKEND: exports x402_handle, returns HTTP responses (JSON, HTML). No deps. \
+                         (2) INTERACTIVE: exports x402_tick/x402_key_down/x402_get_framebuffer — \
+                         renders pixels to a 320x240 RGBA framebuffer at 60fps. Set interactive=true. \
+                         (3) FRONTEND: a full Leptos app with DOM access, mounted into the Studio. \
+                         Set frontend=true. Uses leptos, web-sys, wasm-bindgen. Can render real HTML, \
+                         buttons, forms, interactive UI. Compiles to wasm32-unknown-unknown. \
+                         PREFER FRONTEND for anything with UI. Use backend only for APIs.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -549,6 +500,14 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
                     "description": {
                         "type": "string",
                         "description": "Short description of what the cartridge does"
+                    },
+                    "interactive": {
+                        "type": "boolean",
+                        "description": "If true, creates an interactive framebuffer cartridge (60fps canvas with keyboard input). Use for pixel-based games."
+                    },
+                    "frontend": {
+                        "type": "boolean",
+                        "description": "If true, creates a FRONTEND cartridge — a full Leptos app with DOM access. Uses leptos + web-sys + wasm-bindgen. Mounts into Studio preview. PREFER THIS for any app with UI (dashboards, tools, forms, games with HTML)."
                     }
                 },
                 "required": ["slug"]
@@ -558,7 +517,8 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         tools.push(FunctionDeclaration {
             name: "compile_cartridge".to_string(),
             description: "Compile a cartridge from Rust source to WASM binary. \
-                         Runs cargo build --target wasm32-wasip1. \
+                         Auto-detects type: backend/interactive → wasm32-wasip1, \
+                         frontend (Leptos) → wasm32-unknown-unknown + wasm-bindgen. \
                          Study compile errors carefully — they teach Rust patterns."
                 .to_string(),
             parameters: serde_json::json!({

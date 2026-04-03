@@ -676,7 +676,7 @@ pub fn events_to_examples(db: &SoulDatabase) -> Vec<TrainingExample> {
 /// Context for a single benchmark attempt — used to generate training data.
 #[derive(Debug, Clone)]
 pub struct BenchmarkAttemptContext {
-    /// "easy", "medium", "hard"
+    /// "easy", "medium", "hard" or "tier1".."tier6"
     pub difficulty: String,
     /// Problem slug for category encoding (e.g. "binary-search", "forth")
     pub problem_slug: String,
@@ -696,6 +696,8 @@ pub struct BenchmarkAttemptContext {
     pub pass_at_1: f32,
     /// Number of peers available
     pub peer_count: u32,
+    /// Problem slug — gives the brain a per-problem signal (hashed to feature space)
+    pub problem_slug: String,
 }
 
 /// Classify a problem slug into a category index (0-13) for feature encoding.
@@ -777,15 +779,18 @@ pub fn benchmark_attempts_to_examples(
         // Feature 28: peer count
         features[28] = (attempt.peer_count as f32 / 10.0).min(1.0);
 
-        // Features 36-38: difficulty one-hot
+        // Features 36-38: difficulty one-hot (legacy easy/medium/hard)
+        // Features 43-48: Opus tier one-hot (tier1-tier6)
         match attempt.difficulty.as_str() {
             "easy" => features[36] = 1.0,
             "medium" => features[37] = 1.0,
             "hard" => features[38] = 1.0,
-            // Opus tiers
-            "tier1" => features[36] = 1.0,
-            "tier2" => features[37] = 1.0,
-            "tier3" | "tier4" | "tier5" | "tier6" => features[38] = 1.0,
+            "tier1" => { features[36] = 1.0; features[43] = 1.0; }
+            "tier2" => { features[36] = 1.0; features[44] = 1.0; }
+            "tier3" => { features[37] = 1.0; features[45] = 1.0; }
+            "tier4" => { features[37] = 1.0; features[46] = 1.0; }
+            "tier5" => { features[38] = 1.0; features[47] = 1.0; }
+            "tier6" => { features[38] = 1.0; features[48] = 1.0; }
             _ => features[36] = 1.0,
         }
 
@@ -824,6 +829,18 @@ pub fn benchmark_attempts_to_examples(
         // Feature 59: assume starter code is present (Exercism always has it)
         features[59] = 1.0;
 
+        // Features 49-52: problem slug hash (4 features from deterministic hash)
+        // Gives the brain a unique per-problem fingerprint
+        if !attempt.problem_slug.is_empty() {
+            let mut hash: u64 = 5381;
+            for b in attempt.problem_slug.bytes() {
+                hash = hash.wrapping_mul(33).wrapping_add(b as u64);
+            }
+            features[49] = ((hash & 0xFF) as f32) / 255.0;
+            features[50] = (((hash >> 8) & 0xFF) as f32) / 255.0;
+            features[51] = (((hash >> 16) & 0xFF) as f32) / 255.0;
+            features[52] = (((hash >> 24) & 0xFF) as f32) / 255.0;
+        }
         // Determine error category for failed attempts
         let error_category = if attempt.passed {
             None
@@ -933,38 +950,43 @@ fn recover_brain_from_peer() -> Option<Brain> {
     }
 
     // Use block_in_place to run async HTTP from sync context safely.
-    // This works because we're called from within a multi-threaded tokio runtime.
+    // This works if we're called from within a multi-threaded tokio runtime.
+    // If not, we cannot recover from peer in this sync call, so return None.
     let result = std::panic::catch_unwind(|| {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(15))
-                    .build()
-                    .ok()?;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()
+                        .ok()?;
 
-                let mut best_brain: Option<Brain> = None;
-                let mut best_steps = 0u64;
+                    let mut best_brain: Option<Brain> = None;
+                    let mut best_steps = 0u64;
 
-                for url in &urls {
-                    let endpoint = format!("{}/soul/brain/weights", url.trim_end_matches('/'));
-                    match client.get(&endpoint).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            if let Ok(json) = resp.text().await {
-                                if let Some(brain) = Brain::from_json(&json) {
-                                    if brain.train_steps > best_steps {
-                                        best_steps = brain.train_steps;
-                                        best_brain = Some(brain);
+                    for url in &urls {
+                        let endpoint = format!("{}/soul/brain/weights", url.trim_end_matches('/'));
+                        match client.get(&endpoint).send().await {
+                            Ok(resp) if resp.status().is_success() => {
+                                if let Ok(json) = resp.text().await {
+                                    if let Some(brain) = Brain::from_json(&json) {
+                                        if brain.train_steps > best_steps {
+                                            best_steps = brain.train_steps;
+                                            best_brain = Some(brain);
+                                        }
                                     }
                                 }
                             }
+                            _ => continue,
                         }
-                        _ => continue,
                     }
-                }
 
-                best_brain
+                    best_brain
+                })
             })
-        })
+        } else {
+            None
+        }
     });
 
     match result {
@@ -1072,6 +1094,22 @@ pub fn train_cycle(db: &SoulDatabase) -> (usize, f32) {
     );
 
     save_brain(db, &brain);
+
+    // Track loss history for learning acceleration metric (α)
+    let now = chrono::Utc::now().timestamp();
+    let mut loss_hist: Vec<(i64, f64)> = db
+        .get_state("brain_loss_history")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    loss_hist.push((now, brain.running_loss as f64));
+    if loss_hist.len() > 100 {
+        loss_hist.drain(..loss_hist.len() - 100);
+    }
+    if let Ok(json) = serde_json::to_string(&loss_hist) {
+        let _ = db.set_state("brain_loss_history", &json);
+    }
 
     (count, avg_loss)
 }

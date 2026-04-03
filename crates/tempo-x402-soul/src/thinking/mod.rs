@@ -57,11 +57,11 @@ impl AdaptivePacer {
     pub(super) fn next_interval(&mut self, snapshot: &NodeSnapshot, step_type: StepType) -> u64 {
         self.prev_snapshot = Some(snapshot.clone());
         let base = match step_type {
-            StepType::Mechanical => 30,     // fast, keep making progress
-            StepType::Llm => 120,           // LLM step, moderate pause
-            StepType::PlanCompleted => 300, // time to create next plan
-            StepType::NoGoals => 600,       // idle
-            StepType::Observe => 60,        // quick observation only
+            StepType::Mechanical => 15,     // fast, no Gemini, keep progressing
+            StepType::Llm => 120,           // LLM step — conserve Gemini credits
+            StepType::PlanCompleted => 120, // reflection + next plan — Gemini call
+            StepType::NoGoals => 300,       // idle — Gemini creates goals, slow down
+            StepType::Observe => 30,        // quick observation only, no Gemini
         };
         (base as f64 * self.multiplier) as u64
     }
@@ -156,6 +156,22 @@ impl ThinkingLoop {
         }
     }
 
+    /// Set the cartridge engine for cognitive cartridge execution (Phase 4).
+    /// Called by the node after construction to wire in the engine.
+    pub fn set_cartridge_engine(&mut self, engine: std::sync::Arc<x402_cartridge::CartridgeEngine>) {
+        // Set on tool executor
+        self.tool_executor = std::mem::replace(
+            &mut self.tool_executor,
+            ToolExecutor::new(0, String::new()),
+        )
+        .with_cartridge_engine(engine.clone());
+
+        // Also set on the dynamic tool registry (for cartridge-backed tools)
+        if let Some(ref mut registry) = self.tool_executor.registry {
+            registry.set_cartridge_engine(engine);
+        }
+    }
+
     /// Run the thinking loop.
     /// The `alive` flag is set to `true` each cycle so external code can detect liveness.
     pub async fn run(&self, alive: Arc<AtomicBool>) {
@@ -201,9 +217,29 @@ impl ThinkingLoop {
             dormant = self.llm.is_none(),
             tools_enabled = self.config.tools_enabled,
             coding_enabled = self.config.coding_enabled,
+            colony_role = ?self.config.colony_role,
             "Soul plan-driven loop started"
         );
         crate::events::emit_info(&self.db, "system.startup", "Soul thinking loop started");
+
+        // Colony: worker registration with queen
+        if self.config.colony_role == crate::collective::ColonyRole::Worker {
+            if let Some(queen) = &self.config.queen_url {
+                let instance_id = self.config.instance_id.clone().unwrap_or_default();
+                // Derive self URL: prefer GATEWAY_URL, fall back to RAILWAY_PUBLIC_DOMAIN
+                let self_url = self.config.gateway_url.clone()
+                    .or_else(|| std::env::var("RAILWAY_PUBLIC_DOMAIN").ok().map(|d| format!("https://{}", d)))
+                    .unwrap_or_default();
+                let queen = queen.clone();
+                if crate::collective::register_with_queen(&queen, &instance_id, &self_url).await {
+                    crate::events::emit_info(
+                        &self.db,
+                        "colony.registered",
+                        &format!("Registered with queen at {}", queen),
+                    );
+                }
+            }
+        }
 
         loop {
             // Heartbeat: signal that the soul loop is alive
@@ -285,10 +321,7 @@ impl ThinkingLoop {
                 "Fitness score"
             );
 
-            // Colony selection: evaluate position relative to peers
-            let _colony_status = crate::colony::evaluate(&self.db, fitness.total);
-
-            // Compute and store free energy — THE unifying metric
+            // Compute free energy FIRST — Ψ needs it
             let fe = crate::free_energy::measure(&self.db);
             tracing::info!(
                 F = format!("{:.3}", fe.total),
@@ -297,15 +330,142 @@ impl ThinkingLoop {
                 "Free energy"
             );
 
-            // Run Exercism Rust benchmark (driven by temporal binding + cooldown)
+            // Learning acceleration α — the second derivative of intelligence
+            let accel = crate::acceleration::measure(&self.db);
+            tracing::info!(
+                alpha = format!("{:+.4}", accel.alpha),
+                regime = %accel.regime,
+                "Learning acceleration \u{03B1}"
+            );
+
+            // Colony selection + Ψ(t) consciousness metric
+            let colony_status =
+                crate::colony::evaluate(&self.db, fitness.total, fe.total, fe.trend);
+            if colony_status.psi > 0.0 {
+                tracing::info!(
+                    psi = format!("{:.4}", colony_status.psi),
+                    psi_trend = format!("{:+.4}", colony_status.psi_trend),
+                    phase3_ready = colony_status.phase3_ready,
+                    "Colony \u{03A8}"
+                );
+            }
+
+            // Colony worker: check for benchmark assignment from queen and re-register
+            if self.config.colony_role == crate::collective::ColonyRole::Worker {
+                if let Some(queen) = &self.config.queen_url {
+                    let instance_id = self.config.instance_id.clone().unwrap_or_default();
+                    let self_url = self.config.gateway_url.clone()
+                        .or_else(|| std::env::var("RAILWAY_PUBLIC_DOMAIN").ok().map(|d| format!("https://{}", d)))
+                        .unwrap_or_default();
+
+                    // Re-register (heartbeat) every cycle
+                    crate::collective::register_with_queen(queen, &instance_id, &self_url).await;
+
+                    // Check for benchmark assignment
+                    if let Some(llm) = &self.llm {
+                        if let Some(assignment) =
+                            crate::collective::fetch_benchmark_assignment(queen, &instance_id).await
+                        {
+                            tracing::info!(
+                                problems = assignment.problem_slugs.len(),
+                                session = %assignment.session_id,
+                                "Worker: received benchmark assignment from queen"
+                            );
+                            // Run benchmark on assigned problems only
+                            match crate::benchmark::run_opus_benchmark_session(
+                                llm,
+                                &self.db,
+                                &self.config.workspace_root,
+                                assignment.problem_slugs.len(),
+                            )
+                            .await
+                            {
+                                Ok(weighted_score) => {
+                                    let iq = crate::opus_bench::weighted_score_to_iq(weighted_score);
+                                    tracing::info!(
+                                        iq = format!("{:.0}", iq),
+                                        score = format!("{:.1}%", weighted_score),
+                                        "Worker: benchmark partition complete"
+                                    );
+                                    // Report results to queen
+                                    // (results already stored locally via record_run)
+                                    let runs = self.db.get_recent_benchmark_runs(
+                                        assignment.problem_slugs.len() as u32,
+                                    ).unwrap_or_default();
+                                    let results: Vec<crate::collective::BenchmarkResult> = runs
+                                        .iter()
+                                        .map(|r| crate::collective::BenchmarkResult {
+                                            session_id: assignment.session_id.clone(),
+                                            slug: r.entry_point.clone(),
+                                            passed: r.passed,
+                                            solution: r.generated_solution.clone(),
+                                            error_output: r.error_output.clone(),
+                                            total_ms: r.total_ms,
+                                        })
+                                        .collect();
+                                    crate::collective::report_benchmark_results(
+                                        queen,
+                                        &results,
+                                        &assignment.session_id,
+                                        &instance_id,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Worker: benchmark failed");
+                                }
+                            }
+                        }
+                    }
+
+                    // Fetch latest brain weights from queen (every cycle)
+                    if let Some(weights_json) = crate::collective::fetch_queen_brain(queen).await {
+                        if let Some(brain) = crate::brain::Brain::from_json(&weights_json) {
+                            crate::brain::save_brain(&self.db, &brain);
+                            tracing::debug!("Worker: synced brain weights from queen");
+                        }
+                    }
+                }
+            }
+
+            // Run benchmark EVERY cycle (cooldown-gated only, not oscillator-gated).
+            // The benchmark IS the training loop — it's core, not optional.
+            // Queen mode: also distributes problems to workers.
             if let Some(llm) = &self.llm {
-                if fired_ops.contains(&crate::temporal::OP_BENCHMARK.to_string())
+                if self.config.colony_role != crate::collective::ColonyRole::Worker
                     && crate::benchmark::should_run_benchmark(
                         &self.db,
                         crate::benchmark::DEFAULT_BENCHMARK_INTERVAL,
                     )
                 {
-                    tracing::info!("Starting periodic Exercism Rust benchmark session");
+                    // If queen: distribute problems to workers before running own portion
+                    if self.config.colony_role == crate::collective::ColonyRole::Queen {
+                        let problems = crate::opus_bench::load_embedded_problems();
+                        let slugs: Vec<String> = problems.iter().map(|p| p.slug.clone()).collect();
+                        let sample_size = crate::benchmark::DEFAULT_SAMPLE_SIZE;
+                        let (_, worker_assignments) =
+                            crate::collective::partition_benchmark(&self.db, &slugs, sample_size);
+
+                        let session_id = uuid::Uuid::new_v4().to_string();
+                        for (worker_id, _worker_url, worker_problems) in &worker_assignments {
+                            let assignment = crate::collective::BenchmarkAssignment {
+                                session_id: session_id.clone(),
+                                problem_slugs: worker_problems.clone(),
+                                assigned_at: chrono::Utc::now().timestamp(),
+                            };
+                            crate::collective::store_assignment(&self.db, worker_id, &assignment);
+                        }
+
+                        if !worker_assignments.is_empty() {
+                            tracing::info!(
+                                workers = worker_assignments.len(),
+                                session = %session_id,
+                                "Queen: distributed benchmark to workers"
+                            );
+                        }
+                    }
+
+                    tracing::info!("Starting benchmark session (core learning loop)");
                     let current_cycle: u64 = self
                         .db
                         .get_state("total_think_cycles")
@@ -335,12 +495,86 @@ impl ThinkingLoop {
                                     let iq =
                                         crate::opus_bench::weighted_score_to_iq(weighted_score);
                                     crate::elo::update_rating(&self.db, weighted_score);
+                                    // Store score for commit gate delta comparison
+                                    let _ = self.db.set_state(
+                                        "last_benchmark_score",
+                                        &format!("{:.2}", weighted_score),
+                                    );
                                     tracing::info!(
                                         weighted = format!("{:.1}%", weighted_score),
                                         iq = format!("{:.0}", iq),
                                         elo = crate::elo::rating_display(&self.db),
                                         "Opus IQ benchmark complete"
                                     );
+
+                                    // Train code quality model on benchmark delta
+                                    let pre_score: f64 = self
+                                        .db
+                                        .get_state("pre_commit_benchmark_score")
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(weighted_score);
+                                    let delta = weighted_score - pre_score;
+                                    if delta.abs() > 0.1 {
+                                        crate::code_quality::train_on_benchmark_delta(
+                                            &self.db, delta,
+                                        );
+                                    }
+
+                                    // Stagnation detection: if IQ hasn't changed for 3+ runs,
+                                    // inject a nudge to investigate stuck benchmark problems.
+                                    {
+                                        let prev_iq: f64 = self.db
+                                            .get_state("benchmark_last_iq")
+                                            .ok()
+                                            .flatten()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0.0);
+                                        let stagnation: u32 = self.db
+                                            .get_state("benchmark_stagnation_count")
+                                            .ok()
+                                            .flatten()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
+                                        let iq_delta = (iq - prev_iq).abs();
+                                        let new_stagnation = if iq_delta < 1.0 {
+                                            stagnation + 1
+                                        } else {
+                                            0 // IQ moved — reset
+                                        };
+                                        let _ = self.db.set_state("benchmark_last_iq", &format!("{:.1}", iq));
+                                        let _ = self.db.set_state("benchmark_stagnation_count", &new_stagnation.to_string());
+
+                                        if new_stagnation >= 3 {
+                                            tracing::warn!(
+                                                iq = format!("{:.0}", iq),
+                                                stagnation = new_stagnation,
+                                                "IQ stagnant for {} benchmark runs — injecting investigation nudge",
+                                                new_stagnation,
+                                            );
+                                            let _ = self.db.insert_nudge(
+                                                "system",
+                                                &format!(
+                                                    "IQ has been stagnant at {:.0} for {} consecutive benchmark runs. \
+                                                     The same problems keep failing. Analyze the failed benchmark problems, \
+                                                     study the error patterns, and try fundamentally different approaches. \
+                                                     Focus on problems that fail with logic errors (not compile errors) — \
+                                                     those are closest to being solved.",
+                                                    iq, new_stagnation,
+                                                ),
+                                                5, // high priority
+                                            );
+                                            // Reset counter so we don't spam nudges every run
+                                            let _ = self.db.set_state("benchmark_stagnation_count", "0");
+                                        }
+                                    }
+                                    // Train codegen IMMEDIATELY after benchmark (tight feedback loop).
+                                    // Don't wait for the brain training oscillator — the benchmark
+                                    // just produced fresh training data, train on it NOW.
+                                    crate::codegen::train_tokenizer(&self.db);
+                                    crate::codegen::train_model(&self.db);
+                                    tracing::info!("Codegen trained immediately after benchmark");
                                 }
                                 Err(e) => {
                                     tracing::warn!(error = %e, "Opus IQ benchmark failed");
@@ -373,27 +607,25 @@ impl ThinkingLoop {
                 }
             }
 
-            // Train the neural brain (driven by temporal binding)
-            if fired_ops.contains(&crate::temporal::OP_BRAIN_TRAINING.to_string()) {
+            // Train ALL local models EVERY cycle — pure local computation, no API calls.
+            // Brain (50K), transformer (2.2M), codegen (29M) are all sub-second.
+            // More training steps = faster convergence. Don't gate behind oscillator.
+            {
                 let (examples, loss) = crate::brain::train_cycle(&self.db);
                 if examples > 0 {
-                    tracing::info!(
-                        examples,
-                        loss = format!("{:.4}", loss),
-                        "Brain training cycle"
-                    );
+                    tracing::info!(examples, loss = format!("{:.4}", loss), "Brain trained");
                 }
-
-                // Plan transformer training — online learning from successful plans
-                let (model_trained, model_loss) = crate::model::train_from_outcomes(&self.db);
-                if model_trained > 0 {
-                    tracing::info!(
-                        trained = model_trained,
-                        loss = format!("{:.4}", model_loss),
-                        "Plan transformer training cycle"
-                    );
+                let (mt, ml) = crate::model::train_from_outcomes(&self.db);
+                if mt > 0 {
+                    tracing::info!(trained = mt, loss = format!("{:.4}", ml), "Transformer trained");
                 }
             }
+
+            // Phase 3: codegen model training — EVERY cycle (pure local computation, no API calls).
+            // The codegen model learns from benchmark solutions. More training steps = faster learning.
+            // This is <1 second of local matrix math, not gated by oscillator.
+            crate::codegen::train_tokenizer(&self.db);
+            crate::codegen::train_model(&self.db);
 
             // Cortex dream consolidation (driven by temporal binding — independent from brain training)
             if fired_ops.contains(&crate::temporal::OP_CORTEX_DREAMING.to_string()) {

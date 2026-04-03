@@ -5,16 +5,15 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod api;
+pub mod cartridge_runner;
 mod components;
 pub mod studio;
-#[allow(unused_braces)]
-mod timeline;
 mod wallet;
 mod wallet_crypto;
 
-use components::dashboard::DashboardPage;
-use components::header::{Footer, Header, NotFound};
-use components::home::HomePage;
+use components::cockpit::CockpitPage;
+use components::mandala::Mandala;
+use components::nav::NavBar;
 
 /// Payment requirements from 402 response
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,22 +81,25 @@ pub fn App() -> impl IntoView {
     view! {
         <Html lang="en" />
         <Meta charset="utf-8" />
-        <Meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Title text="x402 - Autonomous Pay-per-Request Node" />
+        <Meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <Meta name="apple-mobile-web-app-capable" content="yes" />
+        <Meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <Meta name="theme-color" content="#040408" />
+        <Title text="tempo-x402" />
         <Stylesheet href="/style.css" />
 
         <Router>
-            <main class="container">
-                <Header />
-                <Routes>
-                    <Route path="/" view=HomePage />
-                    <Route path="/dashboard" view=DashboardPage />
-                    <Route path="/studio" view=studio::StudioPage />
-                    <Route path="/timeline" view=timeline::TimelinePage />
-                    <Route path="/*any" view=NotFound />
-                </Routes>
-                <Footer />
-            </main>
+            <div class="app-shell">
+                <NavBar />
+                <main class="app-content">
+                    <Routes>
+                        <Route path="/" view=Mandala />
+                        <Route path="/dashboard" view=CockpitPage />
+                        <Route path="/studio" view=studio::StudioPage />
+                        <Route path="/*any" view=Mandala />
+                    </Routes>
+                </main>
+            </div>
         </Router>
     }
 }

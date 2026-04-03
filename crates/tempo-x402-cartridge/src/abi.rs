@@ -114,6 +114,104 @@ pub fn register_host_functions(linker: &mut Linker<CartridgeState>) -> Result<()
         )
         .map_err(|e| CartridgeError::Abi(format!("failed to register response: {e}")))?;
 
+    // ── Backward-compat aliases: "env" namespace with x402_ prefix ──
+    // Cartridges compiled without #[link(wasm_import_module = "x402")]
+    // import from "env" with x402_ prefixed names. Register both so old
+    // and new cartridges work.
+    linker
+        .func_wrap(
+            "env",
+            "x402_log",
+            |mut caller: Caller<'_, CartridgeState>, level: i32, ptr: i32, len: i32| {
+                let msg = read_string(&mut caller, ptr, len).unwrap_or_default();
+                match level {
+                    0 => tracing::debug!(cartridge = true, "{msg}"),
+                    1 => tracing::info!(cartridge = true, "{msg}"),
+                    2 => tracing::warn!(cartridge = true, "{msg}"),
+                    _ => tracing::error!(cartridge = true, "{msg}"),
+                }
+            },
+        )
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_log: {e}")))?;
+
+    linker
+        .func_wrap(
+            "env",
+            "x402_response",
+            |mut caller: Caller<'_, CartridgeState>,
+             status: i32,
+             body_ptr: i32,
+             body_len: i32,
+             ct_ptr: i32,
+             ct_len: i32| {
+                let body = read_string(&mut caller, body_ptr, body_len).unwrap_or_default();
+                let content_type = read_string(&mut caller, ct_ptr, ct_len).unwrap_or_default();
+                let state = caller.data_mut();
+                state.response_status = status as u16;
+                state.response_body = body;
+                state.response_content_type = if content_type.is_empty() {
+                    "application/json".to_string()
+                } else {
+                    content_type
+                };
+            },
+        )
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_response: {e}")))?;
+
+    linker
+        .func_wrap(
+            "env",
+            "x402_kv_get",
+            |mut caller: Caller<'_, CartridgeState>, key_ptr: i32, key_len: i32| -> i64 {
+                let key = match read_string(&mut caller, key_ptr, key_len) {
+                    Some(k) => k,
+                    None => return 0,
+                };
+                let value = caller.data().kv_store.get(&key).cloned();
+                match value {
+                    Some(v) => write_bytes_to_guest(&mut caller, v.as_bytes()),
+                    None => 0,
+                }
+            },
+        )
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_kv_get: {e}")))?;
+
+    linker
+        .func_wrap(
+            "env",
+            "x402_kv_set",
+            |mut caller: Caller<'_, CartridgeState>,
+             key_ptr: i32,
+             key_len: i32,
+             val_ptr: i32,
+             val_len: i32|
+             -> i32 {
+                let key = match read_string(&mut caller, key_ptr, key_len) {
+                    Some(k) => k,
+                    None => return -1,
+                };
+                let val = match read_string(&mut caller, val_ptr, val_len) {
+                    Some(v) => v,
+                    None => return -1,
+                };
+                caller.data_mut().kv_store.insert(key, val);
+                0
+            },
+        )
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_kv_set: {e}")))?;
+
+    linker
+        .func_wrap(
+            "env",
+            "x402_payment_info",
+            |mut caller: Caller<'_, CartridgeState>| -> i64 {
+                let json = serde_json::to_string(&caller.data().payment)
+                    .unwrap_or_else(|_| "null".to_string());
+                write_bytes_to_guest(&mut caller, json.as_bytes())
+            },
+        )
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_payment_info: {e}")))?;
+
     Ok(())
 }
 

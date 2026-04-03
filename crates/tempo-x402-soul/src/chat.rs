@@ -46,6 +46,7 @@ pub async fn handle_chat(
     config: &SoulConfig,
     db: &Arc<SoulDatabase>,
     observer: &Arc<dyn NodeObserver>,
+    cartridge_engine: Option<&std::sync::Arc<x402_cartridge::CartridgeEngine>>,
 ) -> Result<ChatReply, SoulError> {
     let mut thought_ids = Vec::new();
 
@@ -87,7 +88,9 @@ pub async fn handle_chat(
     let snapshot = observer
         .observe()
         .map_err(|e| SoulError::Observer(format!("observe failed: {e}")))?;
-    let snapshot_json = serde_json::to_string(&snapshot)?;
+    let snapshot_json = serde_json::to_value(&snapshot)
+        .map(|v| crate::toon::snapshot_to_toon(&v))
+        .unwrap_or_else(|_| serde_json::to_string(&snapshot).unwrap_or_default());
 
     // 4. Detect mode from message
     let agent_mode = mode::detect_mode_from_message(message, config.coding_enabled);
@@ -115,9 +118,35 @@ pub async fn handle_chat(
         }
     };
 
+    // Build environment capabilities section
+    let capabilities_section = format!(
+        "Your Environment & Capabilities:\n\
+         - You are an autonomous AI agent running on Railway with full Rust toolchain\n\
+         - Coding is {coding}\n\
+         \n\
+         CARTRIDGE RULES (FOLLOW EXACTLY):\n\
+         - To build ANY app: create_cartridge(slug, frontend=true) then compile_cartridge(slug)\n\
+         - Do NOT provide source_code — the default template works perfectly\n\
+         - frontend=true creates a Leptos app with full DOM access (wasm32-unknown-unknown)\n\
+         - frontend=false (default) creates a backend-only cartridge (wasm32-wasip1, no UI)\n\
+         - ALWAYS prefer frontend=true for anything the user wants to see or interact with\n\
+         - After compile, the cartridge appears in the Studio sidebar automatically\n\
+         \n\
+         BEHAVIOR RULES:\n\
+         - Stay focused on what the user asked. Do NOT suggest unrelated projects.\n\
+         - Do NOT hallucinate. If unsure, call list_cartridges to check what exists.\n\
+         - Be concise. Do not write essays about your architecture or capabilities.\n\
+         - When something fails, report the actual error, not a narrative about your journey.\n\n",
+        coding = if config.coding_enabled {
+            "ENABLED — you can write, edit, commit code"
+        } else {
+            "DISABLED"
+        },
+    );
+
     let context_message = format!(
-        "{}{}Current node state:\n{}\n\n{}",
-        memory_section, benchmark_context, snapshot_json, plan_context
+        "{}{}{}Current node state:\n{}\n\n{}",
+        memory_section, capabilities_section, benchmark_context, snapshot_json, plan_context
     );
 
     // 6. Build conversation from session history
@@ -192,8 +221,10 @@ pub async fn handle_chat(
             .with_gateway_url(config.gateway_url.clone())
             .with_database(db.clone());
 
-    // Enable coding on the executor if in Code mode
-    if agent_mode == mode::AgentMode::Code && config.coding_enabled {
+    // Enable coding on the executor when coding is enabled.
+    // Chat mode also gets coding tools (the mode system controls prompts, not capabilities).
+    let needs_coding = matches!(agent_mode, mode::AgentMode::Code | mode::AgentMode::Chat);
+    if needs_coding && config.coding_enabled {
         if let Some(instance_id) = &config.instance_id {
             let git = Arc::new(
                 GitContext::new(
@@ -206,6 +237,11 @@ pub async fn handle_chat(
             );
             tool_executor = tool_executor.with_coding(git, db.clone());
         }
+    }
+
+    // Attach cartridge engine for cartridge tools
+    if let Some(engine) = cartridge_engine {
+        tool_executor = tool_executor.with_cartridge_engine(engine.clone());
     }
 
     // Attach dynamic tool registry if enabled

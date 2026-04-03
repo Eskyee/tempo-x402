@@ -19,15 +19,19 @@ use crate::vocab::{MAX_SEQ_LEN, VOCAB_SIZE};
 // ── Architecture Constants ───────────────────────────────────────────
 
 /// Embedding dimension.
-pub const D_MODEL: usize = 128;
+/// Scaled from 128→256 to capture richer plan representations.
+/// At 256d with vocab 128 and 4 layers, the model is ~4.5M params (18 MB).
+/// This is still trivial for our 371 GB Railway instances.
+pub const D_MODEL: usize = 256;
 /// Number of attention heads.
-pub const N_HEADS: usize = 4;
+pub const N_HEADS: usize = 8;
 /// Head dimension (D_MODEL / N_HEADS).
 pub const D_HEAD: usize = D_MODEL / N_HEADS;
 /// Feed-forward hidden dimension.
-pub const D_FF: usize = 256;
+pub const D_FF: usize = 512;
 /// Number of transformer layers.
-pub const N_LAYERS: usize = 2;
+/// Scaled from 2→4 for deeper plan reasoning.
+pub const N_LAYERS: usize = 4;
 
 // ── Core Model ───────────────────────────────────────────────────────
 
@@ -451,8 +455,12 @@ mod tests {
         let model = PlanTransformer::new();
         let params = model.param_count();
         println!("Model parameters: {}", params);
-        assert!(params > 200_000, "Should have >200K params, got {}", params);
-        assert!(params < 500_000, "Should have <500K params, got {}", params);
+        assert!(params > 1_000_000, "Should have >1M params, got {}", params);
+        assert!(
+            params < 10_000_000,
+            "Should have <10M params, got {}",
+            params
+        );
     }
 
     #[test]

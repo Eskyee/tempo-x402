@@ -45,6 +45,8 @@ pub struct ToolExecutor {
     pub(super) railway_token: Option<String>,
     pub(super) railway_service_id: Option<String>,
     pub(super) railway_environment_id: Option<String>,
+    /// Cartridge engine for cognitive cartridge execution (Phase 4).
+    pub(super) cartridge_engine: Option<std::sync::Arc<x402_cartridge::CartridgeEngine>>,
 }
 
 /// Max output size per stream (stdout/stderr) to stay within LLM context limits.
@@ -92,7 +94,17 @@ impl ToolExecutor {
             railway_environment_id: std::env::var("RAILWAY_ENVIRONMENT_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            cartridge_engine: None,
         }
+    }
+
+    /// Set the cartridge engine for cognitive cartridge execution.
+    pub fn with_cartridge_engine(
+        mut self,
+        engine: std::sync::Arc<x402_cartridge::CartridgeEngine>,
+    ) -> Self {
+        self.cartridge_engine = Some(engine);
+        self
     }
 
     /// Set the persistent memory file path.
@@ -482,7 +494,9 @@ impl ToolExecutor {
                     .ok_or_else(|| "missing 'slug' argument".to_string())?;
                 let source_code = args.get("source_code").and_then(|v| v.as_str());
                 let description = args.get("description").and_then(|v| v.as_str());
-                self.create_cartridge(slug, source_code, description).await
+                let interactive = args.get("interactive").and_then(|v| v.as_bool()).unwrap_or(false);
+                let frontend = args.get("frontend").and_then(|v| v.as_bool()).unwrap_or(false);
+                self.create_cartridge(slug, source_code, description, interactive, frontend).await
             }
             "compile_cartridge" => {
                 let slug = args

@@ -14,8 +14,8 @@ FROM chef AS builder
 ARG GIT_SHA=dev
 ENV GIT_SHA=${GIT_SHA}
 
-# Install WASM toolchain for SPA build
-RUN rustup target add wasm32-unknown-unknown
+# Install WASM toolchains: unknown-unknown for SPA, wasip1 for cartridges
+RUN rustup target add wasm32-unknown-unknown wasm32-wasip1
 RUN cargo install trunk
 
 # Pre-download wasm-bindgen binary (trunk needs the musl static build;
@@ -71,6 +71,9 @@ COPY --from=builder /app/crates/tempo-x402-app/dist /app/spa
 # Copy source code for soul (file reading, code search, shell execution)
 COPY --from=builder /app /app/source
 ENV SOUL_WORKSPACE_ROOT=/app/source
+
+# Copy wasm-bindgen CLI for runtime frontend cartridge compilation
+COPY --from=builder /root/.trunk/tools/wasm-bindgen-0.2.108/wasm-bindgen /usr/local/bin/wasm-bindgen
 
 # Copy Rust toolchain from builder for benchmark (cargo test on Exercism problems)
 COPY --from=builder /usr/local/rustup /usr/local/rustup

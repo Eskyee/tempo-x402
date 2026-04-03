@@ -1,6 +1,6 @@
 [package]
 name = "tempo-x402-node"
-version = "4.0.0"
+version = "7.0.0"
 edition = "2021"
 description = "Self-deploying x402 node: gateway + identity bootstrap + clone orchestration"
 license = "MIT"
@@ -14,7 +14,7 @@ name = "x402-node"
 path = "src/main.rs"
 
 [features]
-default = ["soul", "agent"]
+default = ["soul", "agent", "erc8004"]
 soul = ["dep:x402-soul"]
 agent = []
 erc8004 = ["x402-identity/erc8004"]
@@ -29,6 +29,7 @@ actix-web = { workspace = true }
 actix-files = { workspace = true }
 actix-governor = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }

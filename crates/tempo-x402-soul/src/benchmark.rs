@@ -405,31 +405,67 @@ pub fn sample_problems_smart(
         .filter(|p| solved_slugs.contains(&p.slug))
         .collect();
 
-    // 80% unsolved (push the frontier), 20% solved (regression testing)
-    let unsolved_target = (n * 4 / 5).min(unsolved.len());
+    // Tier-weighted sampling: harder problems sampled more often.
+    // This pushes agents toward tier 3+ (induction, reasoning, adversarial)
+    // instead of grinding easy tier 1-2 problems.
+    //
+    // Weight by difficulty: tier1=1, tier2=2, tier3=4, tier4=6, tier5=8, tier6=10
+    // Higher tiers get sampled proportionally more, accelerating learning on hard problems.
+    let tier_weight = |difficulty: &str| -> usize {
+        match difficulty {
+            "tier1" => 1,
+            "tier2" => 2,
+            "tier3" => 4,
+            "tier4" => 6,
+            "tier5" => 8,
+            "tier6" => 10,
+            _ => 1,
+        }
+    };
+
+    // 70% unsolved (push the frontier), 30% solved (regression testing)
+    let unsolved_target = (n * 7 / 10).min(unsolved.len()).max(1);
     let solved_target = n.saturating_sub(unsolved_target).min(solved.len());
     let remaining = n.saturating_sub(unsolved_target + solved_target);
 
     let seed = chrono::Utc::now().timestamp() as usize;
     let mut selected = Vec::new();
 
-    // Sample from unsolved
-    let mut indices: HashSet<usize> = HashSet::new();
-    let mut i = seed;
-    while indices.len() < unsolved_target && !unsolved.is_empty() {
-        i = (i.wrapping_mul(6364136223846793005).wrapping_add(1)) % unsolved.len();
-        indices.insert(i);
-    }
-    for idx in &indices {
-        selected.push(unsolved[*idx].clone());
+    // Build weighted index for unsolved problems
+    let mut weighted_unsolved: Vec<(usize, usize)> = Vec::new(); // (original_idx, cumulative_weight)
+    let mut cum_weight = 0usize;
+    for (idx, p) in unsolved.iter().enumerate() {
+        cum_weight += tier_weight(&p.difficulty);
+        weighted_unsolved.push((idx, cum_weight));
     }
 
-    // Sample from solved (regression)
-    indices.clear();
-    i = seed.wrapping_add(12345);
+    // Weighted random sampling from unsolved
+    let mut picked: HashSet<usize> = HashSet::new();
+    let mut rng = seed;
+    let max_attempts = unsolved_target * 10;
+    let mut attempts = 0;
+    while picked.len() < unsolved_target && !weighted_unsolved.is_empty() && attempts < max_attempts
+    {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let target = rng % cum_weight.max(1);
+        // Binary search for the weighted index
+        let idx = weighted_unsolved
+            .iter()
+            .position(|(_, w)| *w > target)
+            .unwrap_or(0);
+        let orig_idx = weighted_unsolved[idx].0;
+        if picked.insert(orig_idx) {
+            selected.push(unsolved[orig_idx].clone());
+        }
+        attempts += 1;
+    }
+
+    // Sample from solved (regression — uniform, no tier weighting)
+    let mut indices: HashSet<usize> = HashSet::new();
+    rng = seed.wrapping_add(12345);
     while indices.len() < (solved_target + remaining) && !solved.is_empty() {
-        i = (i.wrapping_mul(6364136223846793005).wrapping_add(1)) % solved.len();
-        indices.insert(i);
+        rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1)) % solved.len();
+        indices.insert(rng);
     }
     for idx in &indices {
         selected.push(solved[*idx].clone());
@@ -449,6 +485,53 @@ pub async fn generate_solution(
     problem: &ExercismProblem,
     peer_failures: &[SharedFailure],
 ) -> Result<String, String> {
+    // Phase 3 weaning: try local codegen model first (saves Gemini credits).
+    // Feed it real problem context, not just the slug.
+    {
+        let codegen_prompt = format!(
+            "// Rust solution for: {}\n// Instructions: {}\n// Tests:\n{}\n\n",
+            problem.slug,
+            problem.instructions.chars().take(500).collect::<String>(),
+            problem.test_code.chars().take(1000).collect::<String>(),
+        );
+        let attempts: u64 = db.get_state("codegen_benchmark_attempts").ok().flatten()
+            .and_then(|s| s.parse().ok()).unwrap_or(0);
+        let successes: u64 = db.get_state("codegen_benchmark_successes").ok().flatten()
+            .and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        match crate::codegen::generate(db, &codegen_prompt, 512) {
+            Some(local_code) if local_code.len() > 30 => {
+                let _ = db.set_state("codegen_benchmark_attempts", &(attempts + 1).to_string());
+                // Log every attempt — we need visibility into codegen quality
+                tracing::info!(
+                    slug = %problem.slug,
+                    chars = local_code.len(),
+                    has_fn = local_code.contains("fn "),
+                    total_attempts = attempts + 1,
+                    total_successes = successes,
+                    "Codegen: local model produced output (weaning attempt)"
+                );
+                // Use it if it looks like Rust (lowered bar — let cargo test be the judge)
+                if local_code.contains("fn ") || local_code.contains("pub ") || local_code.contains("struct ") {
+                    // Flag that this solution came from local codegen (for success tracking)
+                    let _ = db.set_state("codegen_last_used", "1");
+                    return Ok(local_code);
+                }
+                tracing::info!(slug = %problem.slug, "Codegen: output rejected (no Rust patterns)");
+            }
+            Some(local_code) => {
+                tracing::debug!(
+                    slug = %problem.slug,
+                    chars = local_code.len(),
+                    "Codegen: output too short, falling back to Gemini"
+                );
+            }
+            None => {
+                tracing::debug!(slug = %problem.slug, "Codegen: model not ready or produced nothing");
+            }
+        }
+    }
+
     // Extract accumulated lessons from past benchmark runs
     let benchmark_hints = load_benchmark_hints(db);
 
@@ -529,21 +612,29 @@ pub async fn generate_solution(
         .collect();
     if !relevant_failures.is_empty() {
         prompt.push_str(
-            "## FAILED PREVIOUS ATTEMPTS (from peer agents — learn from these mistakes)\n\n",
+            "## FAILED PREVIOUS ATTEMPTS — study these carefully\n\n",
         );
         for (i, failure) in relevant_failures.iter().enumerate().take(2) {
             let sol_preview: String = failure.failed_solution.chars().take(1500).collect();
-            let err_preview: String = failure.error_output.chars().take(500).collect();
+            // Parse test output to extract specific failing tests and assertions
+            let focused_errors = parse_test_failures(&failure.error_output);
+            let err_section = if focused_errors.is_empty() {
+                let raw: String = failure.error_output.chars().take(500).collect();
+                format!("Raw error:\n```\n{raw}\n```")
+            } else {
+                format!("Failing tests:\n{focused_errors}")
+            };
             prompt.push_str(&format!(
-                "### Attempt {} (by peer {})\n```rust\n{}\n```\n**Error:**\n```\n{}\n```\n\n",
+                "### Attempt {} (by {})\n```rust\n{}\n```\n{}\n\n",
                 i + 1,
                 failure.attempted_by,
                 sol_preview,
-                err_preview,
+                err_section,
             ));
         }
         prompt.push_str(
-            "Your solution MUST avoid the same errors. Take a fundamentally different approach.\n\n",
+            "Your solution MUST fix these specific test failures. \
+             Focus on the EXACT assertion mismatches above.\n\n",
         );
     }
 
@@ -929,13 +1020,32 @@ pub async fn run_benchmark_session(
         let solution = match generate_solution(llm, db, problem, &all_failures).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(
-                    slug = %problem.slug,
-                    difficulty = %problem.difficulty,
-                    error = %e,
-                    "Benchmark: failed to generate solution"
-                );
-                record_run(db, problem, false, "", &e, 0);
+                let is_api_error = e.contains("429")
+                    || e.contains("quota")
+                    || e.contains("rate limit")
+                    || e.contains("Too Many Requests")
+                    || e.contains("503")
+                    || e.contains("500");
+                if is_api_error {
+                    // API unavailable — don't count this as an attempt.
+                    // Poisoning the score with 0% when the LLM can't respond
+                    // teaches the brain that problems are unsolvable.
+                    attempted -= 1;
+                    total_weight -= weight;
+                    tracing::warn!(
+                        slug = %problem.slug,
+                        error = %e,
+                        "Benchmark: LLM API error — NOT counting as attempt"
+                    );
+                } else {
+                    tracing::warn!(
+                        slug = %problem.slug,
+                        difficulty = %problem.difficulty,
+                        error = %e,
+                        "Benchmark: failed to generate solution"
+                    );
+                    record_run(db, problem, false, "", &e, 0, &task_id);
+                }
                 continue;
             }
         };
@@ -1022,6 +1132,11 @@ pub async fn run_benchmark_session(
                         "Benchmark: PASS on retry {} (self-play worked!)",
                         retry_count
                     );
+                    // Self-play data amplification: save every passing solution variant
+                    crate::codegen::record_training_example(
+                        db, &retry_solution,
+                        &format!("selfplay:{}/r{}", problem.slug, retry_count),
+                    );
                     success = true;
                     error_output = String::new();
                 } else {
@@ -1038,6 +1153,41 @@ pub async fn run_benchmark_session(
         if success {
             passed += 1;
             earned_weight += weight;
+
+            // Phase 3: accumulate training data for local code gen model.
+            // Store actual solution code — ground truth Rust that passed tests.
+            {
+                let count: u64 = db
+                    .get_state("codegen_training_count")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let _ = db.set_state("codegen_training_count", &(count + 1).to_string());
+
+                // Append solution to capped array (max 1000, prune oldest)
+                let entry = serde_json::json!({
+                    "problem_id": problem.slug,
+                    "difficulty": problem.difficulty,
+                    "code": last_solution,
+                    "ts": chrono::Utc::now().timestamp(),
+                });
+                let mut solutions: Vec<serde_json::Value> = db
+                    .get_state("codegen_solutions")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                solutions.push(entry);
+                // Keep last 1000 solutions (prune oldest)
+                if solutions.len() > 1000 {
+                    solutions.drain(..solutions.len() - 1000);
+                }
+                if let Ok(json) = serde_json::to_string(&solutions) {
+                    let _ = db.set_state("codegen_solutions", &json);
+                }
+            }
+
             if used_review_fix {
                 review_improved += 1;
                 tracing::info!(
@@ -1071,7 +1221,7 @@ pub async fn run_benchmark_session(
                         slug = %problem.slug,
                         "Benchmark: PASS (original — reviewer's fix was WRONG)"
                     );
-                    record_run(db, problem, true, &solution, "", elapsed_ms);
+                    record_run(db, problem, true, &solution, "", elapsed_ms, &task_id);
                     continue;
                 }
                 tracing::info!(
@@ -1106,6 +1256,7 @@ pub async fn run_benchmark_session(
             elo_rating: current_elo,
             pass_at_1: current_pass_at_1,
             peer_count: current_peer_count,
+            problem_slug: problem.slug.clone(),
         });
         // Record each retry as a separate training example
         for r in 0..retry_count {
@@ -1120,6 +1271,7 @@ pub async fn run_benchmark_session(
                 elo_rating: current_elo,
                 pass_at_1: current_pass_at_1,
                 peer_count: current_peer_count,
+                problem_slug: problem.slug.clone(),
             });
         }
 
@@ -1130,7 +1282,18 @@ pub async fn run_benchmark_session(
             &final_solution,
             &error_output,
             elapsed_ms,
+            &task_id,
         );
+    }
+
+    // Guard: if no problems were actually attempted (all API errors), skip scoring.
+    // Recording 0% when the LLM is unavailable poisons ELO, brain weights, and IQ.
+    if attempted == 0 {
+        tracing::warn!(
+            "Benchmark: ALL problems skipped due to API errors — NOT updating score. \
+             Fix the LLM API key/quota and scores will resume."
+        );
+        return Ok(0.0);
     }
 
     // Weighted score: difficulty-adjusted pass rate
@@ -1205,10 +1368,11 @@ fn record_run(
     solution: &str,
     error: &str,
     total_ms: u64,
+    task_id: &str,
 ) {
     let run = BenchmarkRun {
         id: uuid::Uuid::new_v4().to_string(),
-        task_id: format!("exercism/{}", problem.slug),
+        task_id: task_id.to_string(),
         entry_point: problem.slug.clone(),
         passed,
         generated_solution: solution.chars().take(2000).collect(),
@@ -1370,7 +1534,9 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let now = chrono::Utc::now().timestamp();
-    if now - last_benchmark < 900 {
+    // 5-minute cooldown (was 15 min). Each run is ~2.5 min (15 problems × 10s).
+    // Benchmark is the core learning heartbeat — run it frequently.
+    if now - last_benchmark < 300 {
         return false;
     }
 
@@ -1386,9 +1552,9 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
     total_cycles / interval > last_benchmark_cycle / interval
 }
 
-/// Run benchmark every 10 cycles — the benchmark IS the Rust training curriculum.
-/// Every problem solved teaches Rust patterns. Every failure identifies weaknesses.
-pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 10;
+/// Run benchmark every 15 cycles — conserve Gemini credits while still measuring.
+/// Each run samples 15 problems × 1 Gemini call each = 15 API calls per session.
+pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 15;
 /// Sample 15 problems per session (was 10) — broader coverage per run.
 pub const DEFAULT_SAMPLE_SIZE: usize = 15;
 
@@ -1432,15 +1598,48 @@ pub async fn run_opus_benchmark_session(
     }
 
     // Build set of already-solved problems to prioritize unsolved
-    let solved_slugs: std::collections::HashSet<String> = db
-        .get_all_benchmark_runs()
-        .unwrap_or_default()
+    let all_runs = db.get_all_benchmark_runs().unwrap_or_default();
+    let solved_slugs: std::collections::HashSet<String> = all_runs
         .iter()
         .filter(|r| r.passed)
         .map(|r| r.entry_point.clone())
         .collect();
+
+    // Count consecutive failures per problem (only for never-solved problems).
+    // Problems with 5+ consecutive failures are "stuck" — deprioritize them.
+    let stuck_slugs: std::collections::HashSet<String> = {
+        let mut fail_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        // Runs are ordered by created_at DESC, so we iterate recent-first
+        for run in &all_runs {
+            if solved_slugs.contains(&run.entry_point) {
+                continue; // Skip problems that have been solved at least once
+            }
+            if !run.task_id.starts_with("opus/") {
+                continue; // Only count Opus runs
+            }
+            let count = fail_counts.entry(run.entry_point.clone()).or_insert(0);
+            if !run.passed {
+                *count += 1;
+            }
+        }
+        fail_counts
+            .into_iter()
+            .filter(|(_, count)| *count >= 5)
+            .map(|(slug, _)| slug)
+            .collect()
+    };
+
+    if !stuck_slugs.is_empty() {
+        tracing::info!(
+            stuck = stuck_slugs.len(),
+            slugs = %stuck_slugs.iter().cloned().collect::<Vec<_>>().join(", "),
+            "Opus: deprioritizing stuck problems (5+ consecutive failures, never solved)"
+        );
+    }
+
     // Stratified sampling: guarantee at least 1 problem from EACH tier,
-    // then fill remaining slots randomly. This ensures harder tiers are always tested.
+    // then fill remaining slots. Skip stuck problems (except 1 retry slot).
     let sample = {
         let mut by_tier: std::collections::HashMap<String, Vec<&ExercismProblem>> =
             std::collections::HashMap::new();
@@ -1452,32 +1651,58 @@ pub async fn run_opus_benchmark_session(
         let seed = chrono::Utc::now().timestamp() as usize;
         let mut rng = seed;
 
-        // Phase 1: one from each tier (guaranteed representation)
+        // Phase 1: one from each tier (guaranteed representation, prefer non-stuck)
         let mut tiers: Vec<String> = by_tier.keys().cloned().collect();
-        tiers.sort(); // deterministic order
+        tiers.sort();
         for tier in &tiers {
             if let Some(tier_problems) = by_tier.get(tier) {
-                if !tier_problems.is_empty() {
+                // Prefer non-stuck problems for tier guarantee
+                let non_stuck: Vec<&&ExercismProblem> = tier_problems
+                    .iter()
+                    .filter(|p| !stuck_slugs.contains(&p.slug))
+                    .collect();
+                let pool = if non_stuck.is_empty() {
+                    tier_problems.iter().collect::<Vec<_>>()
+                } else {
+                    non_stuck
+                };
+                if !pool.is_empty() {
                     rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1))
-                        % tier_problems.len();
-                    selected.push(tier_problems[rng].clone());
+                        % pool.len();
+                    selected.push((*pool[rng]).clone());
                 }
             }
         }
 
-        // Phase 2: fill remaining slots, preferring unsolved + higher tiers
+        // Phase 2: fill remaining slots from unsolved NON-STUCK problems, harder first
         let selected_slugs: std::collections::HashSet<String> =
             selected.iter().map(|p| p.slug.clone()).collect();
         let mut remaining: Vec<&ExercismProblem> = problems
             .iter()
-            .filter(|p| !selected_slugs.contains(&p.slug) && !solved_slugs.contains(&p.slug))
+            .filter(|p| {
+                !selected_slugs.contains(&p.slug)
+                    && !solved_slugs.contains(&p.slug)
+                    && !stuck_slugs.contains(&p.slug)
+            })
             .collect();
-        // Sort by tier descending (harder first)
         remaining.sort_by(|a, b| b.difficulty.cmp(&a.difficulty));
 
-        let slots_left = sample_size.saturating_sub(selected.len());
+        let slots_left = sample_size.saturating_sub(selected.len() + 1); // reserve 1 for retry
         for p in remaining.iter().take(slots_left) {
             selected.push((*p).clone());
+        }
+
+        // Phase 3: 1 retry slot for a stuck problem (occasional re-attempt)
+        if !stuck_slugs.is_empty() {
+            let stuck_problems: Vec<&ExercismProblem> = problems
+                .iter()
+                .filter(|p| stuck_slugs.contains(&p.slug))
+                .collect();
+            if !stuck_problems.is_empty() {
+                rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1))
+                    % stuck_problems.len();
+                selected.push(stuck_problems[rng].clone());
+            }
         }
 
         selected
@@ -1549,8 +1774,20 @@ pub async fn run_opus_benchmark_session(
         let solution = match generate_solution(llm, db, problem, &all_failures).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(slug = %problem.slug, tier = %problem.difficulty, error = %e, "Opus: gen failed");
-                record_run(db, problem, false, "", &e, 0);
+                let is_api_error = e.contains("429")
+                    || e.contains("quota")
+                    || e.contains("rate limit")
+                    || e.contains("Too Many Requests")
+                    || e.contains("503")
+                    || e.contains("500");
+                if is_api_error {
+                    attempted -= 1;
+                    total_weight -= weight;
+                    tracing::warn!(slug = %problem.slug, error = %e, "Opus: LLM API error — NOT counting");
+                } else {
+                    tracing::warn!(slug = %problem.slug, tier = %problem.difficulty, error = %e, "Opus: gen failed");
+                    record_run(db, problem, false, "", &e, 0, &task_id);
+                }
                 continue;
             }
         };
@@ -1593,10 +1830,36 @@ pub async fn run_opus_benchmark_session(
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
+        // Check if codegen was used for this solution
+        let codegen_used = db.get_state("codegen_last_used").ok().flatten()
+            .map(|v| v == "1").unwrap_or(false);
+        let _ = db.set_state("codegen_last_used", "0"); // Reset flag
+
         if success {
             passed += 1;
             earned_weight += weight;
-            tracing::info!(slug = %problem.slug, tier = %problem.difficulty, "Opus: PASS");
+
+            // Phase 3: store passing solution for codegen training
+            crate::codegen::record_training_example(
+                db,
+                &last_solution,
+                &format!("opus/{}", problem.slug),
+            );
+
+            // Track codegen success
+            if codegen_used {
+                let s: u64 = db.get_state("codegen_benchmark_successes").ok().flatten()
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+                let _ = db.set_state("codegen_benchmark_successes", &(s + 1).to_string());
+                tracing::info!(
+                    slug = %problem.slug,
+                    tier = %problem.difficulty,
+                    total_codegen_successes = s + 1,
+                    "Opus: PASS (LOCAL CODEGEN — Gemini weaning!)"
+                );
+            } else {
+                tracing::info!(slug = %problem.slug, tier = %problem.difficulty, "Opus: PASS");
+            }
         } else {
             tracing::info!(
                 slug = %problem.slug,
@@ -1618,6 +1881,7 @@ pub async fn run_opus_benchmark_session(
             elo_rating: current_elo,
             pass_at_1: current_pass_at_1,
             peer_count: 0,
+            problem_slug: problem.slug.clone(),
         });
 
         record_run(
@@ -1627,7 +1891,17 @@ pub async fn run_opus_benchmark_session(
             &last_solution,
             &error_output,
             elapsed_ms,
+            &task_id,
         );
+    }
+
+    // Guard: if no problems were actually attempted (all API errors), skip scoring.
+    if attempted == 0 {
+        tracing::warn!(
+            "Opus IQ: ALL problems skipped due to API errors — NOT updating score/ELO/IQ. \
+             Fix the LLM API key/quota and scores will resume."
+        );
+        return Ok(0.0);
     }
 
     let weighted_score = if total_weight > 0.0 {
@@ -2037,6 +2311,48 @@ pub fn collective_score(db: &SoulDatabase) -> (f64, u32, u32) {
 /// Extract accumulated lessons from past benchmark failures.
 /// Analyzes error patterns across all runs and generates hints for the LLM.
 /// Stored in soul_state as "benchmark_hints" and updated after each session.
+/// Parse cargo test output to extract specific failing test names and assertion messages.
+/// Returns a focused summary like "- test foo FAILED: left=3, right=5"
+fn parse_test_failures(output: &str) -> String {
+    let mut failures = Vec::new();
+    let mut current_test = String::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        // "test foo ... FAILED"
+        if trimmed.starts_with("test ") && trimmed.ends_with("FAILED") {
+            current_test = trimmed
+                .strip_prefix("test ")
+                .unwrap_or(trimmed)
+                .strip_suffix(" ... FAILED")
+                .unwrap_or(trimmed)
+                .to_string();
+        }
+        // "left: `X`" or "right: `Y`" from assert_eq
+        if trimmed.starts_with("left:") || trimmed.starts_with("right:") {
+            let detail: String = trimmed.chars().take(100).collect();
+            if !current_test.is_empty() {
+                failures.push(format!("- test `{}` FAILED: {}", current_test, detail));
+                current_test.clear();
+            } else {
+                failures.push(format!("- {}", detail));
+            }
+        }
+        // "thread 'test_name' panicked at 'assertion failed"
+        if trimmed.contains("panicked at") {
+            let msg: String = trimmed.chars().take(150).collect();
+            failures.push(format!("- {}", msg));
+        }
+    }
+
+    // Also capture any remaining named test that didn't have assertion details
+    if !current_test.is_empty() {
+        failures.push(format!("- test `{}` FAILED", current_test));
+    }
+
+    failures.join("\n")
+}
+
 fn load_benchmark_hints(db: &SoulDatabase) -> String {
     // Check if we have cached hints
     if let Ok(Some(hints)) = db.get_state("benchmark_hints") {

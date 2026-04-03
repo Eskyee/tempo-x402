@@ -9,6 +9,8 @@ impl ToolExecutor {
         slug: &str,
         source_code: Option<&str>,
         description: Option<&str>,
+        interactive: bool,
+        frontend: bool,
     ) -> Result<ToolResult, String> {
         // Validate slug
         if !slug
@@ -27,15 +29,32 @@ impl ToolExecutor {
             .map_err(|e| format!("failed to create source dir: {e}"))?;
         std::fs::create_dir_all(&bin_dir).map_err(|e| format!("failed to create bin dir: {e}"))?;
 
-        // Write Cargo.toml
-        let cargo_toml = x402_cartridge::compiler::default_cargo_toml(slug);
+        // Write Cargo.toml + lib.rs based on cartridge type
+        let (cargo_toml, lib_rs, cartridge_type) = if frontend {
+            (
+                x402_cartridge::compiler::frontend_cargo_toml(slug),
+                source_code
+                    .map(String::from)
+                    .unwrap_or_else(|| x402_cartridge::compiler::frontend_lib_rs(slug)),
+                "frontend (Leptos DOM app)",
+            )
+        } else if interactive {
+            (
+                x402_cartridge::compiler::default_cargo_toml(slug),
+                x402_cartridge::compiler::default_interactive_lib_rs(slug),
+                "interactive (60fps framebuffer)",
+            )
+        } else {
+            (
+                x402_cartridge::compiler::default_cargo_toml(slug),
+                source_code
+                    .map(String::from)
+                    .unwrap_or_else(|| x402_cartridge::compiler::default_lib_rs(slug)),
+                "backend (HTTP)",
+            )
+        };
         std::fs::write(format!("{src_dir}/Cargo.toml"), &cargo_toml)
             .map_err(|e| format!("failed to write Cargo.toml: {e}"))?;
-
-        // Write lib.rs (user-provided or default template)
-        let lib_rs = source_code
-            .map(String::from)
-            .unwrap_or_else(|| x402_cartridge::compiler::default_lib_rs(slug));
         std::fs::write(format!("{src_dir}/src/lib.rs"), &lib_rs)
             .map_err(|e| format!("failed to write lib.rs: {e}"))?;
 
@@ -43,10 +62,24 @@ impl ToolExecutor {
 
         Ok(ToolResult {
             stdout: format!(
-                "Cartridge '{slug}' created at {src_dir}\n\
+                "Cartridge '{slug}' created at {src_dir} [{cartridge_type}]\n\
                  Description: {desc}\n\
                  Source: {src_dir}/src/lib.rs\n\
-                 Next: call compile_cartridge to build the WASM binary."
+                 {interactive_note}\
+                 Next: call compile_cartridge('{slug}') to build the WASM binary.",
+                interactive_note = if frontend {
+                    "This is a FRONTEND cartridge — a full Leptos app that mounts into the Studio.\n\
+                     It compiles to wasm32-unknown-unknown via wasm-bindgen (not wasip1).\n\
+                     The init(selector) function mounts the app into a DOM element.\n\
+                     You can use leptos view! macros, web-sys, and full DOM APIs.\n"
+                } else if interactive {
+                    "Template includes: x402_init, x402_tick, x402_key_down/up, x402_get_framebuffer,\n\
+                     set_pixel, fill_rect, clear helpers. Edit the x402_tick() function to customize.\n\
+                     Arrow keys: 37=Left, 38=Up, 39=Right, 40=Down, 32=Space.\n"
+                } else {
+                    "IMPORTANT: Do NOT add any dependencies to Cargo.toml.\n\
+                     The host ABI uses #[link(wasm_import_module = \"x402\")] extern \"C\" functions.\n"
+                }
             ),
             stderr: String::new(),
             exit_code: 0,
@@ -65,7 +98,45 @@ impl ToolExecutor {
             ));
         }
 
+        let is_frontend =
+            x402_cartridge::compiler::is_frontend_cartridge(std::path::Path::new(&src_dir));
+
         let start = std::time::Instant::now();
+        if is_frontend {
+            // Frontend cartridge: wasm32-unknown-unknown + wasm-bindgen
+            match x402_cartridge::compiler::compile_frontend_cartridge(
+                std::path::Path::new(&src_dir),
+                std::path::Path::new(&bin_dir),
+            )
+            .await
+            {
+                Ok(pkg_dir) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    return Ok(ToolResult {
+                        stdout: format!(
+                            "Frontend cartridge '{slug}' compiled successfully!\n\
+                             Package: {}\n\
+                             Build time: {duration_ms}ms\n\
+                             The cartridge is ready at /c/{slug} (frontend type — mounts into Studio DOM).",
+                            pkg_dir.display()
+                        ),
+                        stderr: String::new(),
+                        exit_code: 0,
+                        duration_ms,
+                    });
+                }
+                Err(e) => {
+                    return Ok(ToolResult {
+                        stdout: String::new(),
+                        stderr: format!("Frontend compilation failed:\n{e}"),
+                        exit_code: 1,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+            }
+        }
+
+        // Backend/interactive cartridge: wasm32-wasip1
         match x402_cartridge::compiler::compile_cartridge(
             std::path::Path::new(&src_dir),
             std::path::Path::new(&bin_dir),
@@ -78,6 +149,16 @@ impl ToolExecutor {
                     .unwrap_or_else(|_| "unknown".to_string());
                 let size = std::fs::metadata(&wasm_path).map(|m| m.len()).unwrap_or(0);
 
+                // Load into the shared engine so /c/{slug} works immediately
+                // and the list endpoint can auto-register it in the DB.
+                let mut load_status = String::new();
+                if let Some(ref engine) = self.cartridge_engine {
+                    match engine.load_module(slug, &wasm_path) {
+                        Ok(()) => load_status = "Loaded into runtime.".to_string(),
+                        Err(e) => load_status = format!("Warning: failed to load into runtime: {e}"),
+                    }
+                }
+
                 Ok(ToolResult {
                     stdout: format!(
                         "Cartridge '{slug}' compiled successfully!\n\
@@ -85,6 +166,7 @@ impl ToolExecutor {
                          Size: {} bytes\n\
                          Hash: {hash}\n\
                          Build time: {duration_ms}ms\n\
+                         {load_status}\n\
                          The cartridge is ready to serve at /c/{slug}",
                         wasm_path.display(),
                         size

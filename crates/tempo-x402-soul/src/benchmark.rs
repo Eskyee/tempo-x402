@@ -1256,7 +1256,6 @@ pub async fn run_benchmark_session(
             elo_rating: current_elo,
             pass_at_1: current_pass_at_1,
             peer_count: current_peer_count,
-            problem_slug: problem.slug.clone(),
         });
         // Record each retry as a separate training example
         for r in 0..retry_count {
@@ -1271,7 +1270,6 @@ pub async fn run_benchmark_session(
                 elo_rating: current_elo,
                 pass_at_1: current_pass_at_1,
                 peer_count: current_peer_count,
-                problem_slug: problem.slug.clone(),
             });
         }
 
@@ -1881,7 +1879,6 @@ pub async fn run_opus_benchmark_session(
             elo_rating: current_elo,
             pass_at_1: current_pass_at_1,
             peer_count: 0,
-            problem_slug: problem.slug.clone(),
         });
 
         record_run(

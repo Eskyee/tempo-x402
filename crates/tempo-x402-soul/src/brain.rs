@@ -696,8 +696,6 @@ pub struct BenchmarkAttemptContext {
     pub pass_at_1: f32,
     /// Number of peers available
     pub peer_count: u32,
-    /// Problem slug — gives the brain a per-problem signal (hashed to feature space)
-    pub problem_slug: String,
 }
 
 /// Classify a problem slug into a category index (0-13) for feature encoding.

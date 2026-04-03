@@ -163,7 +163,7 @@ pub fn train_model(db: &SoulDatabase) {
         for start in (0..tokens.len().saturating_sub(window_size)).step_by(48) {
             let end = (start + window_size).min(tokens.len());
             let window = &tokens[start..end];
-            let loss = model.train_step(window, 0.003); // higher LR with gradient clipping
+            let loss = model.train_step(window, 0.0003); // conservative LR — full backprop needs smaller steps
             total_loss += loss;
             trained += 1;
         }

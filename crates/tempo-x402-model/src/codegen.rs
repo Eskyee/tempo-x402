@@ -552,10 +552,10 @@ impl Default for CodeGenModel {
 // ── Utilities ──────────────────────────────────────────────────────
 
 /// Simple layer normalization (mean=0, var=1, then scale).
-/// Clip gradient to [-1.0, 1.0] to prevent explosions.
+/// Clip gradient to [-0.5, 0.5] to prevent explosions.
 #[inline]
 fn clip_grad(g: f32) -> f32 {
-    g.clamp(-1.0, 1.0)
+    g.clamp(-0.5, 0.5)
 }
 
 fn layer_norm(input: &[f32], scale: &[f32], seq_len: usize, d: usize) -> Vec<f32> {

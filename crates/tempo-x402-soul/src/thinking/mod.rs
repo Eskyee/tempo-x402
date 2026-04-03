@@ -607,43 +607,25 @@ impl ThinkingLoop {
                 }
             }
 
-            // Train the neural brain (driven by temporal binding)
-            if fired_ops.contains(&crate::temporal::OP_BRAIN_TRAINING.to_string()) {
+            // Train ALL local models EVERY cycle — pure local computation, no API calls.
+            // Brain (50K), transformer (2.2M), codegen (29M) are all sub-second.
+            // More training steps = faster convergence. Don't gate behind oscillator.
+            {
                 let (examples, loss) = crate::brain::train_cycle(&self.db);
                 if examples > 0 {
-                    tracing::info!(
-                        examples,
-                        loss = format!("{:.4}", loss),
-                        "Brain training cycle"
-                    );
-                    crate::events::emit_event(
-                        &self.db, "info", "brain.trained",
-                        &format!("Brain trained on {} examples, loss={:.4}", examples, loss),
-                        Some(serde_json::json!({"examples": examples, "loss": loss})),
-                        crate::events::EventRefs::default(),
-                    );
+                    tracing::info!(examples, loss = format!("{:.4}", loss), "Brain trained");
                 }
-
-                // Plan transformer training — online learning from successful plans
-                let (model_trained, model_loss) = crate::model::train_from_outcomes(&self.db);
-                if model_trained > 0 {
-                    tracing::info!(
-                        trained = model_trained,
-                        loss = format!("{:.4}", model_loss),
-                        "Plan transformer training cycle"
-                    );
-                    crate::events::emit_event(
-                        &self.db, "info", "transformer.trained",
-                        &format!("Transformer trained on {} plans, loss={:.4}", model_trained, model_loss),
-                        Some(serde_json::json!({"trained": model_trained, "loss": model_loss})),
-                        crate::events::EventRefs::default(),
-                    );
+                let (mt, ml) = crate::model::train_from_outcomes(&self.db);
+                if mt > 0 {
+                    tracing::info!(trained = mt, loss = format!("{:.4}", ml), "Transformer trained");
                 }
-
-                // Phase 3: code gen model training (every brain training cycle)
-                crate::codegen::train_tokenizer(&self.db);
-                crate::codegen::train_model(&self.db);
             }
+
+            // Phase 3: codegen model training — EVERY cycle (pure local computation, no API calls).
+            // The codegen model learns from benchmark solutions. More training steps = faster learning.
+            // This is <1 second of local matrix math, not gated by oscillator.
+            crate::codegen::train_tokenizer(&self.db);
+            crate::codegen::train_model(&self.db);
 
             // Cortex dream consolidation (driven by temporal binding — independent from brain training)
             if fired_ops.contains(&crate::temporal::OP_CORTEX_DREAMING.to_string()) {

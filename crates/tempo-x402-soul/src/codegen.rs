@@ -124,11 +124,25 @@ pub fn train_model(db: &SoulDatabase) {
     let mut total_loss = 0.0f32;
     let mut trained = 0u32;
 
-    // Train on up to 20 recent solutions per cycle
-    for sol in solutions.iter().rev().take(20) {
+    // Filter for passing solutions only — garbage in = garbage out
+    let good_solutions: Vec<&serde_json::Value> = solutions
+        .iter()
+        .filter(|sol| {
+            // Keep solutions that passed tests (or have no pass field = legacy data, keep it)
+            sol.get("passed").and_then(|v| v.as_bool()).unwrap_or(true)
+        })
+        .collect();
+
+    // Train on up to 50 solutions per cycle (was 20 — more data = faster learning)
+    for sol in good_solutions.iter().rev().take(50) {
         let Some(code) = sol.get("code").and_then(|v| v.as_str()) else {
             continue;
         };
+
+        // Skip very short code (likely stubs or errors)
+        if code.len() < 50 {
+            continue;
+        }
 
         // Tokenize with BPE
         let mut tokens = vec![x402_model::bpe::BOS_TOKEN];
@@ -144,12 +158,12 @@ pub fn train_model(db: &SoulDatabase) {
             continue;
         }
 
-        // Train on sliding windows
-        let window_size = 64.min(tokens.len());
-        for start in (0..tokens.len().saturating_sub(window_size)).step_by(32) {
+        // Train on sliding windows (128 tokens, step 48 — larger context than before)
+        let window_size = 128.min(tokens.len());
+        for start in (0..tokens.len().saturating_sub(window_size)).step_by(48) {
             let end = (start + window_size).min(tokens.len());
             let window = &tokens[start..end];
-            let loss = model.train_step(window, 0.001);
+            let loss = model.train_step(window, 0.003); // higher LR with gradient clipping
             total_loss += loss;
             trained += 1;
         }

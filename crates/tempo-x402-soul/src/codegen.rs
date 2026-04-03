@@ -128,13 +128,13 @@ pub fn train_model(db: &SoulDatabase) {
     let good_solutions: Vec<&serde_json::Value> = solutions
         .iter()
         .filter(|sol| {
-            // Keep solutions that passed tests (or have no pass field = legacy data, keep it)
             sol.get("passed").and_then(|v| v.as_bool()).unwrap_or(true)
         })
         .collect();
 
-    // Train on up to 50 solutions per cycle (was 20 — more data = faster learning)
-    for sol in good_solutions.iter().rev().take(50) {
+    // Train on 10 solutions per cycle — keep cycles fast (<5s).
+    // With every-cycle training, we see all data over multiple cycles.
+    for sol in good_solutions.iter().rev().take(10) {
         let Some(code) = sol.get("code").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -158,9 +158,9 @@ pub fn train_model(db: &SoulDatabase) {
             continue;
         }
 
-        // Train on sliding windows (128 tokens, step 48 — larger context than before)
-        let window_size = 128.min(tokens.len());
-        for start in (0..tokens.len().saturating_sub(window_size)).step_by(48) {
+        // Train on sliding windows (64 tokens, step 32 — keep cycles fast with full backprop)
+        let window_size = 64.min(tokens.len());
+        for start in (0..tokens.len().saturating_sub(window_size)).step_by(32) {
             let end = (start + window_size).min(tokens.len());
             let window = &tokens[start..end];
             let loss = model.train_step(window, 0.0003); // conservative LR — full backprop needs smaller steps

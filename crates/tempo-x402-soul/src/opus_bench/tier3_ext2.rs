@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier3_ext2() -> Vec<ExercismProblem> {
+pub(super) fn tier3_ext2() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-mystery-encode", "tier3", "Infer the encoding from tests.", "",
             r#"use opus_mystery_encode::encode;

@@ -49,7 +49,7 @@ struct SoulStatus {
     /// Recent plan outcomes — feedback loop data.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     plan_outcomes: Vec<serde_json::Value>,
-    /// Exercism Rust benchmark score + ELO rating.
+    /// Opus IQ benchmark score + ELO rating.
     #[serde(skip_serializing_if = "Option::is_none")]
     benchmark: Option<serde_json::Value>,
     /// Neural brain status — parameters, training steps, loss.

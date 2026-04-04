@@ -1,11 +1,11 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 // ══════════════════════════════════════════════════════════════════════
 // TIER 5: ADVERSARIAL — Exploit known LLM failure modes
 // ══════════════════════════════════════════════════════════════════════
 
-pub(super) fn tier5_adversarial() -> Vec<ExercismProblem> {
+pub(super) fn tier5_adversarial() -> Vec<BenchmarkProblem> {
     vec![
         // ── 5.1: Almost Fibonacci ────────────────────────────────────
         problem(

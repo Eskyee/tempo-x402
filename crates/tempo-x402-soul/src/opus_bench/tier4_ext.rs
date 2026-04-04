@@ -1,8 +1,8 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 /// Extended Tier 4: Reasoning — logic puzzles and constraint satisfaction.
-pub(super) fn tier4_ext() -> Vec<ExercismProblem> {
+pub(super) fn tier4_ext() -> Vec<BenchmarkProblem> {
     vec![
         problem(
             "opus-valid-parens",

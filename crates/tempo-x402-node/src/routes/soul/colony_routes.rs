@@ -162,7 +162,7 @@ pub(super) async fn colony_benchmark_result(
                 }
             }
             // Record the run in queen's DB
-            let problem = x402_soul::benchmark::ExercismProblem {
+            let problem = x402_soul::benchmark::BenchmarkProblem {
                 slug: result.slug.clone(),
                 instructions: String::new(),
                 test_code: String::new(),

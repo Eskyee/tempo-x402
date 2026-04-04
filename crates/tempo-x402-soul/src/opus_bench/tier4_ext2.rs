@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier4_ext2() -> Vec<ExercismProblem> {
+pub(super) fn tier4_ext2() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-n-queens", "tier4",
             "Place N queens on an NxN chessboard so no two attack each other. Return all solutions.",

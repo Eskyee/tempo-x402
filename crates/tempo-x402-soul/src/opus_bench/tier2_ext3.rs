@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier2_ext3() -> Vec<ExercismProblem> {
+pub(super) fn tier2_ext3() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-bugfix-bfs", "tier2",
             "This BFS finds shortest path but returns the wrong path — it builds the path incorrectly from the parent map. Fix it.",

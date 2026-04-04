@@ -305,15 +305,6 @@ fn prune_soul_state(db: &Arc<SoulDatabase>) {
         }
     }
 
-    // Exercism problem cache: re-fetch is cheap, clear if >500KB
-    if let Ok(Some(val)) = db.get_state("exercism_problems_cache") {
-        if val.len() > 500_000 {
-            freed_bytes += val.len();
-            let _ = db.set_state("exercism_problems_cache", "");
-            pruned_keys += 1;
-        }
-    }
-
     // Cap large neural model blobs — these are the #1 cause of sled bloat.
     // All of these are regenerable (models retrain from data, cortex rebuilds from experience).
     let large_blob_caps: &[(&str, usize)] = &[

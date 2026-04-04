@@ -124,15 +124,12 @@ impl ThinkingLoop {
             exp
         };
         let cap_guidance = capability::capability_guidance(&self.db);
-        let benchmark_summary = crate::benchmark::benchmark_summary_for_prompt(&self.db);
         let opus_summary = crate::benchmark::opus_summary_for_prompt(&self.db);
         let brain_summary = crate::brain::brain_summary(&self.db);
         let cap_with_benchmark = {
             let mut s = cap_guidance;
             if !opus_summary.is_empty() {
                 s = format!("{s}\n\n{opus_summary}");
-            } else if !benchmark_summary.is_empty() {
-                s = format!("{s}\n\n{benchmark_summary}");
             }
             if !brain_summary.is_empty() {
                 s = format!("{s}\n\n{brain_summary}");

@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier1_ext6() -> Vec<ExercismProblem> {
+pub(super) fn tier1_ext6() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-crc32", "tier1", "Implement CRC-32 checksum calculation.",
             r#"pub fn crc32(data: &[u8]) -> u32 { todo!() }"#,

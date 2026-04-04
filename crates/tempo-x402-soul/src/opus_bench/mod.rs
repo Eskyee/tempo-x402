@@ -35,10 +35,10 @@ mod tier4_ext2;
 mod tier5;
 mod tier6;
 
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 /// Load all embedded Opus IQ benchmark problems.
-pub fn load_embedded_problems() -> Vec<ExercismProblem> {
+pub fn load_embedded_problems() -> Vec<BenchmarkProblem> {
     let mut problems = Vec::new();
     problems.extend(tier1::tier1_generation());
     problems.extend(tier1_ext::tier1_ext());
@@ -87,8 +87,8 @@ fn problem(
     instructions: &str,
     starter: &str,
     tests: &str,
-) -> ExercismProblem {
-    ExercismProblem {
+) -> BenchmarkProblem {
+    BenchmarkProblem {
         slug: slug.to_string(),
         instructions: instructions.to_string(),
         test_code: tests.to_string(),

@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier1_ext5() -> Vec<ExercismProblem> {
+pub(super) fn tier1_ext5() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-rpn-calc", "tier1", "Implement a Reverse Polish Notation calculator. Supports +, -, *, /.",
             r#"pub fn rpn_eval(expr: &str) -> Result<f64, String> { todo!() }"#,

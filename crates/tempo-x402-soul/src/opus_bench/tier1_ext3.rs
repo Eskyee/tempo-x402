@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier1_ext3() -> Vec<ExercismProblem> {
+pub(super) fn tier1_ext3() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-atbash", "tier1",
             "Implement the Atbash cipher: a↔z, b↔y, c��x, etc. Preserve case, pass through non-alpha.",

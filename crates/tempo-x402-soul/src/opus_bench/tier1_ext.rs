@@ -1,8 +1,8 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 /// Extended Tier 1: Generation — more Rust coding problems with increasing complexity.
-pub(super) fn tier1_ext() -> Vec<ExercismProblem> {
+pub(super) fn tier1_ext() -> Vec<BenchmarkProblem> {
     vec![
         problem(
             "opus-matrix-ops",

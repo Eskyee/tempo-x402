@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier1_ext4() -> Vec<ExercismProblem> {
+pub(super) fn tier1_ext4() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-gcd-lcm", "tier1", "Compute GCD and LCM of two numbers. Also compute GCD of a list.",
             r#"pub fn gcd(a: u64, b: u64) -> u64 { todo!() }

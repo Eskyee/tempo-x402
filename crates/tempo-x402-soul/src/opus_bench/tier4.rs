@@ -1,11 +1,11 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 // ══════════════════════════════════════════════════════════════════════
 // TIER 4: REASONING — Logic puzzles + constraint satisfaction
 // ══════════════════════════════════════════════════════════════════════
 
-pub(super) fn tier4_reasoning() -> Vec<ExercismProblem> {
+pub(super) fn tier4_reasoning() -> Vec<BenchmarkProblem> {
     vec![
         // ── 4.1: N-Queens ────────────────────────────────────────────
         problem(

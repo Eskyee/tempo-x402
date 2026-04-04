@@ -475,144 +475,117 @@ impl ThinkingLoop {
                         .unwrap_or(0);
                     // NOTE: set last_benchmark_at AFTER the session succeeds, not before.
                     // Previously set before, so failed sessions still consumed the cooldown.
-                    let bench_mode = crate::benchmark::BenchmarkMode::from_env();
-                    match bench_mode {
-                        crate::benchmark::BenchmarkMode::Opus => {
-                            // 10 min timeout on entire benchmark session.
-                            // Prevents one hung cargo test from blocking the soul forever.
-                            let bench_future = crate::benchmark::run_opus_benchmark_session(
-                                llm,
-                                &self.db,
-                                &self.config.workspace_root,
-                                crate::benchmark::DEFAULT_SAMPLE_SIZE,
-                            );
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(600),
-                                bench_future,
-                            ).await {
-                                Err(_) => {
-                                    tracing::warn!("Opus benchmark session timed out after 10 min — will retry next cycle");
-                                    // Don't set last_benchmark_at — allow immediate retry
-                                }
-                                Ok(bench_result) => match bench_result {
-                                Ok(weighted_score) => {
-                                    let iq =
-                                        crate::opus_bench::weighted_score_to_iq(weighted_score);
-                                    crate::elo::update_rating(&self.db, weighted_score);
-                                    // Store score for commit gate delta comparison
-                                    let _ = self.db.set_state(
-                                        "last_benchmark_score",
-                                        &format!("{:.2}", weighted_score),
-                                    );
-                                    tracing::info!(
-                                        weighted = format!("{:.1}%", weighted_score),
-                                        iq = format!("{:.0}", iq),
-                                        elo = crate::elo::rating_display(&self.db),
-                                        "Opus IQ benchmark complete"
-                                    );
+                    // 10 min timeout on entire benchmark session.
+                    // Prevents one hung cargo test from blocking the soul forever.
+                    let bench_future = crate::benchmark::run_opus_benchmark_session(
+                        llm,
+                        &self.db,
+                        &self.config.workspace_root,
+                        crate::benchmark::DEFAULT_SAMPLE_SIZE,
+                    );
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(600),
+                        bench_future,
+                    ).await {
+                        Err(_) => {
+                            tracing::warn!("Opus benchmark session timed out after 10 min — will retry next cycle");
+                            // Don't set last_benchmark_at — allow immediate retry
+                        }
+                        Ok(bench_result) => match bench_result {
+                            Ok(weighted_score) => {
+                                let iq =
+                                    crate::opus_bench::weighted_score_to_iq(weighted_score);
+                                crate::elo::update_rating(&self.db, weighted_score);
+                                // Store score for commit gate delta comparison
+                                let _ = self.db.set_state(
+                                    "last_benchmark_score",
+                                    &format!("{:.2}", weighted_score),
+                                );
+                                tracing::info!(
+                                    weighted = format!("{:.1}%", weighted_score),
+                                    iq = format!("{:.0}", iq),
+                                    elo = crate::elo::rating_display(&self.db),
+                                    "Opus IQ benchmark complete"
+                                );
 
-                                    // Train code quality model on benchmark delta
-                                    let pre_score: f64 = self
-                                        .db
-                                        .get_state("pre_commit_benchmark_score")
+                                // Train code quality model on benchmark delta
+                                let pre_score: f64 = self
+                                    .db
+                                    .get_state("pre_commit_benchmark_score")
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(weighted_score);
+                                let delta = weighted_score - pre_score;
+                                if delta.abs() > 0.1 {
+                                    crate::code_quality::train_on_benchmark_delta(
+                                        &self.db, delta,
+                                    );
+                                }
+
+                                // Stagnation detection: if IQ hasn't changed for 3+ runs,
+                                // inject a nudge to investigate stuck benchmark problems.
+                                {
+                                    let prev_iq: f64 = self.db
+                                        .get_state("benchmark_last_iq")
                                         .ok()
                                         .flatten()
                                         .and_then(|s| s.parse().ok())
-                                        .unwrap_or(weighted_score);
-                                    let delta = weighted_score - pre_score;
-                                    if delta.abs() > 0.1 {
-                                        crate::code_quality::train_on_benchmark_delta(
-                                            &self.db, delta,
+                                        .unwrap_or(0.0);
+                                    let stagnation: u32 = self.db
+                                        .get_state("benchmark_stagnation_count")
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0);
+                                    let iq_delta = (iq - prev_iq).abs();
+                                    let new_stagnation = if iq_delta < 1.0 {
+                                        stagnation + 1
+                                    } else {
+                                        0 // IQ moved — reset
+                                    };
+                                    let _ = self.db.set_state("benchmark_last_iq", &format!("{:.1}", iq));
+                                    let _ = self.db.set_state("benchmark_stagnation_count", &new_stagnation.to_string());
+
+                                    if new_stagnation >= 3 {
+                                        tracing::warn!(
+                                            iq = format!("{:.0}", iq),
+                                            stagnation = new_stagnation,
+                                            "IQ stagnant for {} benchmark runs — injecting investigation nudge",
+                                            new_stagnation,
                                         );
+                                        let _ = self.db.insert_nudge(
+                                            "system",
+                                            &format!(
+                                                "IQ has been stagnant at {:.0} for {} consecutive benchmark runs. \
+                                                 The same problems keep failing. Analyze the failed benchmark problems, \
+                                                 study the error patterns, and try fundamentally different approaches. \
+                                                 Focus on problems that fail with logic errors (not compile errors) — \
+                                                 those are closest to being solved.",
+                                                iq, new_stagnation,
+                                            ),
+                                            5, // high priority
+                                        );
+                                        // Reset counter so we don't spam nudges every run
+                                        let _ = self.db.set_state("benchmark_stagnation_count", "0");
                                     }
-
-                                    // Stagnation detection: if IQ hasn't changed for 3+ runs,
-                                    // inject a nudge to investigate stuck benchmark problems.
-                                    {
-                                        let prev_iq: f64 = self.db
-                                            .get_state("benchmark_last_iq")
-                                            .ok()
-                                            .flatten()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0.0);
-                                        let stagnation: u32 = self.db
-                                            .get_state("benchmark_stagnation_count")
-                                            .ok()
-                                            .flatten()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                        let iq_delta = (iq - prev_iq).abs();
-                                        let new_stagnation = if iq_delta < 1.0 {
-                                            stagnation + 1
-                                        } else {
-                                            0 // IQ moved — reset
-                                        };
-                                        let _ = self.db.set_state("benchmark_last_iq", &format!("{:.1}", iq));
-                                        let _ = self.db.set_state("benchmark_stagnation_count", &new_stagnation.to_string());
-
-                                        if new_stagnation >= 3 {
-                                            tracing::warn!(
-                                                iq = format!("{:.0}", iq),
-                                                stagnation = new_stagnation,
-                                                "IQ stagnant for {} benchmark runs — injecting investigation nudge",
-                                                new_stagnation,
-                                            );
-                                            let _ = self.db.insert_nudge(
-                                                "system",
-                                                &format!(
-                                                    "IQ has been stagnant at {:.0} for {} consecutive benchmark runs. \
-                                                     The same problems keep failing. Analyze the failed benchmark problems, \
-                                                     study the error patterns, and try fundamentally different approaches. \
-                                                     Focus on problems that fail with logic errors (not compile errors) — \
-                                                     those are closest to being solved.",
-                                                    iq, new_stagnation,
-                                                ),
-                                                5, // high priority
-                                            );
-                                            // Reset counter so we don't spam nudges every run
-                                            let _ = self.db.set_state("benchmark_stagnation_count", "0");
-                                        }
-                                    }
-                                    // Mark benchmark as completed (timestamps set AFTER success)
-                                    let _ = self.db.set_state(
-                                        "last_benchmark_at",
-                                        &chrono::Utc::now().timestamp().to_string(),
-                                    );
-                                    let _ = self.db.set_state(
-                                        "last_benchmark_cycle",
-                                        &current_cycle.to_string(),
-                                    );
-                                    // Train codegen IMMEDIATELY after benchmark (tight feedback loop).
-                                    crate::codegen::train_tokenizer(&self.db);
-                                    crate::codegen::train_model(&self.db);
-                                    tracing::info!("Codegen trained immediately after benchmark");
                                 }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "Opus IQ benchmark failed — will retry next eligible cycle");
-                                }
-                            } // end match bench_result
-                            } // end Ok(bench_result) + Err(timeout)
-                        }
-                        crate::benchmark::BenchmarkMode::Exercism => {
-                            match crate::benchmark::run_benchmark_session(
-                                llm,
-                                &self.db,
-                                &self.config.workspace_root,
-                                crate::benchmark::DEFAULT_SAMPLE_SIZE,
-                            )
-                            .await
-                            {
-                                Ok(pass_at_1) => {
-                                    crate::elo::update_rating(&self.db, pass_at_1);
-                                    tracing::info!(
-                                        pass_at_1 = format!("{:.1}%", pass_at_1),
-                                        elo = crate::elo::rating_display(&self.db),
-                                        "Exercism Rust benchmark complete"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "Exercism Rust benchmark failed");
-                                }
+                                // Mark benchmark as completed (timestamps set AFTER success)
+                                let _ = self.db.set_state(
+                                    "last_benchmark_at",
+                                    &chrono::Utc::now().timestamp().to_string(),
+                                );
+                                let _ = self.db.set_state(
+                                    "last_benchmark_cycle",
+                                    &current_cycle.to_string(),
+                                );
+                                // Train codegen IMMEDIATELY after benchmark (tight feedback loop).
+                                crate::codegen::train_tokenizer(&self.db);
+                                crate::codegen::train_model(&self.db);
+                                tracing::info!("Codegen trained immediately after benchmark");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Opus IQ benchmark failed — will retry next eligible cycle");
                             }
                         }
                     }

@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier2_ext2() -> Vec<ExercismProblem> {
+pub(super) fn tier2_ext2() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-bugfix-dijkstra", "tier2",
             "This Dijkstra implementation has a priority queue bug — it doesn't update distances when a shorter path is found. Fix it.",

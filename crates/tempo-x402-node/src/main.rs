@@ -553,8 +553,7 @@ async fn main() -> std::io::Result<()> {
                     child_env_vars.insert("SOUL_INITIAL_GOAL".into(), goal);
                 }
 
-                // Benchmark mode — ensure entire colony uses the same benchmark suite
-                // Without this, clones default to Exercism while parent runs Opus
+                // Benchmark mode — propagate to clones for consistency
                 if let Ok(mode) = std::env::var("SOUL_BENCHMARK_MODE") {
                     child_env_vars.insert("SOUL_BENCHMARK_MODE".into(), mode);
                 }

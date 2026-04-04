@@ -607,25 +607,24 @@ impl ThinkingLoop {
                 }
             }
 
-            // Train ALL local models EVERY cycle — pure local computation, no API calls.
-            // Brain (50K), transformer (2.2M), codegen (29M) are all sub-second.
-            // More training steps = faster convergence. Don't gate behind oscillator.
+            // Train ALL local models EVERY cycle in a blocking thread.
+            // Codegen (29M params, full attention backprop) can take minutes of CPU.
+            // MUST run in spawn_blocking to avoid hanging the async runtime.
             {
-                let (examples, loss) = crate::brain::train_cycle(&self.db);
-                if examples > 0 {
-                    tracing::info!(examples, loss = format!("{:.4}", loss), "Brain trained");
-                }
-                let (mt, ml) = crate::model::train_from_outcomes(&self.db);
-                if mt > 0 {
-                    tracing::info!(trained = mt, loss = format!("{:.4}", ml), "Transformer trained");
-                }
+                let db_train = self.db.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let (examples, loss) = crate::brain::train_cycle(&db_train);
+                    if examples > 0 {
+                        tracing::info!(examples, loss = format!("{:.4}", loss), "Brain trained");
+                    }
+                    let (mt, ml) = crate::model::train_from_outcomes(&db_train);
+                    if mt > 0 {
+                        tracing::info!(trained = mt, loss = format!("{:.4}", ml), "Transformer trained");
+                    }
+                    crate::codegen::train_tokenizer(&db_train);
+                    crate::codegen::train_model(&db_train);
+                }).await;
             }
-
-            // Phase 3: codegen model training — EVERY cycle (pure local computation, no API calls).
-            // The codegen model learns from benchmark solutions. More training steps = faster learning.
-            // This is <1 second of local matrix math, not gated by oscillator.
-            crate::codegen::train_tokenizer(&self.db);
-            crate::codegen::train_model(&self.db);
 
             // Cortex dream consolidation (driven by temporal binding — independent from brain training)
             if fired_ops.contains(&crate::temporal::OP_CORTEX_DREAMING.to_string()) {

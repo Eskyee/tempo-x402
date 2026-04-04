@@ -26,13 +26,12 @@ impl ThinkingLoop {
             }
 
             if self.config.coding_enabled {
-                // First goal: make a code change to prove the pipeline works
+                // First goal: run the benchmark to establish a baseline IQ score
                 seed_goals.push((
-                    "Make your first code change: read crates/tempo-x402-soul/src/housekeeping.rs, \
-                     then use edit_file to add a useful comment or improve a log message. \
-                     Run cargo_check to verify it compiles, then commit the change. \
-                     This establishes your ability to self-modify.",
-                    "A commit exists with a change to housekeeping.rs that passes cargo check",
+                    "Run the Opus IQ benchmark to establish your baseline intelligence score. \
+                     This is the most important thing you can do — measure your IQ before \
+                     attempting any code changes.",
+                    "Benchmark has run at least once and IQ/ELO score is recorded",
                     if self.config.initial_goal.is_some() {
                         4
                     } else {
@@ -57,7 +56,7 @@ impl ThinkingLoop {
                      Check what endpoints they offer, pick one, and make a real paid request. \
                      Record the result as a belief about inter-agent commerce.",
                     "discover_peers returns at least one peer with endpoints, call_peer succeeds on one of them",
-                    4,
+                    2, // Low priority — don't let this block benchmarking/coding
                 ));
             }
 

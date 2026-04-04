@@ -694,8 +694,8 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    // Don't benchmark in first 5 cycles — minimal warmup
-    if total_cycles < 5 {
+    // Don't benchmark in first 3 cycles — minimal warmup
+    if total_cycles < 3 {
         return false;
     }
 
@@ -724,9 +724,9 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
     total_cycles / interval > last_benchmark_cycle / interval
 }
 
-/// Run benchmark every 15 cycles — conserve Gemini credits while still measuring.
+/// Run benchmark every 5 cycles — benchmarking IS the core training loop.
 /// Each run samples 15 problems x 1 Gemini call each = 15 API calls per session.
-pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 15;
+pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 5;
 /// Sample 15 problems per session (was 10) — broader coverage per run.
 pub const DEFAULT_SAMPLE_SIZE: usize = 15;
 

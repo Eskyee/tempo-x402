@@ -93,19 +93,12 @@ RUN printf '#!/bin/sh\n\
 # Fix volume permissions\n\
 chown -R app:app /data 2>/dev/null || true\n\
 \n\
-# Aggressive disk reclaim — prevent volume-full on startup\n\
-rm -rf /data/workspace/target /tmp/x402_cargo_target /data/workspace/.cargo 2>/dev/null || true\n\
-rm -f /data/*.db /data/*.db-wal /data/*.db-shm 2>/dev/null || true\n\
+# Remove old workspace from volume (moved to /tmp in v8)\n\
+rm -rf /data/workspace 2>/dev/null || true\n\
+# Remove legacy SQLite files from pre-v8\n\
+rm -f /data/soul.db /data/soul.db-wal /data/soul.db-shm 2>/dev/null || true\n\
+# Remove brain checkpoints (stored in sled now)\n\
 rm -rf /data/brain_checkpoints 2>/dev/null || true\n\
-rm -rf /data/cartridges/*/bin/target 2>/dev/null || true\n\
-\n\
-# If disk is >90%% full, nuke sled DB too (it will rebuild from scratch)\n\
-USAGE=$(df /data 2>/dev/null | tail -1 | awk "{print \\$5}" | tr -d "%%")\n\
-if [ "${USAGE:-0}" -gt 90 ] 2>/dev/null; then\n\
-  echo "EMERGENCY: disk ${USAGE}%% full — clearing sled DB"\n\
-  rm -rf /data/soul.sled 2>/dev/null || true\n\
-  rm -rf /data/workspace/.git/objects/pack 2>/dev/null || true\n\
-fi\n\
 \n\
 BIN=${X402_BINARY:-x402-node}\n\
 exec gosu app "$BIN" "$@"\n\

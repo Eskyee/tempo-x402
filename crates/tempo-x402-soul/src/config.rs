@@ -186,8 +186,11 @@ impl SoulConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or(300);
 
+        // Default workspace to /tmp — NOT the persistent volume.
+        // The workspace (git clone + cargo target) can be 2-4GB and is fully regenerable.
+        // Only small, essential state belongs on /data (sled DB, gateway DB, identity).
         let workspace_root =
-            std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".to_string());
+            std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/tmp/workspace".to_string());
 
         let github_token = std::env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty());
 

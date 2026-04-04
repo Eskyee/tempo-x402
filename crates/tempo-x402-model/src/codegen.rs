@@ -8,6 +8,8 @@
 //! and training data pipeline interface. The colony watches Ψ(t) and
 //! `ready_for_phase3()` to decide when to start building this.
 
+use rayon::prelude::*;
+
 /// Target architecture constants (Phase 3).
 pub const CODEGEN_D_MODEL: usize = 768;
 pub const CODEGEN_N_HEADS: usize = 12;
@@ -188,7 +190,6 @@ impl CodeGenModel {
         // Output projection (last position): hidden[last] × embeddings^T + bias
         // Parallel across 8192 vocab entries — biggest single win from rayon.
         let last_hidden = &hidden[(seq_len - 1) * d..seq_len * d];
-        use rayon::prelude::*;
         let logits: Vec<f32> = (0..self.vocab_size)
             .into_par_iter()
             .map(|v_idx| {
@@ -215,7 +216,6 @@ impl CodeGenModel {
         let normed = layer_norm(input, &layer.ln1_scale, seq_len, d);
 
         // Multi-head causal attention — parallel across heads
-        use rayon::prelude::*;
         let head_outputs: Vec<Vec<f32>> = (0..n_heads)
             .into_par_iter()
             .map(|h| {
@@ -382,21 +382,38 @@ impl CodeGenModel {
 
         let lr = learning_rate;
 
-        // 1. Output bias
-        for i in 0..self.vocab_size {
-            self.output_bias[i] -= lr * clip_grad(d_logits[i]);
-        }
+        // 1. Output bias — parallel across vocab
+        self.output_bias.par_iter_mut().zip(d_logits.par_iter()).for_each(|(b, &g)| {
+            *b -= lr * clip_grad(g);
+        });
 
-        // 2. Embedding gradient (tied output weights) + d_hidden for last position
-        let mut d_layer_output = vec![0.0f32; seq_len * d];
+        // 2. Embedding gradient — compute d_hidden in parallel, then update embeddings
+        // First: accumulate d_hidden across vocab (parallel reduction)
+        let d_hidden_last: Vec<f32> = (0..d)
+            .into_par_iter()
+            .map(|j| {
+                let mut sum = 0.0f32;
+                for v_idx in 0..self.vocab_size {
+                    if d_logits[v_idx].abs() < 1e-7 { continue; }
+                    sum += d_logits[v_idx] * self.embeddings[v_idx * d + j];
+                }
+                sum
+            })
+            .collect();
+
+        // Update embeddings (sequential — writes to shared array)
         for v_idx in 0..self.vocab_size {
             if d_logits[v_idx].abs() < 1e-7 { continue; }
             let g = d_logits[v_idx];
             let emb_off = v_idx * d;
             for j in 0..d {
                 self.embeddings[emb_off + j] -= lr * clip_grad(g * last_hidden[j]);
-                d_layer_output[last_pos * d + j] += g * self.embeddings[emb_off + j];
             }
+        }
+
+        let mut d_layer_output = vec![0.0f32; seq_len * d];
+        for j in 0..d {
+            d_layer_output[last_pos * d + j] = d_hidden_last[j];
         }
 
         // 3. Backprop through all layers in REVERSE order

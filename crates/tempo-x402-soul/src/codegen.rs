@@ -166,7 +166,17 @@ pub fn train_model(db: &SoulDatabase) {
         for start in (0..tokens.len().saturating_sub(window_size)).step_by(32) {
             let end = (start + window_size).min(tokens.len());
             let window = &tokens[start..end];
-            let loss = model.train_step(window, 0.0003); // conservative LR — full backprop needs smaller steps
+            // Learning rate warmup + cosine decay:
+            // Steps 0-100: warmup from 0.0001 to 0.001
+            // Steps 100+: cosine decay back to 0.0001
+            let step = model.train_steps as f32;
+            let lr = if step < 100.0 {
+                0.0001 + (0.001 - 0.0001) * (step / 100.0)
+            } else {
+                let decay = ((step - 100.0) * std::f32::consts::PI / 5000.0).cos();
+                0.0001 + (0.001 - 0.0001) * 0.5 * (1.0 + decay)
+            };
+            let loss = model.train_step(window, lr);
             total_loss += loss;
             trained += 1;
         }

@@ -1623,7 +1623,7 @@ pub async fn run_opus_benchmark_session(
         }
         fail_counts
             .into_iter()
-            .filter(|(_, count)| *count >= 5)
+            .filter(|(_, count)| *count >= 3) // 3 consecutive failures = stuck, move on
             .map(|(slug, _)| slug)
             .collect()
     };
@@ -1632,7 +1632,7 @@ pub async fn run_opus_benchmark_session(
         tracing::info!(
             stuck = stuck_slugs.len(),
             slugs = %stuck_slugs.iter().cloned().collect::<Vec<_>>().join(", "),
-            "Opus: deprioritizing stuck problems (5+ consecutive failures, never solved)"
+            "Opus: deprioritizing stuck problems (3+ consecutive failures, never solved)"
         );
     }
 
@@ -1683,7 +1683,9 @@ pub async fn run_opus_benchmark_session(
                     && !stuck_slugs.contains(&p.slug)
             })
             .collect();
-        remaining.sort_by(|a, b| b.difficulty.cmp(&a.difficulty));
+        // Sort easier problems first — solve the solvable ones to generate training data.
+        // Previously sorted hardest-first, which wasted cycles on problems the LLM can't solve.
+        remaining.sort_by(|a, b| a.difficulty.cmp(&b.difficulty));
 
         let slots_left = sample_size.saturating_sub(selected.len() + 1); // reserve 1 for retry
         for p in remaining.iter().take(slots_left) {

@@ -149,6 +149,20 @@ pub struct SoulDatabase {
 }
 
 impl SoulDatabase {
+    /// Flush all pending writes and reclaim disk space.
+    ///
+    /// Call periodically during housekeeping to prevent unbounded sled growth.
+    /// Returns bytes reclaimed (approximate).
+    pub fn flush_and_compact(&self) -> Result<(), SoulError> {
+        self.db.flush()?;
+        Ok(())
+    }
+
+    /// Size on disk in bytes (approximate — sled directory size).
+    pub fn disk_size_bytes(&self) -> u64 {
+        self.db.size_on_disk().unwrap_or(0)
+    }
+
     /// Open (or create) the soul database at the given path.
     ///
     /// Path is treated as a directory for sled. If it ends in `.db` (legacy),

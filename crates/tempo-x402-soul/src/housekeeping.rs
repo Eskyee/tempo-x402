@@ -74,8 +74,12 @@ pub fn housekeeping(
             Err(e) => tracing::warn!(error = %e, "Housekeeping: belief decay failed"),
         }
 
-        // WAL checkpoint — prevent .db-wal files from growing unbounded
-        let _ = db.wal_checkpoint();
+        // Flush sled to disk + log size
+        let _ = db.flush_and_compact();
+        let db_size_mb = db.disk_size_bytes() as f64 / (1024.0 * 1024.0);
+        if db_size_mb > 10.0 {
+            tracing::warn!(size_mb = %format!("{db_size_mb:.1}"), "Sled DB size exceeds 10MB");
+        }
 
         // Lifecycle pruning — keep the database bounded
         match db.prune_old_data() {

@@ -99,6 +99,16 @@ rm -rf /data/workspace 2>/dev/null || true\n\
 rm -f /data/soul.db /data/soul.db-wal /data/soul.db-shm 2>/dev/null || true\n\
 # Remove brain checkpoints (stored in sled now)\n\
 rm -rf /data/brain_checkpoints 2>/dev/null || true\n\
+# Remove cargo registry cache from volume (save disk space)\n\
+rm -rf /data/.cargo 2>/dev/null || true\n\
+\n\
+# Disk pressure relief: if volume is >80%% full, nuke the sled DB.\n\
+# Agent will rebuild from scratch — better than being stuck in a crash loop.\n\
+USAGE=$(df /data 2>/dev/null | tail -1 | awk \047{gsub(\"%%\",\"\",$5); print $5}\047)\n\
+if [ -n "$USAGE" ] && [ "$USAGE" -gt 80 ] 2>/dev/null; then\n\
+  echo "DISK PRESSURE: ${USAGE}%% used — purging sled DB for fresh start"\n\
+  rm -rf /data/soul.sled 2>/dev/null || true\n\
+fi\n\
 \n\
 BIN=${X402_BINARY:-x402-node}\n\
 exec gosu app "$BIN" "$@"\n\

@@ -47,7 +47,7 @@ pub async fn list_cartridges(state: web::Data<NodeState>) -> HttpResponse {
         }
     }
 
-    // Auto-register backend cartridges loaded in the engine but missing from DB.
+    // Auto-register backend/interactive cartridges loaded in the engine but missing from DB.
     // The soul compiles cartridges at runtime and hot-loads them into the engine,
     // but never writes a DB record — so the /c list and sidebar miss them.
     if let Some(ref engine) = state.cartridge_engine {
@@ -55,10 +55,19 @@ pub async fn list_cartridges(state: web::Data<NodeState>) -> HttpResponse {
             if let Ok(None) = db::get_cartridge(&state.gateway.db, &slug) {
                 let now = chrono::Utc::now().timestamp();
                 let wasm_path = format!("/data/cartridges/{slug}/bin");
+                // Detect cartridge type from source: interactive exports x402_tick, not x402_handle
                 let cartridge_type = if slug.starts_with("cognitive-") {
                     "cognitive"
                 } else {
-                    "backend"
+                    let src_path = format!("/data/cartridges/{slug}/src/src/lib.rs");
+                    if std::fs::read_to_string(&src_path)
+                        .map(|s| s.contains("x402_tick"))
+                        .unwrap_or(false)
+                    {
+                        "interactive"
+                    } else {
+                        "backend"
+                    }
                 };
                 let record = db::CartridgeRecord {
                     slug: slug.clone(),

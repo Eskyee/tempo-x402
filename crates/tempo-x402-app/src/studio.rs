@@ -389,6 +389,8 @@ pub fn StudioPage() -> impl IntoView {
                                                             // Reset init tracker so new cartridge can mount fresh
                                                             set_frontend_initialized.set(None);
                                                             set_center.set(CenterView::FrontendPreview(slug_click.clone()));
+                                                        } else if ct_for_click == "interactive" {
+                                                            set_center.set(CenterView::InteractivePreview(slug_click.clone()));
                                                         } else if kind_for_click == "cartridge" {
                                                             set_center.set(CenterView::CartridgePreview(slug_click.clone()));
                                                         } else {

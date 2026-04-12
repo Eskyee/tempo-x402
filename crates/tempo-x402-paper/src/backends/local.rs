@@ -80,19 +80,31 @@ impl LocalModelGenerator {
     }
 
     /// Run inference via llama-server HTTP API (fast — model stays loaded).
+    /// Uses the OpenAI-compatible chat completion endpoint for proper chat template.
     async fn generate_via_server(&self, prompt: &str) -> Result<String, String> {
         let url = self.server_url.as_deref().unwrap_or("http://127.0.0.1:8081");
+
+        // Use chat completion endpoint — applies proper chat template (Qwen, DeepSeek, etc.)
         let body = serde_json::json!({
-            "prompt": prompt,
-            "n_predict": self.max_tokens,
+            "model": "local",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are an expert Rust programmer. Output ONLY complete Rust code for src/lib.rs. No explanations, no markdown."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "stop": ["```\n", "\n\n\n\n"],
             "stream": false,
         });
 
         let resp = self
             .client
-            .post(&format!("{url}/completion"))
+            .post(&format!("{url}/v1/chat/completions"))
             .json(&body)
             .send()
             .await
@@ -104,9 +116,15 @@ impl LocalModelGenerator {
         }
 
         let json: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+
+        // OpenAI-compatible response format
         let content = json
-            .get("content")
-            .and_then(|v| v.as_str())
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|t| t.as_str())
             .unwrap_or("");
 
         Ok(strip_code_fences(content))

@@ -65,3 +65,9 @@ test_*.json
 Thumbs.db
 nul
 
+
+# Local model files
+models/*.gguf
+selfplay_runs/
+results/
+humaneval_cache/

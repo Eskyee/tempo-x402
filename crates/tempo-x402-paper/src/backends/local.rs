@@ -34,7 +34,7 @@ impl LocalModelGenerator {
             name,
             model_path,
             server_url: None,
-            n_ctx: 4096,
+            n_ctx: 8192,
             max_tokens: 2048,
             temperature: 0.2,
             client: reqwest::Client::new(),
@@ -109,8 +109,7 @@ impl LocalModelGenerator {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let code = strip_code_fences(content);
-        Ok(code.to_string())
+        Ok(strip_code_fences(content))
     }
 
     /// Run inference using llama-completion (llama.cpp non-interactive binary).
@@ -160,8 +159,7 @@ impl LocalModelGenerator {
             .filter(|l| !l.starts_with("> ") && !l.contains("EOF by user"))
             .collect::<Vec<_>>()
             .join("\n");
-        let code = strip_code_fences(&cleaned);
-        Ok(code.to_string())
+        Ok(strip_code_fences(&cleaned))
     }
 }
 
@@ -192,19 +190,56 @@ impl CodeGenerator for LocalModelGenerator {
     }
 }
 
-fn strip_code_fences(text: &str) -> &str {
-    let trimmed = text.trim();
-    if let Some(after) = trimmed.strip_prefix("```rust") {
-        if let Some(code) = after.strip_suffix("```") {
-            return code.trim();
+/// Extract Rust code from LLM output. Handles:
+/// - Code wrapped in ```rust ... ``` blocks (with preamble text before/after)
+/// - Code with no fences (raw Rust)
+/// - Multiple code blocks (takes the longest one)
+fn strip_code_fences(text: &str) -> String {
+    // Find all ```rust ... ``` blocks
+    let mut blocks = Vec::new();
+    let mut search = text;
+    while let Some(start) = search.find("```rust") {
+        let after_marker = &search[start + 7..]; // skip "```rust"
+        // Skip optional newline after marker
+        let code_start = if after_marker.starts_with('\n') {
+            1
+        } else {
+            0
+        };
+        if let Some(end) = after_marker[code_start..].find("```") {
+            blocks.push(after_marker[code_start..code_start + end].trim().to_string());
+            search = &after_marker[code_start + end + 3..];
+        } else {
+            // No closing fence — take everything after opening
+            blocks.push(after_marker[code_start..].trim().to_string());
+            break;
         }
-        return after.trim();
     }
-    if let Some(after) = trimmed.strip_prefix("```") {
-        if let Some(code) = after.strip_suffix("```") {
-            return code.trim();
+
+    // Also try generic ``` blocks if no ```rust found
+    if blocks.is_empty() {
+        search = text;
+        while let Some(start) = search.find("```") {
+            let after = &search[start + 3..];
+            // Skip language tag (e.g. "rust\n", "rs\n", or just "\n")
+            let code_start = after.find('\n').map(|n| n + 1).unwrap_or(0);
+            if let Some(end) = after[code_start..].find("```") {
+                blocks.push(after[code_start..code_start + end].trim().to_string());
+                search = &after[code_start + end + 3..];
+            } else {
+                blocks.push(after[code_start..].trim().to_string());
+                break;
+            }
         }
-        return after.trim();
     }
-    trimmed
+
+    // Return the longest block (most likely the full solution)
+    if let Some(best) = blocks.into_iter().max_by_key(|b| b.len()) {
+        if !best.is_empty() {
+            return best;
+        }
+    }
+
+    // No code blocks found — return raw text
+    text.trim().to_string()
 }

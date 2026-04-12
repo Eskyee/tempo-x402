@@ -521,6 +521,13 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
                          Uses kv_get/kv_set for persistent state. BufWriter pattern for building responses. \
                          Client-side JS for interactivity. Most reliable — always compiles, no dep downloads. \
                          (2) INTERACTIVE: 60fps framebuffer games. Set interactive=true. \
+                         INTERACTIVE ABI: static mut FB: [u8; W*H*4] (RGBA), helpers: set_pixel(x,y,r,g,b), clear(r,g,b), fill_rect(x,y,w,h,r,g,b). \
+                         Exports: x402_init(w:i32,h:i32), x402_tick() [called every frame], x402_key_down(code:i32), x402_key_up(code:i32), \
+                         x402_get_framebuffer()->*const u8, x402_get_width()->i32, x402_get_height()->i32. \
+                         Arrow keys: 37=Left,38=Up,39=Right,40=Down,32=Space. Canvas: 320x240. \
+                         If source_code is provided for interactive, it REPLACES the template entirely — \
+                         you MUST include ALL exports (x402_init, x402_tick, x402_get_framebuffer, etc). \
+                         If source_code is NOT provided, a working bouncing-square template is used. \
                          (3) FRONTEND: Full Leptos app with DOM access. Set frontend=true. Slower to compile \
                          (downloads deps on first build). \
                          AFTER create_cartridge, ALWAYS call compile_cartridge. \
@@ -551,7 +558,11 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
                     },
                     "interactive": {
                         "type": "boolean",
-                        "description": "If true, creates an interactive framebuffer cartridge (60fps canvas)."
+                        "description": "If true, creates an interactive framebuffer cartridge (60fps canvas, 320x240). \
+                        Uses RGBA framebuffer in static memory. Must export x402_init, x402_tick, x402_key_down, \
+                        x402_key_up, x402_get_framebuffer, x402_get_width, x402_get_height. \
+                        If you omit source_code, a working bouncing-square template is used — RECOMMENDED \
+                        for first attempt, then customize with edit_file + compile_cartridge."
                     },
                     "frontend": {
                         "type": "boolean",

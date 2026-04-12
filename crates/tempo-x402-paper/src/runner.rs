@@ -23,13 +23,23 @@ pub struct ProblemResult {
     pub solution: String,
 }
 
-/// Run the full Opus-201 benchmark with a given generator.
+/// Run the Opus-201 benchmark with a given generator.
 pub async fn run_benchmark(
     generator: &dyn CodeGenerator,
     limit: Option<usize>,
     output_path: &str,
 ) {
     let problems = opus_bench::load_embedded_problems();
+    run_benchmark_on(generator, &problems, limit, output_path).await;
+}
+
+/// Run a benchmark on an arbitrary set of problems.
+pub async fn run_benchmark_on(
+    generator: &dyn CodeGenerator,
+    problems: &[BenchmarkProblem],
+    limit: Option<usize>,
+    output_path: &str,
+) {
     let total = match limit {
         Some(n) if n > 0 => n.min(problems.len()),
         _ => problems.len(),

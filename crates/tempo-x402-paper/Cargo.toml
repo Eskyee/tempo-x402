@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 x402-soul = { workspace = true }
+x402-model = { path = "../tempo-x402-model", package = "tempo-x402-model" }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

@@ -65,37 +65,54 @@ impl LocalModelGenerator {
         )
     }
 
-    /// Run inference using a subprocess call to llama-cli (llama.cpp).
-    /// This avoids complex FFI bindings — just shell out to the binary.
-    /// The user downloads llama.cpp and points to the binary.
+    /// Run inference using llama-completion (llama.cpp non-interactive binary).
+    /// Avoids complex FFI — just shell out to the binary.
     async fn generate_via_cli(&self, prompt: &str) -> Result<String, String> {
-        // Look for llama-cli in PATH or LLAMA_CPP_PATH env var
-        let llama_bin = std::env::var("LLAMA_CPP_PATH")
-            .unwrap_or_else(|_| "llama-cli".to_string());
+        // Look for llama-completion in LLAMA_CPP_PATH or common locations
+        let llama_bin = std::env::var("LLAMA_CPP_PATH").unwrap_or_else(|_| {
+            // Check common build locations
+            for path in &[
+                "llama-completion",
+                "/c/llama-cpp/build/bin/Release/llama-completion.exe",
+                "/usr/local/bin/llama-completion",
+                "./llama.cpp/build/bin/Release/llama-completion.exe",
+                "./llama.cpp/build/bin/llama-completion",
+            ] {
+                if std::path::Path::new(path).exists() {
+                    return path.to_string();
+                }
+            }
+            "llama-completion".to_string()
+        });
 
         let output = tokio::process::Command::new(&llama_bin)
             .args([
                 "-m", &self.model_path,
-                "-p", prompt,
+                "--prompt", prompt,
                 "-n", &self.max_tokens.to_string(),
                 "--temp", &self.temperature.to_string(),
                 "-c", &self.n_ctx.to_string(),
                 "--no-display-prompt",
-                "-e",  // escape sequences
             ])
             .output()
             .await
             .map_err(|e| format!(
-                "llama-cli not found (set LLAMA_CPP_PATH or install llama.cpp): {e}"
+                "llama-completion not found (set LLAMA_CPP_PATH or build llama.cpp): {e}"
             ))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("llama-cli failed: {stderr}"));
+            return Err(format!("llama-completion failed: {stderr}"));
         }
 
         let text = String::from_utf8_lossy(&output.stdout).to_string();
-        let code = strip_code_fences(&text);
+        // Strip ANSI escape codes and llama.cpp noise
+        let cleaned: String = text
+            .lines()
+            .filter(|l| !l.starts_with("> ") && !l.contains("EOF by user"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let code = strip_code_fences(&cleaned);
         Ok(code.to_string())
     }
 }

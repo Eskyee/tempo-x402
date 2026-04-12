@@ -394,6 +394,12 @@ pub async fn load_frontend_cartridge(slug: &str, mount_id: &str) -> Result<(), S
     let script = format!(
         r#"(async () => {{
             const mount = document.getElementById('{mount_id}');
+            if (!mount) return;
+            // Guard: skip if already loaded into this element
+            if (mount.dataset.loaded === '{slug}') return;
+            mount.dataset.loaded = '{slug}';
+            // Clear any stale content from previous mounts
+            mount.innerHTML = '';
             const bodyCountBefore = document.body.children.length;
             const mod = await import('{js_url}');
             await mod.default('{wasm_url}');

@@ -10,6 +10,7 @@ members = [
     "crates/tempo-x402-node",
     "crates/tempo-x402-security-audit",
     "crates/tempo-x402-soul",
+    "crates/tempo-x402-paper",
 ]
 
 [workspace.dependencies]

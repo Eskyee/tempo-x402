@@ -229,6 +229,36 @@ pub fn StudioPage() -> impl IntoView {
                         .unwrap_or(false);
                     if modified {
                         refresh();
+                        // Hot-reload: if compile_cartridge succeeded for the currently
+                        // previewed frontend cartridge, re-mount it with cache busting.
+                        if let Some(execs) = resp.get("tool_executions").and_then(|v| v.as_array()) {
+                            for exec in execs {
+                                let cmd = exec.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                let exit = exec.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+                                if cmd.contains("compile_cartridge") && exit == 0 {
+                                    // Extract slug from args
+                                    if let Some(args) = exec.get("args") {
+                                        let compiled_slug = args.get("slug")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        if !compiled_slug.is_empty() {
+                                            // Clear the JS-level mount guard via DOM
+                                            let mount_id = format!("cartridge-mount-{compiled_slug}");
+                                            if let Some(el) = web_sys::window()
+                                                .and_then(|w| w.document())
+                                                .and_then(|d| d.get_element_by_id(&mount_id))
+                                            {
+                                                let _ = el.remove_attribute("data-loaded");
+                                                el.set_inner_html("");
+                                            }
+                                            // Reset Rust-level guard and re-trigger preview
+                                            set_frontend_initialized.set(None);
+                                            set_center.set(CenterView::FrontendPreview(compiled_slug.to_string()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {

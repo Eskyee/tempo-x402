@@ -383,8 +383,10 @@ pub async fn instantiate_interactive(
 pub async fn load_frontend_cartridge(slug: &str, mount_id: &str) -> Result<(), String> {
     // The slug may contain hyphens, but wasm-bindgen converts them to underscores in filenames
     let file_slug = slug.replace('-', "_");
-    let js_url = format!("/c/{slug}/pkg/{file_slug}.js");
-    let wasm_url = format!("/c/{slug}/pkg/{file_slug}_bg.wasm");
+    // Cache-bust: append timestamp so recompiled cartridges load fresh WASM
+    let bust = js_sys::Date::now() as u64;
+    let js_url = format!("/c/{slug}/pkg/{file_slug}.js?v={bust}");
+    let wasm_url = format!("/c/{slug}/pkg/{file_slug}_bg.wasm?v={bust}");
 
     // Use dynamic import() to load the JS glue module, then init WASM and mount.
     // Some cartridges export `init(selector)` (template pattern), others use

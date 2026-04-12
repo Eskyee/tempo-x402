@@ -327,7 +327,9 @@ pub fn available_tools() -> Vec<FunctionDeclaration> {
         },
         FunctionDeclaration {
             name: "write_file".to_string(),
-            description: "Create or overwrite a file. Protected files (soul core, identity, Cargo files) cannot be written.".to_string(),
+            description: "Create or overwrite a file. Protected files (soul core, identity, Cargo files) cannot be written. \
+                         IMPORTANT: If writing to a cartridge source file (/data/cartridges/*/src/src/lib.rs), \
+                         you MUST call compile_cartridge afterwards for changes to take effect.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -345,7 +347,9 @@ pub fn available_tools() -> Vec<FunctionDeclaration> {
         },
         FunctionDeclaration {
             name: "edit_file".to_string(),
-            description: "Edit a file via search-and-replace. The old_string must appear exactly once in the file. Protected files cannot be edited.".to_string(),
+            description: "Edit a file via search-and-replace. The old_string must appear exactly once in the file. Protected files cannot be edited. \
+                         IMPORTANT: If editing a cartridge source file (/data/cartridges/*/src/src/lib.rs), \
+                         you MUST call compile_cartridge afterwards for changes to take effect.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

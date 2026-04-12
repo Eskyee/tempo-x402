@@ -104,8 +104,9 @@ pub mod unified_training;
 pub mod validation;
 pub mod world_model;
 
-pub use chat::{handle_chat, ChatReply};
+pub use chat::{handle_chat, handle_chat_stream, ChatReply};
 pub use config::SoulConfig;
+pub use thinking::ChatEvent;
 pub use db::{ChatMessage, ChatSession, Nudge, SoulDatabase};
 pub use error::SoulError;
 pub use events::{compute_health, emit_event, EventFilter, EventRefs, HealthSummary, SoulEvent};

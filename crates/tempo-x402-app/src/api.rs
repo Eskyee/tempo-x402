@@ -448,6 +448,52 @@ pub async fn send_soul_chat(
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+/// Send a streaming chat message — uses SSE endpoint for real-time updates.
+/// Calls `on_event` for each ChatEvent received, returns final reply.
+pub async fn send_soul_chat_stream(
+    message: &str,
+    session_id: Option<&str>,
+    on_event: impl Fn(serde_json::Value) + 'static,
+) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::json!({ "message": message });
+    if let Some(sid) = session_id {
+        body["session_id"] = serde_json::json!(sid);
+    }
+    let body_str = serde_json::to_string(&body).map_err(|e| format!("serialize: {e}"))?;
+
+    // Use fetch API with streaming reader
+    let resp = Request::post(&format!("{}/soul/chat/stream", GATEWAY_URL))
+        .header("Content-Type", "application/json")
+        .body(&body_str)
+        .map_err(|e| format!("build request: {e}"))?
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !resp.ok() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!("Chat failed (HTTP {}): {err}", resp.status()));
+    }
+
+    // Read the full SSE text and parse events
+    let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+    let mut final_reply = serde_json::Value::Null;
+
+    for line in text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if event_type == "reply" {
+                    final_reply = event.clone();
+                }
+                on_event(event);
+            }
+        }
+    }
+
+    Ok(final_reply)
+}
+
 /// List recent chat sessions.
 pub async fn list_chat_sessions() -> Result<serde_json::Value, String> {
     let resp = Request::get(&format!("{}/soul/chat/sessions", GATEWAY_URL))

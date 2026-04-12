@@ -30,7 +30,8 @@ mod plan_cycle;
 mod planning;
 pub(crate) mod tool_loop;
 
-pub(crate) use tool_loop::{run_tool_loop_with_model, ToolExecution};
+pub(crate) use tool_loop::{run_tool_loop_streaming, run_tool_loop_with_model, ToolExecution};
+pub use tool_loop::ChatEvent;
 
 /// Simplified adaptive pacing for plan-driven execution.
 pub(super) struct AdaptivePacer {

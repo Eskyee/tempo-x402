@@ -82,6 +82,88 @@ pub(super) async fn soul_chat(
     }
 }
 
+/// Streaming chat via SSE — sends events as they happen, avoids first-byte timeout.
+pub(super) async fn soul_chat_stream(
+    state: web::Data<NodeState>,
+    body: web::Json<ChatRequest>,
+) -> HttpResponse {
+    // Validate upfront before spawning
+    let soul_db = match &state.soul_db {
+        Some(db) => db.clone(),
+        None => {
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "soul is not active"
+            }));
+        }
+    };
+    if state.soul_dormant {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "soul is dormant (no LLM API key)"
+        }));
+    }
+    let message = body.message.trim().to_string();
+    if message.is_empty() || message.len() > 4096 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "message must be 1-4096 characters"
+        }));
+    }
+    let config = match &state.soul_config {
+        Some(c) => c.clone(),
+        None => {
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "soul config not available"
+            }));
+        }
+    };
+    let observer = match &state.soul_observer {
+        Some(o) => o.clone(),
+        None => {
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "soul observer not available"
+            }));
+        }
+    };
+    let session_id = body.session_id.clone();
+    let engine = state.cartridge_engine.clone();
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<x402_soul::ChatEvent>(32);
+
+    // Spawn the chat handler in a background task
+    tokio::spawn(async move {
+        if let Err(e) = x402_soul::handle_chat_stream(
+            &message,
+            session_id.as_deref(),
+            &config,
+            &soul_db,
+            &observer,
+            engine.as_ref(),
+            tx.clone(),
+        )
+        .await
+        {
+            let _ = tx
+                .send(x402_soul::ChatEvent::Error {
+                    message: format!("{e}"),
+                })
+                .await;
+        }
+    });
+
+    // Stream SSE events from the channel
+    use tokio_stream::StreamExt;
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let sse_stream = stream.map(|event| {
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        Ok::<_, actix_web::Error>(actix_web::web::Bytes::from(format!("data: {json}\n\n")))
+    });
+
+    HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .insert_header(("Cache-Control", "no-cache"))
+        .insert_header(("X-Accel-Buffering", "no"))
+        .streaming(sse_stream)
+}
+
 // ── Session endpoints ──
 
 pub(super) async fn chat_sessions(state: web::Data<NodeState>) -> HttpResponse {

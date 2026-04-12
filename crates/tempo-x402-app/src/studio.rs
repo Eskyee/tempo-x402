@@ -189,11 +189,58 @@ pub fn StudioPage() -> impl IntoView {
 
         let sid = session_id.get_untracked();
         let refresh = refresh_apps;
+
+        // Add a placeholder "thinking" message that gets replaced with the final reply
+        set_messages.update(|msgs| {
+            msgs.push(ChatMsg {
+                role: "assistant".into(),
+                content: "Thinking...".into(),
+                tools: vec![],
+            });
+        });
+        scroll_bottom();
+
         spawn_local(async move {
-            match api::send_soul_chat(&msg, sid.as_deref()).await {
+            let tool_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<serde_json::Value>::new()));
+            let tool_log_cb = tool_log.clone();
+            let set_messages_cb = set_messages;
+
+            match api::send_soul_chat_stream(&msg, sid.as_deref(), move |event| {
+                let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match event_type {
+                    "thinking" => {
+                        // Update the placeholder message
+                        set_messages_cb.update(|msgs| {
+                            if let Some(last) = msgs.last_mut() {
+                                if last.role == "assistant" && last.content.starts_with("Thinking") {
+                                    last.content = "Thinking...".into();
+                                }
+                            }
+                        });
+                    }
+                    "tool_start" => {
+                        let cmd = event.get("command").and_then(|v| v.as_str()).unwrap_or("...");
+                        set_messages_cb.update(|msgs| {
+                            if let Some(last) = msgs.last_mut() {
+                                if last.role == "assistant" {
+                                    last.content = format!("Running: {cmd}");
+                                }
+                            }
+                        });
+                    }
+                    "tool_result" => {
+                        if let Some(exec) = event.get("execution") {
+                            tool_log_cb.borrow_mut().push(exec.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            })
+            .await
+            {
                 Ok(resp) => {
                     let reply = resp
-                        .get("reply")
+                        .get("text")
                         .and_then(|v| v.as_str())
                         .unwrap_or("(no response)")
                         .to_string();
@@ -205,12 +252,14 @@ pub fn StudioPage() -> impl IntoView {
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
+                    // Replace the placeholder with the final reply
                     set_messages.update(|msgs| {
-                        msgs.push(ChatMsg {
-                            role: "assistant".into(),
-                            content: reply,
-                            tools,
-                        });
+                        if let Some(last) = msgs.last_mut() {
+                            if last.role == "assistant" {
+                                last.content = reply;
+                                last.tools = tools;
+                            }
+                        }
                     });
                     // Refresh apps if tools modified endpoints
                     let modified = resp

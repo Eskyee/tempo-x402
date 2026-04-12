@@ -260,6 +260,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/soul/system", web::get().to(system_metrics))
         .route("/soul/status", web::get().to(status::soul_status))
         .route("/soul/chat", web::post().to(chat::soul_chat))
+        .route("/soul/chat/stream", web::post().to(chat::soul_chat_stream))
         .route("/soul/chat/sessions", web::get().to(chat::chat_sessions))
         .route(
             "/soul/chat/sessions/{id}",

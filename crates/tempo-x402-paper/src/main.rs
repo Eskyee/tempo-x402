@@ -57,9 +57,12 @@ enum Command {
     },
     /// Score a local GGUF model (Qwen, DeepSeek, etc.)
     ScoreLocal {
-        /// Path to GGUF model file
-        #[arg(long)]
+        /// Path to GGUF model file (for CLI mode)
+        #[arg(long, default_value = "")]
         model: String,
+        /// URL of running llama-server (faster — model stays loaded)
+        #[arg(long)]
+        server_url: Option<String>,
         /// Human-readable model name for results
         #[arg(long, default_value = "local-model")]
         name: String,
@@ -146,12 +149,16 @@ async fn main() {
         }
         Command::ScoreLocal {
             model,
+            server_url,
             name,
             problems,
             output,
             humaneval,
         } => {
-            let generator = backends::local::LocalModelGenerator::new(name, model);
+            let mut generator = backends::local::LocalModelGenerator::new(name, model);
+            if let Some(url) = server_url {
+                generator = generator.with_server(url);
+            }
             let limit = if problems == 0 { None } else { Some(problems) };
             runner::run_benchmark(&generator, limit, &output).await;
             if humaneval {

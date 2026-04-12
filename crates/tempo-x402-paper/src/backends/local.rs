@@ -10,17 +10,22 @@ use crate::runner::CodeGenerator;
 use x402_soul::benchmark::BenchmarkProblem;
 
 /// Local GGUF model for code generation.
+///
+/// Two modes:
+/// - **Server mode** (recommended): Point to a running `llama-server` via `--server-url`.
+///   Model stays loaded in memory — each problem is a fast HTTP call.
+///   Start server: `llama-server -m model.gguf --port 8081 -c 4096`
+/// - **CLI mode**: Spawns `llama-completion` per problem. Slow (reloads model each time).
 pub struct LocalModelGenerator {
-    /// Human-readable name for results
     name: String,
-    /// Path to GGUF model file
+    /// GGUF model path (for CLI mode) or server URL (for server mode)
     model_path: String,
-    /// Number of context tokens
+    /// If set, use HTTP API instead of subprocess
+    server_url: Option<String>,
     n_ctx: u32,
-    /// Max tokens to generate
     max_tokens: u32,
-    /// Temperature for sampling
     temperature: f32,
+    client: reqwest::Client,
 }
 
 impl LocalModelGenerator {
@@ -28,10 +33,19 @@ impl LocalModelGenerator {
         Self {
             name,
             model_path,
+            server_url: None,
             n_ctx: 4096,
             max_tokens: 2048,
             temperature: 0.2,
+            client: reqwest::Client::new(),
         }
+    }
+
+    /// Use a running llama-server instead of spawning processes.
+    /// Much faster — model stays loaded in memory.
+    pub fn with_server(mut self, url: String) -> Self {
+        self.server_url = Some(url);
+        self
     }
 
     pub fn with_ctx(mut self, n_ctx: u32) -> Self {
@@ -63,6 +77,40 @@ impl LocalModelGenerator {
             problem.test_code,
             problem.starter_code,
         )
+    }
+
+    /// Run inference via llama-server HTTP API (fast — model stays loaded).
+    async fn generate_via_server(&self, prompt: &str) -> Result<String, String> {
+        let url = self.server_url.as_deref().unwrap_or("http://127.0.0.1:8081");
+        let body = serde_json::json!({
+            "prompt": prompt,
+            "n_predict": self.max_tokens,
+            "temperature": self.temperature,
+            "stop": ["```\n", "\n\n\n\n"],
+            "stream": false,
+        });
+
+        let resp = self
+            .client
+            .post(&format!("{url}/completion"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("server request failed (is llama-server running?): {e}"))?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("server error: {text}"));
+        }
+
+        let json: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+        let content = json
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let code = strip_code_fences(content);
+        Ok(code.to_string())
     }
 
     /// Run inference using llama-completion (llama.cpp non-interactive binary).
@@ -120,7 +168,13 @@ impl LocalModelGenerator {
 #[async_trait::async_trait]
 impl CodeGenerator for LocalModelGenerator {
     async fn generate(&self, problem: &BenchmarkProblem) -> Result<String, String> {
-        // Check model file exists
+        let prompt = Self::build_prompt(problem);
+
+        if self.server_url.is_some() {
+            return self.generate_via_server(&prompt).await;
+        }
+
+        // CLI mode — check model file exists
         if !std::path::Path::new(&self.model_path).exists() {
             return Err(format!(
                 "Model file not found: {}. Download a GGUF model from HuggingFace:\n  \
@@ -130,7 +184,6 @@ impl CodeGenerator for LocalModelGenerator {
             ));
         }
 
-        let prompt = Self::build_prompt(problem);
         self.generate_via_cli(&prompt).await
     }
 

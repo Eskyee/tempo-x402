@@ -47,6 +47,40 @@ pub async fn list_cartridges(state: web::Data<NodeState>) -> HttpResponse {
         }
     }
 
+    // Auto-register backend cartridges loaded in the engine but missing from DB.
+    // The soul compiles cartridges at runtime and hot-loads them into the engine,
+    // but never writes a DB record — so the /c list and sidebar miss them.
+    if let Some(ref engine) = state.cartridge_engine {
+        for slug in engine.loaded_slugs() {
+            if let Ok(None) = db::get_cartridge(&state.gateway.db, &slug) {
+                let now = chrono::Utc::now().timestamp();
+                let wasm_path = format!("/data/cartridges/{slug}/bin");
+                let cartridge_type = if slug.starts_with("cognitive-") {
+                    "cognitive"
+                } else {
+                    "backend"
+                };
+                let record = db::CartridgeRecord {
+                    slug: slug.clone(),
+                    name: slug.clone(),
+                    description: None,
+                    version: "0.1.0".to_string(),
+                    price_usd: "$0.001".to_string(),
+                    price_amount: "1000".to_string(),
+                    owner_address: String::new(),
+                    source_repo: None,
+                    wasm_path,
+                    wasm_hash: String::new(),
+                    active: true,
+                    created_at: now,
+                    updated_at: now,
+                    cartridge_type: cartridge_type.to_string(),
+                };
+                let _ = db::upsert_cartridge(&state.gateway.db, &record);
+            }
+        }
+    }
+
     match db::list_cartridges(&state.gateway.db) {
         Ok(cartridges) => {
             let summary: Vec<serde_json::Value> = cartridges

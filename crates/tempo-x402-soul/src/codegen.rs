@@ -555,6 +555,98 @@ pub fn generate(db: &SoulDatabase, prompt: &str, max_tokens: usize) -> Option<St
     Some(generated)
 }
 
+/// Generate code using a local llama-server running a fine-tuned GGUF model.
+/// Set SOUL_LLAMA_URL to enable (e.g., "http://127.0.0.1:8081").
+/// This is the preferred backend — the fine-tuned 3B model produces much better
+/// Rust code than the local 16M encoder-decoder.
+pub async fn generate_via_llama(description: &str, slug: &str) -> Option<String> {
+    let url = std::env::var("SOUL_LLAMA_URL").ok()?;
+
+    let prompt = format!(
+        "You are an expert Rust programmer. Write a complete Rust library (src/lib.rs) \
+         for a WASM cartridge.\n\n\
+         Cartridge: {slug}\n\
+         Description: {description}\n\n\
+         Output ONLY the Rust code. No explanations, no markdown."
+    );
+
+    let body = serde_json::json!({
+        "model": "local",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an expert Rust programmer. Output ONLY complete Rust code. No explanations."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "stream": false,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        tracing::warn!("codegen: llama-server returned {}", resp.status());
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+
+    let content = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|t| t.as_str())?;
+
+    // Strip markdown code fences if present
+    let code = strip_code_fences(content);
+    if code.trim().is_empty() {
+        return None;
+    }
+
+    tracing::info!(
+        slug,
+        chars = code.len(),
+        "codegen: llama-server generated code"
+    );
+    Some(code)
+}
+
+/// Extract Rust code from markdown fences.
+fn strip_code_fences(text: &str) -> String {
+    // Find ```rust ... ``` block
+    if let Some(start) = text.find("```rust") {
+        let after = &text[start + 7..];
+        let code_start = if after.starts_with('\n') { 1 } else { 0 };
+        if let Some(end) = after[code_start..].find("```") {
+            return after[code_start..code_start + end].trim().to_string();
+        }
+        return after[code_start..].trim().to_string();
+    }
+    // Try generic ``` block
+    if let Some(start) = text.find("```") {
+        let after = &text[start + 3..];
+        let code_start = after.find('\n').map(|n| n + 1).unwrap_or(0);
+        if let Some(end) = after[code_start..].find("```") {
+            return after[code_start..code_start + end].trim().to_string();
+        }
+    }
+    text.trim().to_string()
+}
+
 /// Record a successful code diff as training data for the codegen model.
 /// Called after successful commits — supplements benchmark solutions.
 /// Record a training example. If `context` is provided (test code), the

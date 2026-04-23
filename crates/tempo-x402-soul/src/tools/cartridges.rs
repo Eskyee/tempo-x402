@@ -397,9 +397,15 @@ impl ToolExecutor {
             description
         );
 
-        // Try the local codegen model
+        // Try llama-server first (fine-tuned 3B model — much better than 16M)
         let start = std::time::Instant::now();
-        let generated = crate::codegen::generate(db, &context, 512);
+        let llama_result = crate::codegen::generate_via_llama(description, slug).await;
+        if let Some(ref code) = llama_result {
+            tracing::info!(slug, chars = code.len(), "cartridge: llama-server generated code");
+        }
+
+        // Fall back to local 16M encoder-decoder if llama not available
+        let generated = llama_result.or_else(|| crate::codegen::generate(db, &context, 512));
 
         let Some(code) = generated else {
             return Ok(ToolResult {

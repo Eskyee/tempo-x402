@@ -76,14 +76,17 @@ The loop is run-once-and-forget: there is no reward model, no preference collect
 \section{Related Work}
 \label{sec:related}
 
-\paragraph{Self-play and self-improvement for language models.}
-Recent work in Self-Taught Reasoner (STaR), Self-Instruct, and related self-play approaches trains a model on its own successful outputs filtered by some verifier. Verifiers have included gold-label matches on reasoning tasks, consistency voting, and automatic grading. Our work is closest in spirit to code-specific self-play work that uses unit tests as the verifier, but focuses explicitly on Rust and on small-scale open-weight models.
+\paragraph{Self-play and self-improvement.}
+STaR~\cite{zelikman2022star} trains on rationales that lead to correct answers, bootstrapping a reasoner from its own successes. Self-Instruct~\cite{wang2022selfinstruct} generalizes this to instruction-following by having the model generate and filter its own instructions. Both rely on a verifier (gold labels, heuristics, or humans). Code-domain variants have used unit tests as the verifier. Our contribution is narrower and more mechanical: we use the Rust toolchain (compiler, borrow checker, \texttt{cargo test}) as an off-the-shelf verifier with no additional machinery, and report how much headroom that alone buys at 0.5B and 3B parameter scales.
 
 \paragraph{Code benchmarks.}
-HumanEval (Python), MBPP, and MultiPL-E provide general code-generation benchmarks. Rust-specific evaluation in these benchmarks is usually limited and biased toward short functional problems. \textsc{Opus-201} is designed specifically to probe Rust fluency at multiple abstraction levels, including ownership/borrowing idioms and algorithmic systems code.
+HumanEval~\cite{chen2021evaluating} and MBPP~\cite{austin2021program} are the standard Python benchmarks. MultiPL-E~\cite{cassano2022multiple} translates these to 18+ languages including Rust, but the translated problems inherit Python-idiom structure and rarely exercise the features (ownership, lifetimes, trait objects) that dominate real Rust code. \textsc{Opus-201} is Rust-native by construction---every problem was written with the type system, borrow checker, and standard-library idioms in mind---and stratified across six abstraction tiers from basic syntax to concurrent systems code.
 
-\paragraph{Small code models.}
-Qwen2.5-Coder, DeepSeek-Coder, and StarCoder releases have demonstrated that sub-7B code models can be competitive on Python-centric benchmarks. We report first-of-its-kind self-play curves on the 0.5B and 3B Qwen2.5-Coder variants for Rust.
+\paragraph{Small open-weight code models.}
+Qwen2.5-Coder~\cite{hui2024qwen25coder}, DeepSeek-Coder~\cite{guo2024deepseekcoder}, and StarCoder~\cite{li2023starcoder} are the leading open-weight code families. Their published benchmarks are overwhelmingly Python; Rust numbers are absent or anecdotal. We provide the first self-play fine-tuning curves on the 0.5B and 3B Qwen2.5-Coder Instruct variants for Rust, using LoRA~\cite{hu2021lora} for parameter-efficient fine-tuning and full supervised fine-tuning for the 0.5B model.
+
+\paragraph{Direct preference optimization.}
+DPO~\cite{rafailov2023dpo} offers a tractable alternative to RLHF by directly optimizing a policy against pairwise preferences. We generate DPO pairs from the self-play data (passing solution vs.\ failing candidate for the same problem) and report a DPO-trained 3B variant alongside the SFT baselines [number pending rerun].
 
 \section{The \textsc{Opus-201} Benchmark}
 \label{sec:benchmark}
@@ -113,6 +116,48 @@ T6 & Mystery / adversarial & 10 & 4.0 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Example Problem}
+
+Listing~\ref{lst:example} shows the \texttt{opus-ring-buffer} problem (tier T1) in its three parts: a short natural-language description, a Rust starter with the required trait/impl signatures, and a test file. A solution is correct iff it compiles as \texttt{src/lib.rs} and all tests in the test file pass.
+
+\begin{figure}[h]
+\begin{lstlisting}[language=Rust,caption={\texttt{opus-ring-buffer} (T1). Instructions are rendered as doc; starter + tests shown verbatim.},label={lst:example}]
+// INSTRUCTIONS: Implement a fixed-capacity ring buffer. When full, `push`
+// overwrites the oldest element. `pop` removes the oldest. `peek` returns
+// it without removing.
+
+// src/lib.rs (starter — candidate replaces todo!()s):
+pub struct RingBuffer<T> { /* your fields here */ }
+impl<T> RingBuffer<T> {
+    pub fn new(capacity: usize) -> Self { todo!() }
+    pub fn push(&mut self, item: T)     { todo!() }
+    pub fn pop(&mut self) -> Option<T>  { todo!() }
+    pub fn peek(&self) -> Option<&T>    { todo!() }
+    pub fn len(&self) -> usize          { todo!() }
+    pub fn is_empty(&self) -> bool      { todo!() }
+    pub fn is_full(&self) -> bool       { todo!() }
+    pub fn capacity(&self) -> usize     { todo!() }
+}
+
+// tests/opus_ring_buffer.rs (ground truth):
+use opus_ring_buffer::*;
+#[test] fn empty_buffer() {
+    let buf: RingBuffer<i32> = RingBuffer::new(3);
+    assert!(buf.is_empty()); assert_eq!(buf.capacity(), 3);
+    assert_eq!(buf.peek(), None);
+}
+#[test] fn overwrite_on_full() {
+    let mut buf = RingBuffer::new(3);
+    buf.push(1); buf.push(2); buf.push(3);
+    buf.push(4); // overwrites 1
+    assert_eq!(buf.pop(), Some(2));
+    assert_eq!(buf.pop(), Some(3));
+    assert_eq!(buf.pop(), Some(4));
+}
+// ... four more tests
+\end{lstlisting}
+\end{figure}
 
 \subsection{Evaluation Protocol}
 
@@ -150,6 +195,17 @@ The entire harness is implemented in Rust as a CLI tool, \texttt{paper-bench}, w
 \section{Results}
 \label{sec:results}
 
+\subsection{Self-Play Convergence}
+
+Figure~\ref{fig:curve} shows the per-iteration pass rate of the 0.5B conservative-LoRA self-play loop. The curve rises fast in the first two iterations ($2\% \to 4\%$), then plateaus at $\sim 4.5\%$ as the LoRA-r8 adapter saturates on the small accumulated training set. This motivates two variants: (i) increase adapter capacity (LoRA r32, full SFT), and (ii) scale to a larger base model (3B). Both are covered below.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\linewidth]{figures/selfplay_curve.pdf}
+\caption{0.5B self-play convergence under conservative LoRA (rank 8, $\alpha=16$, 2 epochs per iteration). Blue line: problems passed on \textsc{Opus-201}. Orange bars: cumulative distinct training examples (deduplicated by problem).}
+\label{fig:curve}
+\end{figure}
+
 \subsection{Main Results}
 
 Table~\ref{tab:main} reports pass@1 on \textsc{Opus-201} for every configuration we ran, plus the Claude Opus ceiling.
@@ -179,7 +235,14 @@ Claude Opus (teacher)   & ---                     & 178/201& 88.6 & 86.2 \\
 
 \subsection{Data Scaling Anomaly at 3B}
 
-The 3B model trained on 178 examples has lower \emph{raw} pass@1 (69 vs.\ 73) than the 3B model trained on 122 examples, but \emph{higher} weighted pass@1 (28.8 vs.\ 26.8). Tier-level breakdown (Table~\ref{tab:tier}) shows the mechanism clearly: the larger training set improves performance on every tier $\geq$ T2 but costs ground on T1.
+The 3B model trained on 178 examples has lower \emph{raw} pass@1 (69 vs.\ 73) than the 3B model trained on 122 examples, but \emph{higher} weighted pass@1 (28.8 vs.\ 26.8). Tier-level breakdown (Table~\ref{tab:tier} and Figure~\ref{fig:tier}) shows the mechanism clearly: the larger training set improves performance on every tier $\geq$ T2 but costs ground on T1.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/per_tier.pdf}
+\caption{Per-tier pass rate across configurations. Bars show the fraction of tier problems passed (not absolute counts). The 3B LoRA (178 ex.) model beats the 3B LoRA (122 ex.) model on every tier except T1, where it regresses.}
+\label{fig:tier}
+\end{figure}
 
 \begin{table}[h]
 \centering

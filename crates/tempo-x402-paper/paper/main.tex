@@ -1,0 +1,244 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage{array}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue,
+}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  showstringspaces=false,
+  commentstyle=\color{gray},
+  keywordstyle=\color{blue!70!black},
+  stringstyle=\color{red!50!black},
+  frame=single,
+  framesep=3pt,
+  xleftmargin=6pt,
+}
+
+\title{Compiler-Verified Self-Play Fine-Tuning of Small Rust Coding Models}
+
+\author{%
+  compusophy \\
+  \texttt{compusophy@gmail.com}
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We study whether small open-weight coding models can be improved on Rust code generation by a self-play loop in which the model's own solutions are filtered by the Rust compiler and test suite and fed back as supervised training data, with no human labels or teacher model in the fine-tuning loop. We introduce \textsc{Opus-201}, a 201-problem benchmark across six difficulty tiers from basic syntax to algorithmic systems code, with every problem shipped as a self-contained Cargo crate that compiles, runs tests, and emits a machine-readable pass/fail signal. We fine-tune Qwen2.5-Coder at two scales (0.5B and 3B) using this loop. The 0.5B model improves from $3/201$ ($1.5\%$) at pass@1 to $33/201$ ($16.4\%$) after full supervised fine-tuning, and $52/201$ ($25.9\%$) at pass@5. The 3B model improves from $54/201$ ($26.9\%$) to $73/201$ ($36.3\%$) with 122 training examples. Adding more data (178 examples) \emph{reduces} raw pass@1 on 3B while improving weighted pass rate on harder tiers, suggesting that targeted curriculum---not volume---is the binding constraint at these scales. We release the benchmark, self-play harness, and all training data.
+\end{abstract}
+
+\section{Introduction}
+
+Large closed-weight code models (GPT-4, Claude Opus, Gemini) now solve most competitive-programming problems in widely-used languages, but the cost of running them at scale is prohibitive for many research and production workloads. A complementary line of work asks whether small open-weight models---which can be fine-tuned and deployed on a single consumer GPU---can be systematically improved on specific domains using automatically-generated training data.
+
+Rust is an interesting substrate for this question. Its type system and borrow checker reject a large fraction of syntactically plausible but semantically incorrect programs at compile time. This gives a cheap and precise verification signal: a solution either compiles and passes tests, or it does not. We exploit this in a self-play fine-tuning loop that requires no human annotation:
+
+\begin{enumerate}
+  \item Sample a candidate solution from the current model for each problem.
+  \item Drop the solution into a Cargo crate and run \texttt{cargo test}.
+  \item Collect every passing solution into a supervised training set.
+  \item Fine-tune the base model on the accumulated passing set. Repeat.
+\end{enumerate}
+
+The loop is run-once-and-forget: there is no reward model, no preference collection, and no teacher in the fine-tuning path. (We separately use Claude Opus to generate the problem set itself, which we treat as prior offline work, analogous to the role of a human problem-setter on Codeforces.)
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item \textsc{Opus-201}: a 201-problem Rust benchmark stratified across six difficulty tiers, with every problem shipped as a Cargo crate that returns pass/fail via \texttt{cargo test} (Section~\ref{sec:benchmark}).
+  \item A minimal self-play fine-tuning harness, \texttt{paper-bench}, that drives the full loop and produces reproducible result files (Section~\ref{sec:method}).
+  \item Empirical results at two model scales (0.5B and 3B) showing that compiler-verified self-play produces large pass@1 gains on the 0.5B model ($1.5\% \to 16.4\%$) and a smaller but non-trivial gain on 3B ($26.9\% \to 36.3\%$), with a clear data-scaling anomaly: going from 122 to 178 training examples \emph{hurts} raw pass@1 on 3B while improving the weighted pass rate on harder tiers (Section~\ref{sec:results}).
+  \item A quantified ceiling: Claude Opus solves $178/201$ ($88.6\%$) of the same benchmark, giving a 50-point absolute gap to close.
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Self-play and self-improvement for language models.}
+Recent work in Self-Taught Reasoner (STaR), Self-Instruct, and related self-play approaches trains a model on its own successful outputs filtered by some verifier. Verifiers have included gold-label matches on reasoning tasks, consistency voting, and automatic grading. Our work is closest in spirit to code-specific self-play work that uses unit tests as the verifier, but focuses explicitly on Rust and on small-scale open-weight models.
+
+\paragraph{Code benchmarks.}
+HumanEval (Python), MBPP, and MultiPL-E provide general code-generation benchmarks. Rust-specific evaluation in these benchmarks is usually limited and biased toward short functional problems. \textsc{Opus-201} is designed specifically to probe Rust fluency at multiple abstraction levels, including ownership/borrowing idioms and algorithmic systems code.
+
+\paragraph{Small code models.}
+Qwen2.5-Coder, DeepSeek-Coder, and StarCoder releases have demonstrated that sub-7B code models can be competitive on Python-centric benchmarks. We report first-of-its-kind self-play curves on the 0.5B and 3B Qwen2.5-Coder variants for Rust.
+
+\section{The \textsc{Opus-201} Benchmark}
+\label{sec:benchmark}
+
+\subsection{Construction}
+
+\textsc{Opus-201} consists of 201 Rust problems generated by prompting Claude Opus with a structured template that specifies the problem tier, required signature, and a set of \texttt{\#[test]} cases. Each generated problem was then compiled and executed against a reference solution; problems whose reference solution did not compile or pass its own tests were rejected and regenerated.
+
+\subsection{Tier Structure}
+
+Problems are stratified across six difficulty tiers, weighted so that harder tiers contribute more to the aggregate score:
+
+\begin{table}[h]
+\centering
+\caption{\textsc{Opus-201} tier composition. Weight is used for the weighted pass rate.}
+\label{tab:tiers}
+\begin{tabular}{llrr}
+\toprule
+Tier & Description & Problems & Weight \\
+\midrule
+T1 & Basic syntax, simple data structures & 108 & 1.0 \\
+T2 & Debugging: fix a broken implementation & 25 & 1.5 \\
+T3 & Standard algorithms on sequences and maps & 25 & 2.0 \\
+T4 & Trait objects, generics, lifetimes & 23 & 2.5 \\
+T5 & Concurrent / systems-style problems & 10 & 3.0 \\
+T6 & Mystery / adversarial & 10 & 4.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Evaluation Protocol}
+
+For each problem, a candidate solution is inserted into a standard Cargo crate skeleton, \texttt{cargo test} is invoked, and the run is marked passed iff all tests pass within a 30-second wall-clock budget. We report:
+\begin{itemize}
+  \item \textbf{Raw pass rate}: fraction of the 201 problems that pass.
+  \item \textbf{Weighted pass rate}: tier-weighted pass rate using the weights in Table~\ref{tab:tiers}.
+  \item \textbf{Pass@$k$}: fraction of problems for which at least one of $k$ independent samples passes, at temperature 0.7.
+\end{itemize}
+
+\section{Method: Self-Play Fine-Tuning}
+\label{sec:method}
+
+\subsection{Loop}
+
+At iteration $t$, the current model $M_t$ is used to sample one candidate solution per problem. Each candidate is verified by \texttt{cargo test}. Every passing $(prompt, solution)$ pair is added to an accumulated training set $D_t$, deduplicated by problem slug (keeping the latest solution). $M_{t+1}$ is then produced by fine-tuning $M_0$ (not $M_t$) on $D_t$; starting fresh each iteration prevents catastrophic forgetting and keeps the method honest.
+
+\subsection{Training Configurations}
+
+We report three training regimes on top of Qwen2.5-Coder-0.5B-Instruct and Qwen2.5-Coder-3B-Instruct:
+
+\begin{itemize}
+  \item \textbf{LoRA r8} (0.5B, conservative): rank 8, $\alpha=16$, 2 epochs, lr $10^{-4}$.
+  \item \textbf{LoRA r32} (0.5B, aggressive): rank 32, $\alpha=64$, 3 epochs, lr $2\times10^{-4}$.
+  \item \textbf{LoRA r16} (3B): rank 16, $\alpha=32$, 3 epochs, lr $1\times10^{-4}$.
+  \item \textbf{Full SFT} (0.5B): full-parameter supervised fine-tuning, 3 epochs, lr $5\times10^{-5}$, 4-bit quantized base to fit VRAM.
+\end{itemize}
+
+All runs use Qwen's native chat template. Training data is a single JSONL with fields \texttt{\{instruction, input, output\}} matching the Alpaca format. Fine-tuning is carried out on a single RTX 3090 (24\,GB VRAM) with 128\,GB host RAM. Inference during benchmarking uses \texttt{llama.cpp}'s \texttt{llama-server} with the model quantized to Q4\_K\_M GGUF and a 8192-token context.
+
+\subsection{Implementation}
+
+The entire harness is implemented in Rust as a CLI tool, \texttt{paper-bench}, with subcommands for scoring (\texttt{score-local}, \texttt{score-claude}, \texttt{score-gemini}), running the self-play loop (\texttt{selfplay}), and aggregating results (\texttt{summary}). The source and all scripts are in the accompanying repository at \texttt{crates/tempo-x402-paper}.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Main Results}
+
+Table~\ref{tab:main} reports pass@1 on \textsc{Opus-201} for every configuration we ran, plus the Claude Opus ceiling.
+
+\begin{table}[h]
+\centering
+\caption{Main results on \textsc{Opus-201}. Raw = unweighted fraction of 201 problems; Weighted = tier-weighted pass rate. All local-model rows use Q4\_K\_M GGUF + \texttt{llama-server} at temperature 0.7 for pass@5 rows and default for pass@1.}
+\label{tab:main}
+\begin{tabular}{llrrr}
+\toprule
+Model & Training & Passed & Raw \% & Weighted \% \\
+\midrule
+Qwen2.5-Coder-0.5B      & none (baseline)         & 3/201  & 1.5  & 1.2 \\
+\quad + LoRA r8         & 122 self-play ex.       & 9/201  & 4.5  & --   \\
+\quad + LoRA r32        & 122 self-play ex.       & 21/201 & 10.4 & --   \\
+\quad + Full SFT        & 122 self-play ex.       & 33/201 & 16.4 & --   \\
+\quad + Full SFT, pass@5 & 122 self-play ex.      & 52/201 & 25.9 & 17.1 \\
+\midrule
+Qwen2.5-Coder-3B        & none (baseline)         & 54/201 & 26.9 & 20.4 \\
+\quad + LoRA r16        & 122 self-play ex.       & 73/201 & 36.3 & 26.8 \\
+\quad + LoRA r16        & 178 self-play ex.       & 69/201 & 34.3 & 28.8 \\
+\midrule
+Claude Opus (teacher)   & ---                     & 178/201& 88.6 & 86.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Data Scaling Anomaly at 3B}
+
+The 3B model trained on 178 examples has lower \emph{raw} pass@1 (69 vs.\ 73) than the 3B model trained on 122 examples, but \emph{higher} weighted pass@1 (28.8 vs.\ 26.8). Tier-level breakdown (Table~\ref{tab:tier}) shows the mechanism clearly: the larger training set improves performance on every tier $\geq$ T2 but costs ground on T1.
+
+\begin{table}[h]
+\centering
+\caption{Per-tier pass counts for the 3B models. More data helps T2--T5 but hurts T1.}
+\label{tab:tier}
+\begin{tabular}{lrrrrrr}
+\toprule
+Config & T1 (108) & T2 (25) & T3 (25) & T4 (23) & T5 (10) & T6 (10) \\
+\midrule
+3B base                  & 33 & 10 & 6  & 3 & 2 & 0 \\
+3B + LoRA (122 ex.)      & 44 & 15 & 9  & 4 & 1 & 0 \\
+3B + LoRA (178 ex.)      & 35 & 16 & 10 & 6 & 2 & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We interpret this as evidence that the extra 56 examples drag the model's output distribution toward harder patterns at the cost of T1 robustness. Volume without curriculum appears to be counterproductive at this scale.
+
+\subsection{Pass@5 on Small Models}
+
+For the 0.5B full-SFT model, pass@5 at $T=0.7$ nearly doubles raw pass@1 ($16.4\% \to 25.9\%$), and more than triples T2 pass count ($3 \to 15$). This gives a cheap way to close part of the gap to larger models at the cost of 5$\times$ inference. [Pass@5 for 3B: forthcoming.]
+
+\subsection{Gap to Ceiling}
+
+Claude Opus solves 88.6\% of the benchmark; our best 3B is at 36.3\%. The 50-point gap is concentrated on T4--T6, where the 3B fine-tune solves 7/43 problems compared to Opus's expected $\sim$30+. Closing this gap is unlikely to come from more uncurated self-play data; it is the motivation for the future work in Section~\ref{sec:future}.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{The compiler is doing a lot of work.}
+Every passing sample in our training set is one that (i) parses, (ii) type-checks, (iii) satisfies the borrow checker, and (iv) passes all unit tests. These four filters are roughly free in Rust and together produce a training set whose average quality is much higher than typical web-scale code. We believe this is the main reason pass@1 on the 0.5B model improves by an order of magnitude after relatively little fine-tuning.
+
+\paragraph{Volume is not the bottleneck.}
+The 122-vs-178 result on 3B argues that at this scale, the marginal example is not uniformly valuable. A plausible explanation is that the 56 additional problems that the 3B baseline solved were skewed toward harder tiers, and training on them gives harder-tier patterns too much weight relative to the T1 distribution the benchmark is dominated by.
+
+\paragraph{Limitations.}
+(i) We evaluate only on \textsc{Opus-201}, which was itself generated by Opus---there is a legitimate concern that the benchmark encodes Opus's implicit style and thus inflates the Opus ceiling. (ii) All our fine-tuning is on Qwen2.5-Coder; we do not test whether the self-play effect transfers to DeepSeek-Coder or StarCoder. (iii) The 30-second test budget may mask infinite-loop failures as compile-time failures in profiling.
+
+\section{Future Work}
+\label{sec:future}
+
+The 36.3\% plateau at 3B motivates a targeted curriculum approach. We are building a Failure Causal Modeling (FCM) system that tags each failure with Rust-specific concepts (ownership, borrowing, lifetimes, trait objects, etc.), maintains a mastery graph, and generates new training problems targeting the weakest concepts. Results with FCM are forthcoming in a follow-up.
+
+\section{Conclusion}
+
+Compiler-verified self-play is a cheap and effective way to improve small Rust coding models. A 0.5B model goes from near-zero to 16\% pass@1 on 201 compiler-verified problems with no teacher in the fine-tuning loop; a 3B model gains 9.4 percentage points. The binding constraint above 30\% is not training data volume but training data \emph{selection}.
+
+\section*{Reproducibility}
+
+The benchmark, harness, training scripts, and all intermediate result JSON files are available at the repository accompanying this submission. A single command reproduces the main table:
+
+\begin{lstlisting}[language=bash]
+cargo run --release --bin paper-bench -- score-local \
+    --server-url http://127.0.0.1:8081 \
+    --name <model-name> \
+    --output results/<model-name>.json
+\end{lstlisting}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

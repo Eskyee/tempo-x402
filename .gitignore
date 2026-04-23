@@ -69,5 +69,19 @@ nul
 # Local model files
 models/*.gguf
 selfplay_runs/
+selfplay_runs_*/
 results/
 humaneval_cache/
+
+# Paper-bench dumps (regenerable via `cargo run --release --bin dump_problems`)
+all_problems.jsonl
+all_problems_full.json
+
+# LaTeX build artifacts
+crates/tempo-x402-paper/paper/*.aux
+crates/tempo-x402-paper/paper/*.bbl
+crates/tempo-x402-paper/paper/*.blg
+crates/tempo-x402-paper/paper/*.log
+crates/tempo-x402-paper/paper/*.out
+crates/tempo-x402-paper/paper/*.toc
+crates/tempo-x402-paper/paper/main.pdf

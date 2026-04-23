@@ -72,12 +72,21 @@ enum Command {
         output: String,
         #[arg(long)]
         humaneval: bool,
+        /// Best-of-N: attempt each problem N times, take first pass
+        #[arg(long, default_value = "1")]
+        samples: usize,
+        /// Override temperature for inference
+        #[arg(long)]
+        temperature: Option<f32>,
     },
     /// Run self-play fine-tuning loop
     Selfplay {
         /// Path to GGUF model file (or API backend)
         #[arg(long)]
         model: Option<String>,
+        /// URL of running llama-server (faster — model stays loaded)
+        #[arg(long)]
+        server_url: Option<String>,
         /// Use Claude API instead of local model
         #[arg(long, env = "ANTHROPIC_API_KEY")]
         claude_key: Option<String>,
@@ -154,13 +163,19 @@ async fn main() {
             problems,
             output,
             humaneval,
+            samples,
+            temperature,
         } => {
             let mut generator = backends::local::LocalModelGenerator::new(name, model);
             if let Some(url) = server_url {
                 generator = generator.with_server(url);
             }
+            if let Some(temp) = temperature {
+                generator = generator.with_temperature(temp);
+            }
             let limit = if problems == 0 { None } else { Some(problems) };
-            runner::run_benchmark(&generator, limit, &output).await;
+            let all_problems = x402_soul::opus_bench::load_embedded_problems();
+            runner::run_benchmark_on_with_samples(&generator, &all_problems, limit, &output, samples).await;
             if humaneval {
                 let he_problems = humaneval::load_humaneval_problems();
                 let he_output = output.replace(".json", "-humaneval.json");
@@ -169,13 +184,21 @@ async fn main() {
         }
         Command::Selfplay {
             model,
+            server_url,
             claude_key,
             gemini_key,
             iterations,
             problems,
             output_dir,
         } => {
-            let generator: Box<dyn runner::CodeGenerator> = if let Some(path) = model {
+            let generator: Box<dyn runner::CodeGenerator> = if let Some(url) = server_url {
+                let mut gen = backends::local::LocalModelGenerator::new(
+                    "qwen-selfplay".to_string(),
+                    String::new(),
+                );
+                gen = gen.with_server(url);
+                Box::new(gen)
+            } else if let Some(path) = model {
                 Box::new(backends::local::LocalModelGenerator::new(
                     "qwen-selfplay".to_string(),
                     path,

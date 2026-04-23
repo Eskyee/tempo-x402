@@ -34,11 +34,24 @@ pub async fn run_benchmark(
 }
 
 /// Run a benchmark on an arbitrary set of problems.
+/// `samples` > 1 enables best-of-N: each problem is attempted up to N times,
+/// taking the first passing solution.
 pub async fn run_benchmark_on(
     generator: &dyn CodeGenerator,
     problems: &[BenchmarkProblem],
     limit: Option<usize>,
     output_path: &str,
+) {
+    run_benchmark_on_with_samples(generator, problems, limit, output_path, 1).await;
+}
+
+/// Best-of-N benchmark variant.
+pub async fn run_benchmark_on_with_samples(
+    generator: &dyn CodeGenerator,
+    problems: &[BenchmarkProblem],
+    limit: Option<usize>,
+    output_path: &str,
+    samples: usize,
 ) {
     let total = match limit {
         Some(n) if n > 0 => n.min(problems.len()),
@@ -69,27 +82,42 @@ pub async fn run_benchmark_on(
         );
 
         let start = std::time::Instant::now();
-        let solution = match generator.generate(problem).await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(slug = %problem.slug, error = %e, "Generation failed");
-                results.push(ProblemResult {
-                    slug: problem.slug.clone(),
-                    tier: problem.difficulty.clone(),
-                    passed: false,
-                    time_ms: start.elapsed().as_millis() as u64,
-                    error: e,
-                    solution: String::new(),
-                });
-                continue;
-            }
-        };
+        let num_samples = samples.max(1);
 
-        // Validate via cargo test
-        let (pass, error_output) = validate_solution(problem, &solution, "/tmp").await;
+        let mut best_pass = false;
+        let mut best_solution = String::new();
+        let mut best_error = String::new();
+
+        for sample in 0..num_samples {
+            let solution = match generator.generate(problem).await {
+                Ok(s) => s,
+                Err(e) => {
+                    if sample == 0 {
+                        best_error = e;
+                    }
+                    continue;
+                }
+            };
+
+            let (pass, error_output) = validate_solution(problem, &solution, "/tmp").await;
+
+            if pass {
+                best_pass = true;
+                best_solution = solution;
+                best_error = String::new();
+                if sample > 0 {
+                    tracing::info!(slug = %problem.slug, sample = sample + 1, "PASS (retry)");
+                }
+                break;
+            } else if sample == 0 {
+                best_solution = solution;
+                best_error = error_output;
+            }
+        }
+
         let time_ms = start.elapsed().as_millis() as u64;
 
-        if pass {
+        if best_pass {
             passed += 1;
             earned_weight += weight;
             tracing::info!(slug = %problem.slug, time_ms, "PASS");
@@ -100,10 +128,10 @@ pub async fn run_benchmark_on(
         results.push(ProblemResult {
             slug: problem.slug.clone(),
             tier: problem.difficulty.clone(),
-            passed: pass,
+            passed: best_pass,
             time_ms,
-            error: error_output,
-            solution,
+            error: best_error,
+            solution: best_solution,
         });
     }
 

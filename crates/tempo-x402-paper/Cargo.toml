@@ -21,3 +21,17 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 async-trait = "0.1"
+anyhow = "1"
+
+# GPU inference via candle — enabled with --features cuda (default includes it).
+candle-core         = { version = "0.9", default-features = false }
+candle-nn           = { version = "0.9", default-features = false }
+candle-transformers = { version = "0.9", default-features = false }
+tokenizers          = { version = "0.22", default-features = false, features = ["onig"] }
+
+[features]
+# Default is CPU-only. Rust-native inference path without an HTTP model server.
+# Opt into `cuda` on machines with CUDA 12.x toolkit installed; CUDA 11.7 does
+# not satisfy candle-kernels 0.9.2's FP8 / STL requirements.
+default = []
+cuda    = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

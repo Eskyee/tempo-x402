@@ -103,6 +103,29 @@ enum Command {
         #[arg(long, default_value = "selfplay_runs")]
         output_dir: String,
     },
+    /// Score a local fine-tuned model via native GPU inference (candle).
+    /// Loads safetensors + tokenizer from an HF-style directory; no llama-server required.
+    ScoreCandle {
+        /// Path to a local model directory containing model.safetensors, tokenizer.json, config.json
+        #[arg(long)]
+        model_dir: String,
+        /// Human-readable model name for results
+        #[arg(long, default_value = "local-candle")]
+        name: String,
+        #[arg(long, default_value = "0")]
+        problems: usize,
+        #[arg(long, default_value = "results/local-candle.json")]
+        output: String,
+        /// 0.0 = greedy. Typical pass@5 runs: 0.7.
+        #[arg(long, default_value = "0.0")]
+        temperature: f32,
+        /// Best-of-N sampling (requires temperature > 0).
+        #[arg(long, default_value = "1")]
+        samples: usize,
+        /// Max new tokens generated per problem.
+        #[arg(long, default_value = "1024")]
+        max_tokens: usize,
+    },
     /// Fetch HumanEval-Rust from HuggingFace
     FetchHumaneval,
     /// Show summary of all results
@@ -227,6 +250,37 @@ async fn main() {
             };
 
             selfplay::run_selfplay(generator.as_ref(), &all_problems, &config).await;
+        }
+        Command::ScoreCandle {
+            model_dir,
+            name,
+            problems,
+            output,
+            temperature,
+            samples,
+            max_tokens,
+        } => {
+            let generator = backends::candle::CandleGenerator::from_dir(
+                name,
+                &model_dir,
+                temperature as f64,
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("candle: failed to load model: {e:#}");
+                std::process::exit(1);
+            })
+            .with_max_tokens(max_tokens);
+
+            let limit = if problems == 0 { None } else { Some(problems) };
+            let all_problems = x402_soul::opus_bench::load_embedded_problems();
+            runner::run_benchmark_on_with_samples(
+                &generator,
+                &all_problems,
+                limit,
+                &output,
+                samples,
+            )
+            .await;
         }
         Command::FetchHumaneval => match humaneval::fetch_and_cache().await {
             Ok(count) => println!("Fetched {count} HumanEval-Rust problems"),

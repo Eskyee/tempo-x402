@@ -9,6 +9,14 @@ description = "Research benchmark harness — self-play fine-tuning of small cod
 name = "paper-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "rust-agent"
+path = "src/bin/rust_agent.rs"
+
+[[bin]]
+name = "dump-problems"
+path = "src/bin/dump_problems.rs"
+
 [dependencies]
 x402-soul = { workspace = true }
 x402-model = { path = "../tempo-x402-model", package = "tempo-x402-model" }

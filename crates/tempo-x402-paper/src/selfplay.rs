@@ -110,7 +110,7 @@ pub async fn run_selfplay(
         let mut iter_results = Vec::new();
         let mut new_examples = Vec::new();
         let mut passed = 0usize;
-        let mut retry_passed = 0usize;
+        let retry_passed = 0usize;
 
         for (i, problem) in problems.iter().take(total_problems).enumerate() {
             tracing::info!(

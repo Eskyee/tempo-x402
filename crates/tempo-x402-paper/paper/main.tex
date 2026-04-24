@@ -203,35 +203,29 @@ Figure~\ref{fig:tier} shows per-tier pass rates. Gains concentrate on T1--T3 (ba
 
 \section{Reproducibility}
 
-Inference for this paper is performed by a small pure-Rust binary built against the \texttt{candle} transformer library, so reproduction does not require \texttt{llama.cpp}, GGUF export, or any HTTP server. The safetensors we fine-tune are the same safetensors we benchmark---no additional lossy quantization step between training and evaluation.
+The numbers reported in this paper were produced by \texttt{llama.cpp}'s \texttt{llama-server} serving Q4\_K\_M GGUF exports of the fine-tuned weights. This is a lossy quantization step between the fp32/bf16 weights we train and the weights we benchmark, but it is the same quantization used in open-model practice and matches how a realistic deployment would serve a 0.5B model. A matched pure-Rust \texttt{candle} inference path is included in the repository for future work (and for the corresponding agentic-coding harness); on a machine with CUDA 12+ it obviates both \texttt{llama.cpp} and the quantization step, and is the intended long-term reproduction path.
 
 \begin{lstlisting}[language=bash]
-# (1) Build paper-bench with candle + CUDA.
+# (1) Build paper-bench.
 cargo build --release -p tempo-x402-paper --bin paper-bench
-# (Windows: run inside the VS x64 Developer environment so nvcc can find
-#  cl.exe, or use the wrapper `scripts/build_candle.bat`.)
 
-# (2) Score the base 0.5B model (uses the HF-cache snapshot directly).
-paper-bench score-candle \
-    --model-dir <HF_CACHE>/models--Qwen--Qwen2.5-Coder-0.5B-Instruct/snapshots/<sha>/ \
-    --name qwen-0.5b-base --output results/qwen-0.5b-base.json
+# (2) Serve the fine-tuned GGUF via llama.cpp.
+llama-server -m selfplay_runs_v2/models/full_ft.gguf \
+    --port 8081 -c 8192 --host 127.0.0.1 &
 
-# (3) Score the full-SFT fine-tune.
-paper-bench score-candle \
-    --model-dir selfplay_runs_v2/checkpoints/full_ft/merged \
+# (3) Score the base 0.5B, then the fine-tunes.
+paper-bench score-local --server-url http://127.0.0.1:8081 \
     --name qwen-0.5b-full-ft --output results/qwen-0.5b-full-ft.json
 
-# (4) pass@5.
-paper-bench score-candle \
-    --model-dir selfplay_runs_v2/checkpoints/full_ft/merged \
+paper-bench score-local --server-url http://127.0.0.1:8081 \
     --name qwen-0.5b-full-ft-pass5 --samples 5 --temperature 0.7 \
     --output results/qwen-0.5b-full-ft-pass5.json
 
-# (5) Regenerate figures.
+# (4) Regenerate figures.
 python crates/tempo-x402-paper/scripts/plot_figures.py
 \end{lstlisting}
 
-The base Qwen2.5-Coder-0.5B-Instruct, LoRA-$r{=}8$, LoRA-$r{=}32$, and full-SFT checkpoints (all as standard HF-style \texttt{safetensors} directories) are included in the release. LoRA adapters are merged into full safetensors by \texttt{scripts/merge\_lora.py} prior to evaluation. Clean reproduction of the full pipeline---fine-tune, merge, benchmark---from the 122-example training set takes about 90 minutes on a single RTX 3090.
+The base Qwen2.5-Coder-0.5B-Instruct weights, LoRA-$r{=}8$ and LoRA-$r{=}32$ adapters, the merged full-SFT safetensors, and their Q4\_K\_M GGUF exports are all included in the release. LoRA adapters are merged to full safetensors by \texttt{scripts/merge\_lora.py} prior to GGUF conversion. A clean reproduction of the full pipeline---fine-tune, merge, convert, benchmark---from the 122-example training set takes approximately 90 minutes on a single RTX 3090.
 
 \bibliographystyle{plain}
 \bibliography{references}

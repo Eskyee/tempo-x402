@@ -90,13 +90,12 @@ def selfplay_curve():
 
 def tier_stratified():
     """Per-tier pass counts across models."""
+    # 0.5B-only bar chart for the main paper (keeps the paper focused).
+    # The 3B configurations live in the extended technical report.
     configs = [
-        ("0.5B base",    os.path.join(REPO_ROOT, "selfplay_runs", "results", "iter_0.json")),
-        ("0.5B Full SFT", os.path.join(REPO_ROOT, "selfplay_runs_v2", "full_ft_eval", "results", "iteration_0.json")),
-        ("0.5B pass@5",  os.path.join(RESULTS_V2, "full_ft_pass5.json")),
-        ("3B base",      os.path.join(RESULTS_V2, "qwen-3b-baseline.json")),
-        ("3B LoRA (122)", os.path.join(RESULTS_V2, "qwen-3b-finetuned.json")),
-        ("3B LoRA (178)", os.path.join(RESULTS_V2, "qwen-3b-sft-178.json")),
+        ("Base",       os.path.join(REPO_ROOT, "selfplay_runs", "results", "iter_0.json")),
+        ("Full SFT",   os.path.join(REPO_ROOT, "selfplay_runs_v2", "full_ft_eval", "results", "iteration_0.json")),
+        ("Full SFT, pass@5", os.path.join(RESULTS_V2, "full_ft_pass5.json")),
     ]
 
     tiers = ["tier1", "tier2", "tier3", "tier4", "tier5", "tier6"]

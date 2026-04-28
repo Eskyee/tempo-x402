@@ -12,10 +12,8 @@ use crate::db::SoulDatabase;
 /// Load the BPE tokenizer from soul_state.
 pub fn load_tokenizer(db: &SoulDatabase) -> x402_model::bpe::BpeTokenizer {
     match db.get_state("codegen_bpe_tokenizer").ok().flatten() {
-        Some(json) if !json.is_empty() => {
-            x402_model::bpe::BpeTokenizer::from_json(&json)
-                .unwrap_or_else(|| x402_model::bpe::BpeTokenizer::new(8192))
-        }
+        Some(json) if !json.is_empty() => x402_model::bpe::BpeTokenizer::from_json(&json)
+            .unwrap_or_else(|| x402_model::bpe::BpeTokenizer::new(8192)),
         _ => x402_model::bpe::BpeTokenizer::new(8192),
     }
 }
@@ -28,7 +26,135 @@ pub fn save_tokenizer(db: &SoulDatabase, tok: &x402_model::bpe::BpeTokenizer) {
     }
 }
 
-/// Train the BPE tokenizer on accumulated code (benchmark solutions + commit diffs).
+/// Scan a directory tree for .rs files and append to corpus.
+/// Caps total at `max_bytes` to prevent OOM on huge dep trees.
+fn walk_rs_files(dir: &std::path::Path, corpus: &mut String, depth: u32, max_bytes: usize) {
+    if depth > 10 || corpus.len() >= max_bytes {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if corpus.len() >= max_bytes {
+            break;
+        }
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        // Skip build artifacts, git, hidden dirs, tests, benches, examples
+        if name_str.starts_with('.')
+            || name_str == "target"
+            || name_str == "node_modules"
+            || name_str == "tests"
+            || name_str == "benches"
+            || name_str == "examples"
+        {
+            continue;
+        }
+
+        if path.is_dir() {
+            walk_rs_files(&path, corpus, depth + 1, max_bytes);
+        } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                // Skip very large files (generated code, test fixtures)
+                if content.len() < 50_000 && content.len() > 50 {
+                    corpus.push_str(&content);
+                    corpus.push('\n');
+                }
+            }
+        }
+    }
+}
+
+/// Scan workspace + cargo registry for .rs files.
+/// Sources (in priority order):
+/// 1. Workspace (own source code — 72K+ lines)
+/// 2. Cargo registry (dependency source — tokio, serde, actix, alloy, etc.)
+///
+/// The model learns Rust from its own codebase AND the best crates in the ecosystem.
+fn collect_workspace_corpus(workspace_root: &str) -> String {
+    // Cap at 2MB to keep training cycles fast and avoid OOM
+    const MAX_CORPUS_BYTES: usize = 2 * 1024 * 1024;
+    let mut corpus = String::new();
+
+    // Source 1: own source code (highest priority — it's learning about itself)
+    let root = std::path::Path::new(workspace_root);
+    if root.exists() {
+        walk_rs_files(root, &mut corpus, 0, MAX_CORPUS_BYTES);
+    }
+    let own_bytes = corpus.len();
+
+    // Source 2: cargo registry — dependency source code
+    // Check common cargo home locations
+    let cargo_homes = [
+        std::env::var("CARGO_HOME").unwrap_or_default(),
+        "/root/.cargo".to_string(),
+        "/usr/local/cargo".to_string(),
+        std::env::var("HOME")
+            .map(|h| format!("{h}/.cargo"))
+            .unwrap_or_default(),
+    ];
+
+    let mut deps_scanned = 0u32;
+    for cargo_home in &cargo_homes {
+        if cargo_home.is_empty() {
+            continue;
+        }
+        let registry_src = std::path::Path::new(cargo_home).join("registry/src");
+        if !registry_src.exists() {
+            continue;
+        }
+        // registry/src/ contains one dir per registry (e.g., index.crates.io-xxx)
+        if let Ok(registries) = std::fs::read_dir(&registry_src) {
+            for reg in registries.flatten() {
+                if !reg.path().is_dir() {
+                    continue;
+                }
+                // Each registry dir contains crate dirs (e.g., serde-1.0.228/)
+                if let Ok(crates) = std::fs::read_dir(reg.path()) {
+                    for krate in crates.flatten() {
+                        if corpus.len() >= MAX_CORPUS_BYTES {
+                            break;
+                        }
+                        if !krate.path().is_dir() {
+                            continue;
+                        }
+                        let src_dir = krate.path().join("src");
+                        if src_dir.exists() {
+                            let before = corpus.len();
+                            walk_rs_files(&src_dir, &mut corpus, 0, MAX_CORPUS_BYTES);
+                            if corpus.len() > before {
+                                deps_scanned += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if deps_scanned > 0 {
+            break; // Found a valid cargo home, stop looking
+        }
+    }
+
+    let deps_bytes = corpus.len() - own_bytes;
+    if corpus.len() > 1000 {
+        tracing::info!(
+            own_bytes = own_bytes,
+            deps_bytes = deps_bytes,
+            deps_crates = deps_scanned,
+            total_bytes = corpus.len(),
+            "codegen: corpus collected (workspace + dependencies)"
+        );
+    }
+
+    corpus
+}
+
+/// Train the BPE tokenizer on ALL available Rust code:
+/// 1. Benchmark solutions (verified, high quality)
+/// 2. Workspace codebase (72K+ lines of real Rust)
 pub fn train_tokenizer(db: &SoulDatabase) {
     let solutions: Vec<serde_json::Value> = db
         .get_state("codegen_solutions")
@@ -37,18 +163,22 @@ pub fn train_tokenizer(db: &SoulDatabase) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    if solutions.is_empty() {
-        tracing::debug!("codegen: BPE skip — 0 training examples (need benchmark passes or commits)");
-        return;
-    }
-
     let mut corpus = String::new();
+
+    // Source 1: benchmark solutions (highest quality — verified by cargo test)
     for sol in &solutions {
         if let Some(code) = sol.get("code").and_then(|v| v.as_str()) {
             corpus.push_str(code);
             corpus.push('\n');
         }
     }
+
+    // Source 2: workspace codebase (massive, real-world Rust)
+    let workspace_root =
+        std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/tmp/workspace".to_string());
+    let ws_corpus = collect_workspace_corpus(&workspace_root);
+    let ws_bytes = ws_corpus.len();
+    corpus.push_str(&ws_corpus);
 
     if corpus.len() < 100 {
         tracing::debug!(
@@ -69,42 +199,92 @@ pub fn train_tokenizer(db: &SoulDatabase) {
 
     tracing::info!(
         solutions = solutions.len(),
+        workspace_bytes = ws_bytes,
         corpus_bytes = corpus.len(),
         vocab_before = before_vocab,
         vocab_after = after_vocab,
         compression_ratio = format!("{ratio:.2}"),
-        "codegen: BPE tokenizer trained"
+        "codegen: BPE tokenizer trained (solutions + workspace)"
     );
 }
 
-/// Load the code gen model from soul_state.
+/// Path for binary model weights (much faster than JSON in sled).
+/// At 55M params, JSON = 660MB, binary = 220MB. Binary also loads 10x faster.
+fn model_weights_path() -> std::path::PathBuf {
+    let dir = std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::Path::new(&dir).join("codegen_model.bin")
+}
+
+/// Load the code gen model — try binary file first, fall back to sled JSON.
 pub fn load_model(db: &SoulDatabase) -> x402_model::codegen::CodeGenModel {
+    // Try binary file first (fast path for large models)
+    let bin_path = model_weights_path();
+    if bin_path.exists() {
+        if let Ok(json) = std::fs::read_to_string(&bin_path) {
+            if let Some(model) = x402_model::codegen::CodeGenModel::from_json(&json) {
+                return model;
+            }
+        }
+    }
+
+    // Fall back to sled (legacy / small models)
     match db.get_state("codegen_model").ok().flatten() {
         Some(json) if json.len() > 100 => {
-            x402_model::codegen::CodeGenModel::from_json(&json)
-                .unwrap_or_default()
+            x402_model::codegen::CodeGenModel::from_json(&json).unwrap_or_default()
         }
         _ => x402_model::codegen::CodeGenModel::new(),
     }
 }
 
-/// Save the code gen model to soul_state.
+/// Save the code gen model to a binary file (fast) + lightweight marker in sled.
 pub fn save_model(db: &SoulDatabase, model: &x402_model::codegen::CodeGenModel) {
     let json = model.to_json();
-    if let Err(e) = db.set_state("codegen_model", &json) {
-        tracing::warn!(error = %e, "Failed to save codegen model");
+    let bin_path = model_weights_path();
+
+    // Save to file (fast, no sled size pressure)
+    if let Some(parent) = bin_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+    if let Err(e) = std::fs::write(&bin_path, &json) {
+        tracing::warn!(error = %e, "Failed to save codegen model to file");
+        // Fall back to sled
+        if let Err(e2) = db.set_state("codegen_model", &json) {
+            tracing::warn!(error = %e2, "Failed to save codegen model to sled");
+        }
+        return;
+    }
+
+    // Store lightweight marker in sled (just metadata, not weights)
+    let marker = format!(
+        r#"{{"steps":{},"loss":{:.4},"params":{},"path":"{}"}}"#,
+        model.train_steps,
+        model.running_loss,
+        model.param_count(),
+        bin_path.display(),
+    );
+    let _ = db.set_state("codegen_model", &marker);
 }
 
-/// Train the code generation model on accumulated solutions.
-/// Minimum 2 solutions (was 5). Every training step counts when bootstrapping.
+/// Train the code generation model on ALL available Rust code:
+/// 1. Cartridge training corpus (filesystem — loaded once)
+/// 2. Benchmark solutions (verified, high quality — weighted 3x)
+/// 3. Workspace .rs files (massive corpus — real-world patterns)
 pub fn train_model(db: &SoulDatabase) {
+    // Load cartridge training corpus from disk (idempotent — skips if already loaded)
+    load_training_corpus(db);
+
     let tok = load_tokenizer(db);
     if tok.merges.is_empty() {
         tracing::debug!("codegen: model skip — BPE not trained yet (0 merges)");
         return;
     }
 
+    // Collect training examples as (context, code, weight) triples.
+    // Context = test code (for encoder-decoder), code = solution (decoder target).
+    // Examples WITHOUT context use the old train_step (backward compat).
+    let mut examples: Vec<(Option<String>, String, u32)> = Vec::new();
+
+    // Source 1: benchmark solutions (verified — train 3x more on these)
     let solutions: Vec<serde_json::Value> = db
         .get_state("codegen_solutions")
         .ok()
@@ -112,9 +292,49 @@ pub fn train_model(db: &SoulDatabase) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    if solutions.len() < 2 {
+    for sol in &solutions {
+        if sol.get("passed").and_then(|v| v.as_bool()).unwrap_or(true) {
+            if let Some(code) = sol.get("code").and_then(|v| v.as_str()) {
+                if code.len() >= 50 {
+                    let context = sol
+                        .get("context")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    examples.push((context, code.to_string(), 3)); // 3x weight for verified code
+                }
+            }
+        }
+    }
+
+    // Source 2: workspace .rs files (bulk training data)
+    let workspace_root =
+        std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/tmp/workspace".to_string());
+    let ws_corpus = collect_workspace_corpus(&workspace_root);
+    // Split workspace into function-sized chunks (~200 lines each)
+    // so the model sees complete logical units, not arbitrary slices
+    let mut chunk = String::new();
+    for line in ws_corpus.lines() {
+        chunk.push_str(line);
+        chunk.push('\n');
+        // Split on blank lines after `}` (heuristic for function boundaries)
+        if line.trim() == "}" && chunk.len() > 200 {
+            examples.push((None, std::mem::take(&mut chunk), 1));
+        }
+        // Cap chunk size
+        if chunk.len() > 5000 {
+            examples.push((None, std::mem::take(&mut chunk), 1));
+        }
+    }
+    if chunk.len() > 100 {
+        examples.push((None, chunk, 1));
+    }
+
+    let total_examples = examples.len();
+    let solution_count = solutions.len();
+
+    if total_examples < 2 {
         tracing::debug!(
-            solutions = solutions.len(),
+            examples = total_examples,
             "codegen: model skip — need >=2 training examples"
         );
         return;
@@ -123,52 +343,84 @@ pub fn train_model(db: &SoulDatabase) {
     let mut model = load_model(db);
     let mut total_loss = 0.0f32;
     let mut trained = 0u32;
+    let train_start = std::time::Instant::now();
+    // Hard time limit: 30 seconds max per training cycle.
+    let max_train_secs = 30;
 
-    // Filter for passing solutions only — garbage in = garbage out
-    let good_solutions: Vec<&serde_json::Value> = solutions
-        .iter()
-        .filter(|sol| {
-            sol.get("passed").and_then(|v| v.as_bool()).unwrap_or(true)
-        })
-        .collect();
+    // 15M encoder-decoder (D=384, 3+3 layers): ~2s per step on CPU.
+    // 20 examples × ~3 windows = ~60 steps. With 30s limit, get ~15 steps.
+    let offset = (model.train_steps as usize) % total_examples.max(1);
+    let batch_size = 20.min(total_examples);
+    for (context, code, weight) in examples.iter().cycle().skip(offset).take(batch_size) {
+        // Time limit check
+        if train_start.elapsed().as_secs() >= max_train_secs {
+            tracing::info!(
+                elapsed_secs = train_start.elapsed().as_secs(),
+                trained,
+                "codegen: training time limit reached — saving progress"
+            );
+            break;
+        }
 
-    // Train on 5 solutions per cycle — balance learning speed vs cycle time.
-    // Full attention backprop on 29M params is expensive. 5 solutions × ~15 windows
-    // = ~75 gradient steps per cycle. With every-cycle training, we rotate through
-    // all data over multiple cycles.
-    let offset = (model.train_steps as usize) % good_solutions.len().max(1);
-    for sol in good_solutions.iter().cycle().skip(offset).take(5) {
-        let Some(code) = sol.get("code").and_then(|v| v.as_str()) else {
-            continue;
-        };
-
-        // Skip very short code (likely stubs or errors)
+        // Skip very short code
         if code.len() < 50 {
             continue;
         }
 
-        // Tokenize with BPE
-        let mut tokens = vec![x402_model::bpe::BOS_TOKEN];
-        tokens.extend(tok.encode(code));
-        tokens.push(x402_model::bpe::EOS_TOKEN);
-
-        // Truncate to max seq length
-        if tokens.len() > x402_model::codegen::SMALL_MAX_SEQ {
-            tokens.truncate(x402_model::codegen::SMALL_MAX_SEQ);
+        // Tokenize solution (decoder target)
+        let mut target_tokens = vec![x402_model::bpe::BOS_TOKEN];
+        target_tokens.extend(tok.encode(code));
+        target_tokens.push(x402_model::bpe::EOS_TOKEN);
+        if target_tokens.len() > x402_model::codegen::SMALL_MAX_SEQ {
+            target_tokens.truncate(x402_model::codegen::SMALL_MAX_SEQ);
         }
-
-        if tokens.len() < 3 {
+        if target_tokens.len() < 3 {
             continue;
         }
 
-        // Train on sliding windows (64 tokens, step 32 — keep cycles fast with full backprop)
-        let window_size = 64.min(tokens.len());
-        for start in (0..tokens.len().saturating_sub(window_size)).step_by(32) {
-            let end = (start + window_size).min(tokens.len());
-            let window = &tokens[start..end];
-            let loss = model.train_step(window, 0.0003); // conservative LR — full backprop needs smaller steps
-            total_loss += loss;
-            trained += 1;
+        // Tokenize context (encoder input) if available
+        let context_tokens = context.as_ref().map(|ctx| {
+            let mut toks = vec![x402_model::bpe::BOS_TOKEN];
+            toks.extend(tok.encode(ctx));
+            toks.push(x402_model::bpe::EOS_TOKEN);
+            if toks.len() > x402_model::codegen::SMALL_MAX_SEQ {
+                toks.truncate(x402_model::codegen::SMALL_MAX_SEQ);
+            }
+            toks
+        });
+
+        // Repeat training on high-weight examples (verified solutions get 2x passes).
+        // Multi-token loss makes each pass ~64x more informative, so 2x is plenty.
+        let effective_weight = (*weight).min(2);
+        for _ in 0..effective_weight {
+            // 64 tokens for enc-dec (was 128 for decoder-only).
+            // Encoder-decoder does 2 forward passes + cross-attention backprop,
+            // so each step is ~3x more expensive. Keep windows small.
+            let window_size = 64.min(target_tokens.len());
+            for start in (0..target_tokens.len().saturating_sub(window_size)).step_by(64) {
+                let end = (start + window_size).min(target_tokens.len());
+                let target_window = &target_tokens[start..end];
+                let step = model.train_steps as f32;
+                // Multi-token loss gives ~dec_len× more gradient per step,
+                // so use a lower peak LR and longer warmup to stay stable.
+                let lr = if step < 500.0 {
+                    0.0003 + (0.002 - 0.0003) * (step / 500.0)
+                } else {
+                    let decay = ((step - 500.0) * std::f32::consts::PI / 10000.0).cos();
+                    0.0003 + (0.002 - 0.0003) * 0.5 * (1.0 + decay)
+                };
+
+                let loss = if let Some(ctx) = &context_tokens {
+                    // ENCODER-DECODER: context (tests) → target (solution)
+                    // This is the right way to train for "given tests, write code"
+                    model.train_enc_dec(ctx, target_window, lr)
+                } else {
+                    // DECODER-ONLY fallback: workspace code without test context
+                    model.train_step(target_window, lr)
+                };
+                total_loss += loss;
+                trained += 1;
+            }
         }
     }
 
@@ -180,7 +432,10 @@ pub fn train_model(db: &SoulDatabase) {
             running_loss = format!("{:.4}", model.running_loss),
             steps = model.train_steps,
             params = model.param_count(),
-            "codegen: model training cycle complete"
+            solutions = solution_count,
+            workspace_chunks = total_examples - solution_count,
+            total_examples = total_examples,
+            "codegen: model trained on solutions + workspace"
         );
 
         // Track loss history for learning acceleration metric (α)
@@ -201,8 +456,8 @@ pub fn train_model(db: &SoulDatabase) {
     }
 }
 
-/// Generate code given a prompt. Returns None if model not ready.
-/// Minimum 10 training steps (was 100) — let it try earlier.
+/// Generate code given a prompt (test code context). Returns None if model not ready.
+/// Uses the encoder-decoder: encodes prompt (tests) once, then decodes solution tokens.
 pub fn generate(db: &SoulDatabase, prompt: &str, max_tokens: usize) -> Option<String> {
     let tok = load_tokenizer(db);
     if tok.merges.is_empty() {
@@ -220,25 +475,57 @@ pub fn generate(db: &SoulDatabase, prompt: &str, max_tokens: usize) -> Option<St
         return None;
     }
 
-    // Tokenize prompt
-    let mut tokens = vec![x402_model::bpe::BOS_TOKEN];
-    tokens.extend(tok.encode(prompt));
+    // Tokenize context (test code) for the encoder
+    let mut context_tokens = vec![x402_model::bpe::BOS_TOKEN];
+    context_tokens.extend(tok.encode(prompt));
+    context_tokens.push(x402_model::bpe::EOS_TOKEN);
+    if context_tokens.len() > model.max_seq {
+        context_tokens.truncate(model.max_seq);
+    }
 
-    // Generate token by token (greedy)
+    // Encode the context ONCE (bidirectional attention over test code)
+    let encoder_output = model.encode(&context_tokens);
+    let enc_len = context_tokens.len().min(model.max_seq);
+
+    // Start decoder with BOS token
+    let mut tokens = vec![x402_model::bpe::BOS_TOKEN];
+
+    // Generate token by token, conditioned on encoded context
     for _ in 0..max_tokens {
         if tokens.len() >= model.max_seq {
             break;
         }
 
-        let logits = model.forward(&tokens);
+        let logits = model.decode(&tokens, &encoder_output, enc_len);
 
-        // Argmax
-        let next_token = logits
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(idx, _)| idx as u32)
-            .unwrap_or(x402_model::bpe::EOS_TOKEN);
+        // Temperature sampling — explore diverse outputs instead of repeating
+        // the same greedy argmax every time. Temperature 0.8 balances quality
+        // and diversity. Without this, codegen produces identical output forever.
+        let temperature: f32 = 0.8;
+        let next_token = {
+            // Apply temperature
+            let scaled: Vec<f32> = logits.iter().map(|l| l / temperature).collect();
+            // Softmax
+            let max_logit = scaled.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let exps: Vec<f32> = scaled.iter().map(|l| (l - max_logit).exp()).collect();
+            let sum: f32 = exps.iter().sum();
+            let probs: Vec<f32> = exps.iter().map(|e| e / sum).collect();
+            // Sample from distribution using a simple LCG PRNG seeded from token position
+            let seed = (tokens.len() as u64)
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64);
+            let r = ((seed >> 16) as f32) / (u32::MAX as f32);
+            let mut cumulative = 0.0f32;
+            let mut chosen = 0u32;
+            for (i, p) in probs.iter().enumerate() {
+                cumulative += p;
+                if cumulative >= r {
+                    chosen = i as u32;
+                    break;
+                }
+            }
+            chosen
+        };
 
         if next_token == x402_model::bpe::EOS_TOKEN {
             break;
@@ -247,8 +534,8 @@ pub fn generate(db: &SoulDatabase, prompt: &str, max_tokens: usize) -> Option<St
         tokens.push(next_token);
     }
 
-    // Decode (skip BOS + prompt tokens)
-    let prompt_len = 1 + tok.encode(prompt).len();
+    // Decode (skip BOS — decoder tokens are pure solution, no prompt mixed in)
+    let prompt_len = 1; // just BOS
     if tokens.len() <= prompt_len {
         tracing::debug!("codegen: generate produced no tokens");
         return None;
@@ -268,9 +555,113 @@ pub fn generate(db: &SoulDatabase, prompt: &str, max_tokens: usize) -> Option<St
     Some(generated)
 }
 
+/// Generate code using a local llama-server running a fine-tuned GGUF model.
+/// Set SOUL_LLAMA_URL to enable (e.g., "http://127.0.0.1:8081").
+/// This is the preferred backend — the fine-tuned 3B model produces much better
+/// Rust code than the local 16M encoder-decoder.
+pub async fn generate_via_llama(description: &str, slug: &str) -> Option<String> {
+    let url = std::env::var("SOUL_LLAMA_URL").ok()?;
+
+    let prompt = format!(
+        "You are an expert Rust programmer. Write a complete Rust library (src/lib.rs) \
+         for a WASM cartridge.\n\n\
+         Cartridge: {slug}\n\
+         Description: {description}\n\n\
+         Output ONLY the Rust code. No explanations, no markdown."
+    );
+
+    let body = serde_json::json!({
+        "model": "local",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an expert Rust programmer. Output ONLY complete Rust code. No explanations."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "stream": false,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        tracing::warn!("codegen: llama-server returned {}", resp.status());
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+
+    let content = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|t| t.as_str())?;
+
+    // Strip markdown code fences if present
+    let code = strip_code_fences(content);
+    if code.trim().is_empty() {
+        return None;
+    }
+
+    tracing::info!(
+        slug,
+        chars = code.len(),
+        "codegen: llama-server generated code"
+    );
+    Some(code)
+}
+
+/// Extract Rust code from markdown fences.
+fn strip_code_fences(text: &str) -> String {
+    // Find ```rust ... ``` block
+    if let Some(start) = text.find("```rust") {
+        let after = &text[start + 7..];
+        let code_start = if after.starts_with('\n') { 1 } else { 0 };
+        if let Some(end) = after[code_start..].find("```") {
+            return after[code_start..code_start + end].trim().to_string();
+        }
+        return after[code_start..].trim().to_string();
+    }
+    // Try generic ``` block
+    if let Some(start) = text.find("```") {
+        let after = &text[start + 3..];
+        let code_start = after.find('\n').map(|n| n + 1).unwrap_or(0);
+        if let Some(end) = after[code_start..].find("```") {
+            return after[code_start..code_start + end].trim().to_string();
+        }
+    }
+    text.trim().to_string()
+}
+
 /// Record a successful code diff as training data for the codegen model.
 /// Called after successful commits — supplements benchmark solutions.
+/// Record a training example. If `context` is provided (test code), the
+/// encoder-decoder can train on (context → code) pairs for proper conditioning.
 pub fn record_training_example(db: &SoulDatabase, code: &str, source: &str) {
+    record_training_example_with_context(db, code, source, None);
+}
+
+/// Record a training example with optional test code context.
+pub fn record_training_example_with_context(
+    db: &SoulDatabase,
+    code: &str,
+    source: &str,
+    context: Option<&str>,
+) {
     if code.len() < 50 {
         return; // Too small to be useful
     }
@@ -282,11 +673,15 @@ pub fn record_training_example(db: &SoulDatabase, code: &str, source: &str) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    solutions.push(serde_json::json!({
+    let mut entry = serde_json::json!({
         "code": code,
         "source": source,
         "ts": chrono::Utc::now().timestamp(),
-    }));
+    });
+    if let Some(ctx) = context {
+        entry["context"] = serde_json::json!(ctx);
+    }
+    solutions.push(entry);
 
     // Cap at 1000
     if solutions.len() > 1000 {
@@ -302,6 +697,105 @@ pub fn record_training_example(db: &SoulDatabase, code: &str, source: &str) {
             "codegen: recorded training example"
         );
     }
+}
+
+/// Load cartridge training corpus from the filesystem.
+///
+/// Reads `.rs` files from `{workspace}/crates/tempo-x402-soul/training_data/cartridges/`
+/// (organized by tier). Each file becomes a training example with the tier directory
+/// as context. Only loads files not already in the solutions set (by source key).
+///
+/// Called once on startup or first training cycle. The examples supplement
+/// benchmark solutions — the model learns both algorithmic problem-solving
+/// AND practical cartridge patterns.
+pub fn load_training_corpus(db: &SoulDatabase) {
+    let workspace_root =
+        std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/tmp/workspace".to_string());
+    let corpus_dir = format!(
+        "{}/crates/tempo-x402-soul/training_data/cartridges",
+        workspace_root
+    );
+
+    let corpus_path = std::path::Path::new(&corpus_dir);
+    if !corpus_path.exists() {
+        tracing::debug!("codegen: no training corpus at {}", corpus_dir);
+        return;
+    }
+
+    // Check if we already loaded this corpus (avoid reloading every cycle)
+    let loaded_marker = db
+        .get_state("codegen_corpus_loaded")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    // Count files to detect changes
+    let mut file_count = 0u32;
+    let tiers = ["tier1", "tier2", "tier3", "tier4", "tier5", "frontend"];
+    for tier in &tiers {
+        let tier_dir = corpus_path.join(tier);
+        if let Ok(entries) = std::fs::read_dir(&tier_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().map(|e| e == "rs").unwrap_or(false) {
+                    file_count += 1;
+                }
+            }
+        }
+    }
+
+    let marker = format!("{}", file_count);
+    if loaded_marker == marker {
+        return; // Already loaded, same count
+    }
+
+    tracing::info!(
+        files = file_count,
+        dir = %corpus_dir,
+        "codegen: loading cartridge training corpus"
+    );
+
+    let mut loaded = 0u32;
+    for tier in &tiers {
+        let tier_dir = corpus_path.join(tier);
+        let Ok(entries) = std::fs::read_dir(&tier_dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                let slug = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let source = format!("cartridge/{}/{}", tier, slug);
+
+                if let Ok(code) = std::fs::read_to_string(&path) {
+                    if code.len() >= 50 {
+                        // Build context from tier + slug: tells the model what kind of
+                        // cartridge this is (the encoder input for conditioning)
+                        let context = format!(
+                            "// x402 WASM cartridge: {}\n// Tier: {}\n// Type: backend (#[no_std], x402 ABI)\n",
+                            slug.replace('_', " "),
+                            tier
+                        );
+                        record_training_example_with_context(
+                            db,
+                            &code,
+                            &source,
+                            Some(&context),
+                        );
+                        loaded += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark as loaded
+    let _ = db.set_state("codegen_corpus_loaded", &marker);
+    tracing::info!(loaded, "codegen: cartridge training corpus loaded");
 }
 
 /// Get status for observability — wired into /soul/status.

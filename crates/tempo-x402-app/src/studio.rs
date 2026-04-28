@@ -49,6 +49,7 @@ enum CenterView {
     Welcome,
     AppPreview(String),
     CartridgePreview(String),
+    #[allow(dead_code)]
     InteractivePreview(String),
     FrontendPreview(String),
     FileView(String, String),
@@ -66,6 +67,8 @@ pub fn StudioPage() -> impl IntoView {
     let (session_id, set_session_id) = create_signal(None::<String>);
     let (soul_status, set_soul_status) = create_signal(None::<serde_json::Value>);
     let (sys_metrics, set_sys_metrics) = create_signal(None::<serde_json::Value>);
+    // Track which frontend cartridge slug has been initialized to prevent double-mount
+    let (frontend_initialized, set_frontend_initialized) = create_signal(Option::<String>::None);
     let (file_tree, set_file_tree) = create_signal(Vec::<FileEntry>::new());
     let (current_path, set_current_path) = create_signal("crates".to_string());
     let (files_expanded, set_files_expanded) = create_signal(false);
@@ -90,10 +93,22 @@ pub fn StudioPage() -> impl IntoView {
             if let Ok(data) = api::fetch_json("/x").await {
                 if let Some(eps) = data.get("endpoints").and_then(|v| v.as_array()) {
                     for ep in eps {
-                        let slug = ep.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let desc = ep.get("description").and_then(|v| v.as_str()).map(String::from);
+                        let slug = ep
+                            .get("slug")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let desc = ep
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
                         if !slug.is_empty() {
-                            all_apps.push(AppEntry { slug, description: desc, kind: "script".into(), cartridge_type: String::new() });
+                            all_apps.push(AppEntry {
+                                slug,
+                                description: desc,
+                                kind: "script".into(),
+                                cartridge_type: String::new(),
+                            });
                         }
                     }
                 }
@@ -102,11 +117,27 @@ pub fn StudioPage() -> impl IntoView {
             if let Ok(data) = api::fetch_json("/c").await {
                 if let Some(carts) = data.get("cartridges").and_then(|v| v.as_array()) {
                     for c in carts {
-                        let slug = c.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let desc = c.get("description").and_then(|v| v.as_str()).map(String::from);
-                        let ct = c.get("cartridge_type").and_then(|v| v.as_str()).unwrap_or("backend").to_string();
+                        let slug = c
+                            .get("slug")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let desc = c
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let ct = c
+                            .get("cartridge_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("backend")
+                            .to_string();
                         if !slug.is_empty() {
-                            all_apps.push(AppEntry { slug, description: desc, kind: "cartridge".into(), cartridge_type: ct });
+                            all_apps.push(AppEntry {
+                                slug,
+                                description: desc,
+                                kind: "cartridge".into(),
+                                cartridge_type: ct,
+                            });
                         }
                     }
                 }
@@ -148,41 +179,144 @@ pub fn StudioPage() -> impl IntoView {
         set_input.set(String::new());
 
         set_messages.update(|msgs| {
-            msgs.push(ChatMsg { role: "user".into(), content: msg.clone(), tools: vec![] });
+            msgs.push(ChatMsg {
+                role: "user".into(),
+                content: msg.clone(),
+                tools: vec![],
+            });
         });
         scroll_bottom();
 
         let sid = session_id.get_untracked();
         let refresh = refresh_apps;
+
+        // Add a placeholder "thinking" message that gets replaced with the final reply
+        set_messages.update(|msgs| {
+            msgs.push(ChatMsg {
+                role: "assistant".into(),
+                content: "Thinking...".into(),
+                tools: vec![],
+            });
+        });
+        scroll_bottom();
+
         spawn_local(async move {
-            match api::send_soul_chat(&msg, sid.as_deref()).await {
+            let tool_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<serde_json::Value>::new()));
+            let tool_log_cb = tool_log.clone();
+            let set_messages_cb = set_messages;
+
+            match api::send_soul_chat_stream(&msg, sid.as_deref(), move |event| {
+                let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match event_type {
+                    "thinking" => {
+                        // Update the placeholder message
+                        set_messages_cb.update(|msgs| {
+                            if let Some(last) = msgs.last_mut() {
+                                if last.role == "assistant" && last.content.starts_with("Thinking") {
+                                    last.content = "Thinking...".into();
+                                }
+                            }
+                        });
+                    }
+                    "tool_start" => {
+                        let cmd = event.get("command").and_then(|v| v.as_str()).unwrap_or("...");
+                        set_messages_cb.update(|msgs| {
+                            if let Some(last) = msgs.last_mut() {
+                                if last.role == "assistant" {
+                                    last.content = format!("Running: {cmd}");
+                                }
+                            }
+                        });
+                    }
+                    "tool_result" => {
+                        if let Some(exec) = event.get("execution") {
+                            tool_log_cb.borrow_mut().push(exec.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            })
+            .await
+            {
                 Ok(resp) => {
-                    let reply = resp.get("reply").and_then(|v| v.as_str()).unwrap_or("(no response)").to_string();
+                    let reply = resp
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(no response)")
+                        .to_string();
                     if let Some(new_sid) = resp.get("session_id").and_then(|v| v.as_str()) {
                         set_session_id.set(Some(new_sid.to_string()));
                     }
-                    let tools = resp.get("tool_executions")
+                    let tools = resp
+                        .get("tool_executions")
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
+                    // Replace the placeholder with the final reply
                     set_messages.update(|msgs| {
-                        msgs.push(ChatMsg { role: "assistant".into(), content: reply, tools });
+                        if let Some(last) = msgs.last_mut() {
+                            if last.role == "assistant" {
+                                last.content = reply;
+                                last.tools = tools;
+                            }
+                        }
                     });
                     // Refresh apps if tools modified endpoints
-                    let modified = resp.get("tool_executions")
+                    let modified = resp
+                        .get("tool_executions")
                         .and_then(|v| v.as_array())
-                        .map(|execs| execs.iter().any(|e| {
-                            let cmd = e.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                            cmd.contains("create_script") || cmd.contains("delete_endpoint")
-                                || cmd.contains("create_cartridge") || cmd.contains("compile_cartridge")
-                                || cmd.contains("delete_cartridge")
-                        }))
+                        .map(|execs| {
+                            execs.iter().any(|e| {
+                                let cmd = e.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                cmd.contains("create_script")
+                                    || cmd.contains("delete_endpoint")
+                                    || cmd.contains("create_cartridge")
+                                    || cmd.contains("compile_cartridge")
+                                    || cmd.contains("delete_cartridge")
+                            })
+                        })
                         .unwrap_or(false);
-                    if modified { refresh(); }
+                    if modified {
+                        refresh();
+                        // Hot-reload: if compile_cartridge succeeded for the currently
+                        // previewed frontend cartridge, re-mount it with cache busting.
+                        if let Some(execs) = resp.get("tool_executions").and_then(|v| v.as_array()) {
+                            for exec in execs {
+                                let cmd = exec.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                let exit = exec.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+                                if cmd.contains("compile_cartridge") && exit == 0 {
+                                    // Extract slug from args
+                                    if let Some(args) = exec.get("args") {
+                                        let compiled_slug = args.get("slug")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        if !compiled_slug.is_empty() {
+                                            // Clear the JS-level mount guard via DOM
+                                            let mount_id = format!("cartridge-mount-{compiled_slug}");
+                                            if let Some(el) = web_sys::window()
+                                                .and_then(|w| w.document())
+                                                .and_then(|d| d.get_element_by_id(&mount_id))
+                                            {
+                                                let _ = el.remove_attribute("data-loaded");
+                                                el.set_inner_html("");
+                                            }
+                                            // Reset Rust-level guard and re-trigger preview
+                                            set_frontend_initialized.set(None);
+                                            set_center.set(CenterView::FrontendPreview(compiled_slug.to_string()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     set_messages.update(|msgs| {
-                        msgs.push(ChatMsg { role: "assistant".into(), content: format!("Error: {e}"), tools: vec![] });
+                        msgs.push(ChatMsg {
+                            role: "assistant".into(),
+                            content: format!("Error: {e}"),
+                            tools: vec![],
+                        });
                     });
                 }
             }
@@ -230,8 +364,10 @@ pub fn StudioPage() -> impl IntoView {
             if kind == "cartridge" {
                 let _ = api::delete_cartridge(&slug).await;
             } else {
-                let _ = gloo_net::http::Request::delete(&format!("/admin/endpoints/script-{}", slug))
-                    .send().await;
+                let _ =
+                    gloo_net::http::Request::delete(&format!("/admin/endpoints/script-{}", slug))
+                        .send()
+                        .await;
             }
             refresh();
         });
@@ -299,7 +435,11 @@ pub fn StudioPage() -> impl IntoView {
                                                     on:click=move |_| {
                                                         set_sidebar_open.set(false);
                                                         if ct_for_click == "frontend" {
+                                                            // Reset init tracker so new cartridge can mount fresh
+                                                            set_frontend_initialized.set(None);
                                                             set_center.set(CenterView::FrontendPreview(slug_click.clone()));
+                                                        } else if ct_for_click == "interactive" {
+                                                            set_center.set(CenterView::InteractivePreview(slug_click.clone()));
                                                         } else if kind_for_click == "cartridge" {
                                                             set_center.set(CenterView::CartridgePreview(slug_click.clone()));
                                                         } else {
@@ -576,18 +716,31 @@ pub fn StudioPage() -> impl IntoView {
                                 let mount_id = format!("cartridge-mount-{slug}");
                                 let mount_id_for_load = mount_id.clone();
                                 let slug_for_load = slug.clone();
+                                let slug_check = slug.clone();
                                 let (load_error, set_load_error) = create_signal(Option::<String>::None);
                                 let (loading, set_loading) = create_signal(true);
 
-                                // Load the frontend cartridge on mount
-                                spawn_local(async move {
-                                    match crate::cartridge_runner::load_frontend_cartridge(&slug_for_load, &mount_id_for_load).await {
-                                        Ok(()) => set_loading.set(false),
-                                        Err(e) => {
-                                            set_loading.set(false);
-                                            set_load_error.set(Some(e));
-                                        }
+                                // Load the frontend cartridge ONCE — guard against double-mount
+                                // which causes events to fire twice (the root cause of "1" → "11" bug).
+                                create_effect(move |ran| {
+                                    if ran.is_some() { return; }
+                                    // Skip if this slug was already initialized
+                                    if frontend_initialized.get().as_deref() == Some(slug_check.as_str()) {
+                                        set_loading.set(false);
+                                        return;
                                     }
+                                    set_frontend_initialized.set(Some(slug_for_load.clone()));
+                                    let slug = slug_for_load.clone();
+                                    let mount = mount_id_for_load.clone();
+                                    spawn_local(async move {
+                                        match crate::cartridge_runner::load_frontend_cartridge(&slug, &mount).await {
+                                            Ok(()) => set_loading.set(false),
+                                            Err(e) => {
+                                                set_loading.set(false);
+                                                set_load_error.set(Some(e));
+                                            }
+                                        }
+                                    });
                                 });
 
                                 view! {

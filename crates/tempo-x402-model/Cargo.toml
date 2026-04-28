@@ -1,6 +1,6 @@
 [package]
 name = "tempo-x402-model"
-version = "7.0.0"
+version = "9.3.0"
 edition = "2021"
 description = "Sequence model for autonomous plan generation — trained on colony collective experience"
 license = "MIT"
@@ -17,3 +17,4 @@ path = "src/lib.rs"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+rayon = "1.10"

@@ -19,34 +19,46 @@ mod tier1;
 mod tier1_ext;
 mod tier1_ext2;
 mod tier1_ext3;
+mod tier1_ext4;
+mod tier1_ext5;
+mod tier1_ext6;
+mod tier1_ext7;
 mod tier2;
 mod tier2_ext;
 mod tier2_ext2;
+mod tier2_ext3;
 mod tier3;
 mod tier3_ext;
 mod tier3_ext2;
 mod tier4;
 mod tier4_ext;
+mod tier4_ext2;
 mod tier5;
 mod tier6;
 
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 /// Load all embedded Opus IQ benchmark problems.
-pub fn load_embedded_problems() -> Vec<ExercismProblem> {
+pub fn load_embedded_problems() -> Vec<BenchmarkProblem> {
     let mut problems = Vec::new();
     problems.extend(tier1::tier1_generation());
     problems.extend(tier1_ext::tier1_ext());
     problems.extend(tier1_ext2::tier1_ext2());
     problems.extend(tier1_ext3::tier1_ext3());
+    problems.extend(tier1_ext4::tier1_ext4());
+    problems.extend(tier1_ext5::tier1_ext5());
+    problems.extend(tier1_ext6::tier1_ext6());
+    problems.extend(tier1_ext7::tier1_ext7());
     problems.extend(tier2::tier2_debugging());
     problems.extend(tier2_ext::tier2_ext());
     problems.extend(tier2_ext2::tier2_ext2());
+    problems.extend(tier2_ext3::tier2_ext3());
     problems.extend(tier3::tier3_induction());
     problems.extend(tier3_ext::tier3_ext());
     problems.extend(tier3_ext2::tier3_ext2());
     problems.extend(tier4::tier4_reasoning());
     problems.extend(tier4_ext::tier4_ext());
+    problems.extend(tier4_ext2::tier4_ext2());
     problems.extend(tier5::tier5_adversarial());
     problems.extend(tier6::tier6_brutal());
     problems
@@ -77,8 +89,8 @@ fn problem(
     instructions: &str,
     starter: &str,
     tests: &str,
-) -> ExercismProblem {
-    ExercismProblem {
+) -> BenchmarkProblem {
+    BenchmarkProblem {
         slug: slug.to_string(),
         instructions: instructions.to_string(),
         test_code: tests.to_string(),

@@ -4,7 +4,7 @@
 
 Autonomous AI colony on the Tempo blockchain. Self-replicating agents that clone, evolve source code, benchmark IQ, share neural weights, and pay each other via HTTP 402. Agents write Rust programs, compile to WASM cartridges, and deploy instantly.
 
-Rust workspace. 9 crates, ~72K lines, 4.5M neural parameters. Published as `tempo-x402`, `tempo-x402-cartridge`, `tempo-x402-gateway`, `tempo-x402-identity`, `tempo-x402-model`, `tempo-x402-soul`, `tempo-x402-node` on crates.io.
+Rust workspace. 9 crates, ~116K lines. Neuroplastic fluid cognitive architecture: Bloch sphere state geometry, unified encoder-decoder (16M params), hot-swappable WASM cognitive modules, 188 compile-verified training cartridges. Published on crates.io.
 
 ## Architecture
 
@@ -65,11 +65,16 @@ Colony repos:
 Agents write Rust → compile to WASM → deploy instantly at `/c/{slug}` with payment gate.
 
 - **Create**: `create_cartridge(slug, source_code)` — scaffolds Rust project
-- **Compile**: `compile_cartridge(slug)` — `cargo build --target wasm32-wasip1`
+- **Create Cognitive**: `create_cognitive_cartridge(system)` — scaffolds brain/cortex/etc. hot-swap module
+- **Compile**: `compile_cartridge(slug)` — `cargo build --target wasm32-unknown-unknown`, hot-reloads via `replace_module()`
 - **Test**: `test_cartridge(slug, method, path, body)` — runs in wasmtime sandbox
-- **Serve**: `GET/POST /c/{slug}` — x402 payment gated
+- **Serve**: `GET/POST /c/{slug}` — x402 payment gated, KV persisted after execution
 - **Studio**: `/cartridges` page with browser + test console
 - **Safety**: 64MB memory, fuel CPU limit, 30s timeout, no filesystem access
+- **Composition**: `x402_call(slug, request)` — cartridges can invoke other cartridges (max depth 3, isolated KV)
+- **Visual testing**: Soul can open cartridge in browser, screenshot, analyze via Gemini Vision, iterate
+- **Local generation**: `generate_cartridge_code(slug, description)` — local 15M param codegen model writes cartridge source, cargo checks, falls back to Gemini
+- **Four types**: Backend (HTTP), Interactive (60fps framebuffer), Frontend (Leptos SPA), Cognitive (hot-swappable brain modules)
 
 ## Agent Discipline
 

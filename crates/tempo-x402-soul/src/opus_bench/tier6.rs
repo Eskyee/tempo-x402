@@ -1,5 +1,5 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 // ══════════════════════════════════════════════════════════════════════
 // TIER 6: BRUTAL — Multi-step algorithms where precision is everything
@@ -7,7 +7,7 @@ use crate::benchmark::ExercismProblem;
 // Each problem requires exact algorithmic implementation — partial solutions fail.
 // ══════════════════════════════════════════════════════════════════════
 
-pub(super) fn tier6_brutal() -> Vec<ExercismProblem> {
+pub(super) fn tier6_brutal() -> Vec<BenchmarkProblem> {
     vec![
         // ── 6.1: Big Integer Division ──────────────────────────────────
         problem(

@@ -151,7 +151,10 @@ impl SoulConfig {
         let llm_model_think =
             std::env::var("GEMINI_MODEL_THINK").unwrap_or_else(|_| llm_model_fast.clone());
 
-        let db_path = std::env::var("SOUL_DB_PATH").unwrap_or_else(|_| "./soul.db".to_string());
+        // Default to /data — persistent volume. Disk full was caused by cargo
+        // build artifacts (2-4GB target/ dirs), NOT by sled. Model weights are
+        // stored in files, not sled. The sled DB itself is small (~10MB).
+        let db_path = std::env::var("SOUL_DB_PATH").unwrap_or_else(|_| "/data/soul.db".to_string());
 
         let think_interval_secs: u64 = std::env::var("SOUL_THINK_INTERVAL_SECS")
             .ok()
@@ -186,8 +189,11 @@ impl SoulConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or(300);
 
+        // Default workspace to /tmp — NOT the persistent volume.
+        // The workspace (git clone + cargo target) can be 2-4GB and is fully regenerable.
+        // Only small, essential state belongs on /data (sled DB, gateway DB, identity).
         let workspace_root =
-            std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/data/workspace".to_string());
+            std::env::var("SOUL_WORKSPACE_ROOT").unwrap_or_else(|_| "/tmp/workspace".to_string());
 
         let github_token = std::env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty());
 

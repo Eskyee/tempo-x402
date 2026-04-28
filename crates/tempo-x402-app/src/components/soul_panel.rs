@@ -727,7 +727,7 @@ pub fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView
                             }
                         }
 
-                        // Exercism Rust Benchmark
+                        // Opus IQ Benchmark
                         {
                             let bench = data.get("benchmark");
                             if let Some(b) = bench {
@@ -783,7 +783,7 @@ pub fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView
                                     .unwrap_or(164);
                                 Some(view! {
                                     <div class="benchmark-panel">
-                                        <h3>"Exercism Rust Benchmark"</h3>
+                                        <h3>"Opus IQ Benchmark"</h3>
                                         <div class="benchmark-score">
                                             <span class="benchmark-pass-at-1">
                                                 {format!("{:.1}%", pass_at_1)}
@@ -878,7 +878,7 @@ pub fn SoulPanel(status: ReadSignal<Option<serde_json::Value>>) -> impl IntoView
                             } else {
                                 Some(view! {
                                     <div class="benchmark-panel benchmark-panel--waiting">
-                                        <h3>"Exercism Rust Benchmark"</h3>
+                                        <h3>"Opus IQ Benchmark"</h3>
                                         <p class="soul-muted">"Waiting for first benchmark run (triggers every 50 cycles)"</p>
                                         <p class="soul-muted">{format!("Current cycle: {}", total_cycles)}</p>
                                     </div>

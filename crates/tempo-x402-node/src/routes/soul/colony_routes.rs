@@ -108,8 +108,7 @@ pub(super) async fn colony_benchmark_assignment(
 
     let worker_id = query.get("worker_id").cloned().unwrap_or_default();
     if worker_id.is_empty() {
-        return HttpResponse::BadRequest()
-            .json(serde_json::json!({"error": "worker_id required"}));
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "worker_id required"}));
     }
 
     match x402_soul::collective::load_assignment(soul_db, &worker_id) {
@@ -132,10 +131,7 @@ pub(super) async fn colony_benchmark_result(
         }
     };
 
-    let worker_id = body
-        .get("worker_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let worker_id = body.get("worker_id").and_then(|v| v.as_str()).unwrap_or("");
     let results = body
         .get("results")
         .and_then(|v| v.as_array())
@@ -162,7 +158,7 @@ pub(super) async fn colony_benchmark_result(
                 }
             }
             // Record the run in queen's DB
-            let problem = x402_soul::benchmark::ExercismProblem {
+            let _problem = x402_soul::benchmark::BenchmarkProblem {
                 slug: result.slug.clone(),
                 instructions: String::new(),
                 test_code: String::new(),
@@ -250,7 +246,7 @@ pub(super) async fn colony_work(
     state: web::Data<NodeState>,
     body: web::Json<serde_json::Value>,
 ) -> HttpResponse {
-    let soul_db = match &state.soul_db {
+    let _soul_db = match &state.soul_db {
         Some(db) => db,
         None => {
             return HttpResponse::ServiceUnavailable()
@@ -258,10 +254,7 @@ pub(super) async fn colony_work(
         }
     };
 
-    let _worker_id = body
-        .get("worker_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let _worker_id = body.get("worker_id").and_then(|v| v.as_str()).unwrap_or("");
 
     // For now, return 204 No Content — work distribution will be added
     // as the plan execution pipeline matures. The distributed benchmark

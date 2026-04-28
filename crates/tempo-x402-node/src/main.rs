@@ -472,7 +472,7 @@ async fn main() -> std::io::Result<()> {
                 child_env_vars.insert("SOUL_AUTONOMOUS_CODING".into(), "true".into());
                 child_env_vars.insert("SOUL_DYNAMIC_TOOLS_ENABLED".into(), "true".into());
                 child_env_vars.insert("SOUL_DB_PATH".into(), "/data/soul.db".into());
-                child_env_vars.insert("SOUL_WORKSPACE_ROOT".into(), "/data/workspace".into());
+                child_env_vars.insert("SOUL_WORKSPACE_ROOT".into(), "/tmp/workspace".into());
                 child_env_vars.insert("SOUL_REQUIRE_PLAN_APPROVAL".into(), "false".into());
 
                 // Operational basics
@@ -507,7 +507,9 @@ async fn main() -> std::io::Result<()> {
                     "ERC8004_VALIDATION_REGISTRY",
                 ] {
                     if let Ok(addr) = std::env::var(reg_key) {
-                        if !addr.is_empty() && addr != format!("{:#x}", alloy::primitives::Address::ZERO) {
+                        if !addr.is_empty()
+                            && addr != format!("{:#x}", alloy::primitives::Address::ZERO)
+                        {
                             child_env_vars.insert(reg_key.into(), addr);
                         }
                     }
@@ -553,8 +555,7 @@ async fn main() -> std::io::Result<()> {
                     child_env_vars.insert("SOUL_INITIAL_GOAL".into(), goal);
                 }
 
-                // Benchmark mode — ensure entire colony uses the same benchmark suite
-                // Without this, clones default to Exercism while parent runs Opus
+                // Benchmark mode — propagate to clones for consistency
                 if let Ok(mode) = std::env::var("SOUL_BENCHMARK_MODE") {
                     child_env_vars.insert("SOUL_BENCHMARK_MODE".into(), mode);
                 }
@@ -843,8 +844,15 @@ async fn main() -> std::io::Result<()> {
                         for slug in &loaded {
                             if let Ok(None) = db::get_cartridge(&cartridge_db, slug) {
                                 let now = chrono::Utc::now().timestamp();
-                                let wasm_path = format!("/data/cartridges/{slug}/bin/{}.wasm", slug.replace('-', "_"));
-                                let cart_type = if std::path::Path::new(&format!("/data/cartridges/{slug}/bin/pkg")).exists() {
+                                let wasm_path = format!(
+                                    "/data/cartridges/{slug}/bin/{}.wasm",
+                                    slug.replace('-', "_")
+                                );
+                                let cart_type = if std::path::Path::new(&format!(
+                                    "/data/cartridges/{slug}/bin/pkg"
+                                ))
+                                .exists()
+                                {
                                     "frontend".to_string()
                                 } else {
                                     "backend".to_string()
@@ -1247,7 +1255,9 @@ async fn main() -> std::io::Result<()> {
         // it has an agent_token_id that doesn't exist on the queen's registry.
         // Verify the token exists on the current registry; if not, clear it so re-mint happens.
         #[cfg(feature = "erc8004")]
-        if id.agent_token_id.is_some() && x402_identity::identity_registry() != alloy::primitives::Address::ZERO {
+        if id.agent_token_id.is_some()
+            && x402_identity::identity_registry() != alloy::primitives::Address::ZERO
+        {
             let verify_rpc = rpc_url.clone();
             let verify_registry = x402_identity::identity_registry();
             let verify_token_id = id.agent_token_id.clone().unwrap();
@@ -1257,11 +1267,13 @@ async fn main() -> std::io::Result<()> {
             let mut verify_id = id.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                let Ok(rpc_parsed) = verify_rpc.parse::<reqwest::Url>() else { return };
+                let Ok(rpc_parsed) = verify_rpc.parse::<reqwest::Url>() else {
+                    return;
+                };
                 let provider = alloy::providers::ProviderBuilder::new().connect_http(rpc_parsed);
                 let token = x402_identity::types::AgentId::new(
                     alloy::primitives::U256::from_str_radix(&verify_token_id, 10)
-                        .unwrap_or(alloy::primitives::U256::from(1))
+                        .unwrap_or(alloy::primitives::U256::from(1)),
                 );
                 match x402_identity::onchain::owner_of(&provider, verify_registry, &token).await {
                     Ok(owner) if owner == verify_owner => {
@@ -1278,7 +1290,11 @@ async fn main() -> std::io::Result<()> {
                             "ERC-8004: token owned by someone else — clearing stale token ID"
                         );
                         verify_id.agent_token_id = None;
-                        let _ = x402_identity::save_agent_token_id(&verify_identity_path, &mut verify_id, "");
+                        let _ = x402_identity::save_agent_token_id(
+                            &verify_identity_path,
+                            &mut verify_id,
+                            "",
+                        );
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -1287,7 +1303,11 @@ async fn main() -> std::io::Result<()> {
                             "ERC-8004: token not found on current registry — clearing stale token ID for re-mint"
                         );
                         verify_id.agent_token_id = None;
-                        let _ = x402_identity::save_agent_token_id(&verify_identity_path, &mut verify_id, "");
+                        let _ = x402_identity::save_agent_token_id(
+                            &verify_identity_path,
+                            &mut verify_id,
+                            "",
+                        );
                     }
                 }
             });
@@ -1296,7 +1316,6 @@ async fn main() -> std::io::Result<()> {
         // ERC-8004 auto-deploy + auto-mint (if enabled and no token ID yet)
         #[cfg(feature = "erc8004")]
         if x402_identity::auto_mint_enabled() && id.agent_token_id.is_none() {
-
             let rpc_clone = rpc_url.clone();
             let owner = id.address;
             let metadata_uri = format!("{}/instance/info", self_url);
@@ -1641,8 +1660,10 @@ async fn main() -> std::io::Result<()> {
                                 instance_id = %child.instance_id,
                                 "Deleting ghost child: no Railway service ID and unreachable"
                             );
-                            let _ =
-                                db::delete_child(&version_check_state.gateway.db, &child.instance_id);
+                            let _ = db::delete_child(
+                                &version_check_state.gateway.db,
+                                &child.instance_id,
+                            );
                             continue;
                         }
                     }
@@ -1672,15 +1693,13 @@ async fn main() -> std::io::Result<()> {
                             std::env::var("EVM_ADDRESS")
                                 .ok()
                                 .and_then(|s| s.parse().ok());
-                        let provider = alloy::providers::ProviderBuilder::new()
-                            .connect_http(rpc.parse().unwrap_or_else(|_| {
+                        let provider = alloy::providers::ProviderBuilder::new().connect_http(
+                            rpc.parse().unwrap_or_else(|_| {
                                 "https://rpc.moderato.tempo.xyz".parse().unwrap()
-                            }));
+                            }),
+                        );
                         match x402_identity::discovery::discover_live_peers(
-                            &provider,
-                            registry,
-                            self_addr,
-                            50,
+                            &provider, registry, self_addr, 50,
                         )
                         .await
                         {
@@ -1690,8 +1709,7 @@ async fn main() -> std::io::Result<()> {
                                     if let (Some(ref url), Some(ref instance_id)) =
                                         (&peer.url, &peer.instance_id)
                                     {
-                                        let addr =
-                                            peer.address.as_deref().unwrap_or("0x0");
+                                        let addr = peer.address.as_deref().unwrap_or("0x0");
                                         if let Ok(()) = db::link_peer(
                                             &version_check_state.gateway.db,
                                             instance_id,

@@ -327,7 +327,9 @@ pub fn available_tools() -> Vec<FunctionDeclaration> {
         },
         FunctionDeclaration {
             name: "write_file".to_string(),
-            description: "Create or overwrite a file. Protected files (soul core, identity, Cargo files) cannot be written.".to_string(),
+            description: "Create or overwrite a file. Protected files (soul core, identity, Cargo files) cannot be written. \
+                         IMPORTANT: If writing to a cartridge source file (/data/cartridges/*/src/src/lib.rs), \
+                         you MUST call compile_cartridge afterwards for changes to take effect.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -345,7 +347,9 @@ pub fn available_tools() -> Vec<FunctionDeclaration> {
         },
         FunctionDeclaration {
             name: "edit_file".to_string(),
-            description: "Edit a file via search-and-replace. The old_string must appear exactly once in the file. Protected files cannot be edited.".to_string(),
+            description: "Edit a file via search-and-replace. The old_string must appear exactly once in the file. Protected files cannot be edited. \
+                         IMPORTANT: If editing a cartridge source file (/data/cartridges/*/src/src/lib.rs), \
+                         you MUST call compile_cartridge afterwards for changes to take effect.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -476,26 +480,77 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
 
         // WASM Cartridge tools — write Rust programs, compile to WASM, test instantly
         tools.push(FunctionDeclaration {
-            name: "create_cartridge".to_string(),
-            description: "Create a WASM cartridge — a Rust program that compiles to WASM. \
-                         THREE TYPES: \
-                         (1) BACKEND: exports x402_handle, returns HTTP responses (JSON, HTML). No deps. \
-                         (2) INTERACTIVE: exports x402_tick/x402_key_down/x402_get_framebuffer — \
-                         renders pixels to a 320x240 RGBA framebuffer at 60fps. Set interactive=true. \
-                         (3) FRONTEND: a full Leptos app with DOM access, mounted into the Studio. \
-                         Set frontend=true. Uses leptos, web-sys, wasm-bindgen. Can render real HTML, \
-                         buttons, forms, interactive UI. Compiles to wasm32-unknown-unknown. \
-                         PREFER FRONTEND for anything with UI. Use backend only for APIs.".to_string(),
+            name: "generate_cartridge_code".to_string(),
+            description: "Generate cartridge source code using the LOCAL codegen model (no Gemini API call). \
+                         Try this FIRST before writing cartridge code yourself. The model was trained on 188 \
+                         verified cartridge examples. If it succeeds, you get compilable code instantly. \
+                         If it fails (model not ready, or code doesn't compile), fall back to writing \
+                         the code yourself and using create_cartridge with source_code. \
+                         On success, the cartridge is created and ready to compile."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "slug": {
                         "type": "string",
-                        "description": "URL slug for the cartridge (alphanumeric + hyphens, e.g. 'calculator', 'todo-api')"
+                        "description": "URL slug for the cartridge (alphanumeric + hyphens)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the cartridge should do — be specific about features, UI, state, etc."
+                    },
+                    "frontend": {
+                        "type": "boolean",
+                        "description": "If true, generate a frontend Leptos app instead of a backend cartridge."
+                    }
+                },
+                "required": ["slug", "description"]
+            }),
+        });
+
+        tools.push(FunctionDeclaration {
+            name: "create_cartridge".to_string(),
+            description: "Create a WASM cartridge — a Rust program that compiles to WASM and serves at /c/{slug}. \
+                         IMPORTANT: Write COMPLETE, WORKING code — not stubs or placeholders. Every function must \
+                         actually work. If building a calculator, the eval logic must actually parse and compute \
+                         expressions. If building a todo app, CRUD must actually work with kv_get/kv_set. \
+                         Write 100-300 lines of real, functional code. \
+                         THREE TYPES: \
+                         (1) BACKEND (DEFAULT, RECOMMENDED): #[no_std] Rust using x402 host ABI. No external deps. \
+                         Returns HTTP responses (HTML, JSON, etc). Build rich UIs as HTML strings with inline CSS/JS. \
+                         Uses kv_get/kv_set for persistent state. BufWriter pattern for building responses. \
+                         Client-side JS for interactivity. Most reliable — always compiles, no dep downloads. \
+                         (2) INTERACTIVE: 60fps framebuffer games. Set interactive=true. \
+                         INTERACTIVE ABI: static mut FB: [u8; W*H*4] (RGBA), helpers: set_pixel(x,y,r,g,b), clear(r,g,b), fill_rect(x,y,w,h,r,g,b). \
+                         Exports: x402_init(w:i32,h:i32), x402_tick() [called every frame], x402_key_down(code:i32), x402_key_up(code:i32), \
+                         x402_get_framebuffer()->*const u8, x402_get_width()->i32, x402_get_height()->i32. \
+                         Arrow keys: 37=Left,38=Up,39=Right,40=Down,32=Space. Canvas: 320x240. \
+                         If source_code is provided for interactive, it REPLACES the template entirely — \
+                         you MUST include ALL exports (x402_init, x402_tick, x402_get_framebuffer, etc). \
+                         If source_code is NOT provided, a working bouncing-square template is used. \
+                         (3) FRONTEND: Full Leptos app with DOM access. Set frontend=true. Slower to compile \
+                         (downloads deps on first build). \
+                         AFTER create_cartridge, ALWAYS call compile_cartridge. \
+                         AFTER compile succeeds, ALWAYS call test_cartridge with sample inputs to verify it works. \
+                         If test shows errors or wrong output, fix the code with edit_file and recompile."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "description": "URL slug for the cartridge (alphanumeric + hyphens, e.g. 'calculator', 'todo-app')"
                     },
                     "source_code": {
                         "type": "string",
-                        "description": "Rust source code for src/lib.rs. Must export x402_handle(request_ptr, request_len). Use x402_response() to send replies. Leave empty for default template."
+                        "description": "COMPLETE Rust source code for src/lib.rs. Write 100-300 lines. \
+                        NO stubs, NO placeholders, NO 'TODO' — every function must actually work. \
+                        For BACKEND: #[no_std], x402 host ABI (response, log, kv_get, kv_set, payment_info). \
+                        Use BufWriter to build HTML responses. Use find_json_str() to parse JSON bodies. \
+                        Use kv_read/kv_write for persistent state. Include full CSS in HTML responses. \
+                        For FRONTEND: leptos 0.6, wasm-bindgen 0.2.108, web-sys, serde, console_error_panic_hook. \
+                        MUST export: #[wasm_bindgen] pub fn init(selector: &str) using mount_to(el.unchecked_into(), App). \
+                        Leave empty for default template."
                     },
                     "description": {
                         "type": "string",
@@ -503,11 +558,15 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
                     },
                     "interactive": {
                         "type": "boolean",
-                        "description": "If true, creates an interactive framebuffer cartridge (60fps canvas with keyboard input). Use for pixel-based games."
+                        "description": "If true, creates an interactive framebuffer cartridge (60fps canvas, 320x240). \
+                        Uses RGBA framebuffer in static memory. Must export x402_init, x402_tick, x402_key_down, \
+                        x402_key_up, x402_get_framebuffer, x402_get_width, x402_get_height. \
+                        If you omit source_code, a working bouncing-square template is used — RECOMMENDED \
+                        for first attempt, then customize with edit_file + compile_cartridge."
                     },
                     "frontend": {
                         "type": "boolean",
-                        "description": "If true, creates a FRONTEND cartridge — a full Leptos app with DOM access. Uses leptos + web-sys + wasm-bindgen. Mounts into Studio preview. PREFER THIS for any app with UI (dashboards, tools, forms, games with HTML)."
+                        "description": "If true, creates a FRONTEND Leptos app. Available deps: leptos 0.6, wasm-bindgen 0.2.108, web-sys, serde, console_error_panic_hook. Must export init(selector)."
                     }
                 },
                 "required": ["slug"]
@@ -517,9 +576,11 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         tools.push(FunctionDeclaration {
             name: "compile_cartridge".to_string(),
             description: "Compile a cartridge from Rust source to WASM binary. \
-                         Auto-detects type: backend/interactive → wasm32-wasip1, \
+                         Auto-detects type: backend → wasm32-unknown-unknown, \
                          frontend (Leptos) → wasm32-unknown-unknown + wasm-bindgen. \
-                         Study compile errors carefully — they teach Rust patterns."
+                         First frontend compile may take 3-8 minutes (downloading deps). Subsequent builds are fast. \
+                         If compilation fails, read the error carefully, fix with edit_file, then recompile. \
+                         AFTER successful compile, ALWAYS test_cartridge to verify it actually works."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -536,7 +597,11 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
         tools.push(FunctionDeclaration {
             name: "test_cartridge".to_string(),
             description: "Test a compiled WASM cartridge by executing it with sample HTTP input. \
-                         Returns the cartridge's response (status, body, content-type)."
+                         Returns the cartridge's response (status, body, content-type). \
+                         ALWAYS test after compile to verify the cartridge works correctly. \
+                         For backend cartridges: test GET / for the main page, POST with sample JSON for actions. \
+                         If the response shows errors or wrong behavior, fix with edit_file and recompile. \
+                         Iterate until the cartridge works correctly — do not ship broken code."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -568,6 +633,55 @@ pub fn available_tools_with_git(coding_enabled: bool) -> Vec<FunctionDeclaration
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
+            }),
+        });
+
+        tools.push(FunctionDeclaration {
+            name: "visual_test_cartridge".to_string(),
+            description: "Visually test a cartridge by opening it in a browser, taking a screenshot, \
+                         and analyzing the rendering. The screenshot is sent to your vision input so \
+                         you can SEE what the cartridge looks like. Use after compile_cartridge to verify \
+                         the cartridge renders correctly and is functional. \
+                         If the screenshot shows errors, broken layouts, or wrong behavior, \
+                         fix with edit_file and recompile, then visual_test again."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "description": "The cartridge slug to visually test"
+                    },
+                    "expected_behavior": {
+                        "type": "string",
+                        "description": "What the cartridge should look like or do (helps analyze the screenshot)"
+                    }
+                },
+                "required": ["slug"]
+            }),
+        });
+
+        tools.push(FunctionDeclaration {
+            name: "create_cognitive_cartridge".to_string(),
+            description: "Create a cognitive cartridge — a hot-swappable WASM module for a cognitive system \
+                         (brain, cortex, genesis, hivemind, synthesis, unified). \
+                         Cognitive cartridges are routed through the CognitiveOrchestrator and can be \
+                         hot-swapped at runtime without restart. They receive JSON requests and return \
+                         JSON predictions. Use this to evolve your own cognitive architecture.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "system": {
+                        "type": "string",
+                        "description": "Cognitive system: brain, cortex, genesis, hivemind, synthesis, or unified",
+                        "enum": ["brain", "cortex", "genesis", "hivemind", "synthesis", "unified"]
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of the cognitive cartridge's purpose"
+                    }
+                },
+                "required": ["system"]
             }),
         });
 

@@ -1,11 +1,11 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 // ══════════════════════════════════════════════════════════════════════
 // TIER 2: DEBUGGING — Find and fix the bug
 // ══════════════════════════════════════════════════════════════════════
 
-pub(super) fn tier2_debugging() -> Vec<ExercismProblem> {
+pub(super) fn tier2_debugging() -> Vec<BenchmarkProblem> {
     vec![
         // ── 2.1: Fix Binary Search ───────────────────────────────────
         problem(

@@ -1,11 +1,11 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 // ══════════════════════════════════════════════════════════════════════
 // TIER 3: INDUCTION — Infer the algorithm from I/O examples only
 // ══════════════════════════════════════════════════════════════════════
 
-pub(super) fn tier3_induction() -> Vec<ExercismProblem> {
+pub(super) fn tier3_induction() -> Vec<BenchmarkProblem> {
     vec![
         // ── 3.1: Mystery — actually look-and-say sequence ────────────
         problem(

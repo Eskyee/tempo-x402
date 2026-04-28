@@ -1,16 +1,19 @@
 # tempo-x402-model
 
-Three ML models for autonomous agent intelligence. Pure Rust, no external ML frameworks.
+ML models for autonomous agent intelligence. Pure Rust, no external ML frameworks.
 
 ## Models
 
 | Model | File | Params | Purpose |
 |-------|------|--------|---------|
-| Plan Transformer | `transformer.rs` | 2.2M | Predict optimal plan step sequences |
-| Code Quality | `quality.rs` | 1.1M | Evaluate whether code diffs improve the codebase |
+| **Unified** | `unified.rs` | 16M | Shared encoder (3 layers D=384) + fast head (classify) + slow decoder (generate). ALL tasks. |
+| Code Gen | `codegen.rs` | 15M | 3+3 encoder-decoder, D=384, 8K BPE. Test→code generation. (Being absorbed into unified.) |
+| Plan Transformer | `transformer.rs` | 2.2M | Plan step sequences. (Being absorbed into unified.) |
+| Code Quality | `quality.rs` | 1.1M | Diff quality evaluation. (Being absorbed into unified.) |
+| BPE Tokenizer | `bpe.rs` | — | Byte-pair encoding, 8K vocab, shared by all models |
 | Diff Features | `diff_features.rs` | — | Extract 32-dim feature vectors from git diffs |
 
-Total: 4.5M parameters across brain (in soul crate) + these two models.
+The Unified Model is the target architecture: one encoder, all tasks, knowledge transfer.
 
 ## Architecture Principle
 
@@ -33,7 +36,7 @@ None. Pure math — no runtime deps beyond serde.
 
 ## Scaling
 
-Models should grow with data. Current sizes are right for ~300 training examples. As colony generates more data (thousands of commits, benchmark runs), scale hidden dims up. We have 8 GB RAM available — currently using 18 MB.
+Models should grow with data. CodeGen scaled to 55M params (D=640, 10 layers) to use available RAM (~220MB of 8GB). Trains on workspace source code, cargo registry deps, and benchmark solutions. File-based weight storage (codegen_model.bin) instead of sled for large models.
 
 ## If You're Changing...
 

@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// ABI version. Increment when host function signatures change.
-pub const ABI_VERSION: u32 = 1;
+/// v2: added x402_call for cartridge-calls-cartridge composition.
+pub const ABI_VERSION: u32 = 2;
 
 /// The kind of cartridge — determines compilation target and runtime.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -16,6 +17,9 @@ pub enum CartridgeKind {
     Interactive,
     /// Client-side Leptos app mounted to DOM via wasm-bindgen.
     Frontend,
+    /// Hot-swappable cognitive module (brain, cortex, genesis, etc.).
+    /// Prefixed `cognitive-` in slug, routed via CognitiveOrchestrator.
+    Cognitive,
 }
 
 impl std::fmt::Display for CartridgeKind {
@@ -24,17 +28,28 @@ impl std::fmt::Display for CartridgeKind {
             CartridgeKind::Backend => write!(f, "backend"),
             CartridgeKind::Interactive => write!(f, "interactive"),
             CartridgeKind::Frontend => write!(f, "frontend"),
+            CartridgeKind::Cognitive => write!(f, "cognitive"),
         }
     }
 }
 
 impl CartridgeKind {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+    /// True if this is a cognitive cartridge (hot-swappable brain module).
+    pub fn is_cognitive(&self) -> bool {
+        matches!(self, Self::Cognitive)
+    }
+}
+
+impl std::str::FromStr for CartridgeKind {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "frontend" => Self::Frontend,
             "interactive" => Self::Interactive,
+            "cognitive" => Self::Cognitive,
             _ => Self::Backend,
-        }
+        })
     }
 }
 

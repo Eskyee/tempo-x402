@@ -26,13 +26,12 @@ impl ThinkingLoop {
             }
 
             if self.config.coding_enabled {
-                // First goal: make a code change to prove the pipeline works
+                // First goal: run the benchmark to establish a baseline IQ score
                 seed_goals.push((
-                    "Make your first code change: read crates/tempo-x402-soul/src/housekeeping.rs, \
-                     then use edit_file to add a useful comment or improve a log message. \
-                     Run cargo_check to verify it compiles, then commit the change. \
-                     This establishes your ability to self-modify.",
-                    "A commit exists with a change to housekeeping.rs that passes cargo check",
+                    "Run the Opus IQ benchmark to establish your baseline intelligence score. \
+                     This is the most important thing you can do — measure your IQ before \
+                     attempting any code changes.",
+                    "Benchmark has run at least once and IQ/ELO score is recorded",
                     if self.config.initial_goal.is_some() {
                         4
                     } else {
@@ -57,7 +56,7 @@ impl ThinkingLoop {
                      Check what endpoints they offer, pick one, and make a real paid request. \
                      Record the result as a belief about inter-agent commerce.",
                     "discover_peers returns at least one peer with endpoints, call_peer succeeds on one of them",
-                    4,
+                    2, // Low priority — don't let this block benchmarking/coding
                 ));
             }
 
@@ -124,15 +123,12 @@ impl ThinkingLoop {
             exp
         };
         let cap_guidance = capability::capability_guidance(&self.db);
-        let benchmark_summary = crate::benchmark::benchmark_summary_for_prompt(&self.db);
         let opus_summary = crate::benchmark::opus_summary_for_prompt(&self.db);
         let brain_summary = crate::brain::brain_summary(&self.db);
         let cap_with_benchmark = {
             let mut s = cap_guidance;
             if !opus_summary.is_empty() {
                 s = format!("{s}\n\n{opus_summary}");
-            } else if !benchmark_summary.is_empty() {
-                s = format!("{s}\n\n{benchmark_summary}");
             }
             if !brain_summary.is_empty() {
                 s = format!("{s}\n\n{brain_summary}");

@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
@@ -13,6 +14,9 @@ use wasmtime::{Engine, Linker, Module, Store};
 use crate::abi;
 use crate::error::CartridgeError;
 use crate::manifest::{CartridgeRequest, CartridgeResult, PaymentContext};
+
+/// Maximum nesting depth for cartridge-calls-cartridge.
+const MAX_CALL_DEPTH: u32 = 3;
 
 /// Per-request state passed into WASM host functions.
 pub struct CartridgeState {
@@ -24,6 +28,8 @@ pub struct CartridgeState {
     pub response_status: u16,
     pub response_body: String,
     pub response_content_type: String,
+    /// Current nesting depth for x402_call (0 = top-level request).
+    pub call_depth: u32,
 }
 
 impl Default for CartridgeState {
@@ -34,6 +40,7 @@ impl Default for CartridgeState {
             response_status: 200,
             response_body: String::new(),
             response_content_type: "application/json".to_string(),
+            call_depth: 0,
         }
     }
 }
@@ -85,6 +92,13 @@ impl CartridgeEngine {
         self.modules.remove(slug);
     }
 
+    /// Atomic hot-swap: unload old module and load new one.
+    /// If loading fails, the old module is already gone (no rollback).
+    pub fn replace_module(&self, slug: &str, wasm_path: &Path) -> Result<(), CartridgeError> {
+        self.unload_module(slug);
+        self.load_module(slug, wasm_path)
+    }
+
     /// Unload all cached modules.
     pub fn unload_all(&self) {
         self.modules.clear();
@@ -95,14 +109,45 @@ impl CartridgeEngine {
         self.modules.iter().map(|e| e.key().clone()).collect()
     }
 
-    /// Execute a cartridge with a request. Returns the response.
+    /// Execute a cartridge with a request. Returns the response and the modified KV store.
     pub fn execute(
         &self,
         slug: &str,
         request: &CartridgeRequest,
         kv_preload: HashMap<String, String>,
         timeout_secs: u64,
-    ) -> Result<CartridgeResult, CartridgeError> {
+    ) -> Result<(CartridgeResult, HashMap<String, String>), CartridgeError> {
+        self.execute_with_depth(slug, request, kv_preload, timeout_secs, 0, None)
+    }
+
+    /// Execute a cartridge with nested call support.
+    /// `engine_arc` enables x402_call — child cartridges can invoke other cartridges.
+    pub fn execute_with_composition(
+        self: &Arc<Self>,
+        slug: &str,
+        request: &CartridgeRequest,
+        kv_preload: HashMap<String, String>,
+        timeout_secs: u64,
+    ) -> Result<(CartridgeResult, HashMap<String, String>), CartridgeError> {
+        self.execute_with_depth(slug, request, kv_preload, timeout_secs, 0, Some(Arc::clone(self)))
+    }
+
+    /// Execute with call depth tracking and optional engine for nested x402_call.
+    pub fn execute_with_depth(
+        &self,
+        slug: &str,
+        request: &CartridgeRequest,
+        kv_preload: HashMap<String, String>,
+        timeout_secs: u64,
+        call_depth: u32,
+        engine_arc: Option<Arc<CartridgeEngine>>,
+    ) -> Result<(CartridgeResult, HashMap<String, String>), CartridgeError> {
+        if call_depth > MAX_CALL_DEPTH {
+            return Err(CartridgeError::ExecutionFailed(format!(
+                "max nesting depth ({MAX_CALL_DEPTH}) exceeded"
+            )));
+        }
+
         let module = self
             .modules
             .get(slug)
@@ -111,18 +156,21 @@ impl CartridgeEngine {
         let start = Instant::now();
 
         // Create per-request store with limits
-        let mut state = CartridgeState::default();
-        state.kv_store = kv_preload;
-        state.payment = request.payment.clone();
+        let state = CartridgeState {
+            kv_store: kv_preload,
+            payment: request.payment.clone(),
+            call_depth,
+            ..Default::default()
+        };
 
         let mut store = Store::new(&self.engine, state);
         store
             .set_fuel(MAX_FUEL)
             .map_err(|e| CartridgeError::ExecutionFailed(format!("fuel setup: {e}")))?;
 
-        // Create linker and register host functions
+        // Create linker and register host functions (including x402_call if engine available)
         let mut linker = Linker::new(&self.engine);
-        abi::register_host_functions(&mut linker)?;
+        abi::register_host_functions(&mut linker, engine_arc)?;
 
         // Instantiate
         let instance = linker
@@ -130,10 +178,7 @@ impl CartridgeEngine {
             .map_err(|e| CartridgeError::ExecutionFailed(format!("instantiate: {e}")))?;
 
         // Call x402_init if exported
-        if let Some(init_fn) = instance
-            .get_typed_func::<(), i32>(&mut store, "x402_init")
-            .ok()
-        {
+        if let Ok(init_fn) = instance.get_typed_func::<(), i32>(&mut store, "x402_init") {
             let result = init_fn
                 .call(&mut store, ())
                 .map_err(|e| CartridgeError::ExecutionFailed(format!("x402_init: {e}")))?;
@@ -226,14 +271,16 @@ impl CartridgeEngine {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Read response from store state (set by x402_response host function)
+        // Read response and KV from store state
         let state = store.data();
-        Ok(CartridgeResult {
+        let result = CartridgeResult {
             status: state.response_status,
             body: state.response_body.clone(),
             content_type: state.response_content_type.clone(),
             duration_ms,
-        })
+        };
+        let kv_out = state.kv_store.clone();
+        Ok((result, kv_out))
     }
 
     /// Compute SHA-256 hash of a WASM binary file.

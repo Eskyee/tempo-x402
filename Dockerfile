@@ -68,10 +68,6 @@ COPY --from=builder /app/target/release/x402-gateway /usr/local/bin/x402-gateway
 COPY --from=builder /app/target/release/x402-node /usr/local/bin/x402-node
 COPY --from=builder /app/crates/tempo-x402-app/dist /app/spa
 
-# Copy source code for soul (file reading, code search, shell execution)
-COPY --from=builder /app /app/source
-ENV SOUL_WORKSPACE_ROOT=/app/source
-
 # Copy wasm-bindgen CLI for runtime frontend cartridge compilation
 COPY --from=builder /root/.trunk/tools/wasm-bindgen-0.2.108/wasm-bindgen /usr/local/bin/wasm-bindgen
 
@@ -88,13 +84,35 @@ RUN chmod -R a+rwX /usr/local/cargo/registry 2>/dev/null; \
     chmod -R a+rX /usr/local/rustup; \
     true
 
-RUN mkdir -p /data /data/workspace && \
-    chown -R app:app /app /data
+RUN chown -R app:app /app
 
 # Entrypoint: fix volume permissions then drop to non-root
 # NOTE: Do NOT chown cargo/registry here — too slow (60s+), blocks healthcheck.
 # Cargo registry is world-writable from the chmod in the build stage.
-RUN printf '#!/bin/sh\nmkdir -p /data /data/workspace\nchown -R app:app /data 2>/dev/null || true\nrm -rf /data/workspace/target /tmp/x402_cargo_target /data/workspace/.cargo 2>/dev/null || true\nBIN=${X402_BINARY:-x402-node}\nexec gosu app \"$BIN\" \"$@\"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN printf '#!/bin/sh\n\
+# Fix volume permissions\n\
+chown -R app:app /data 2>/dev/null || true\n\
+\n\
+# Remove old workspace from volume (moved to /tmp in v8)\n\
+rm -rf /data/workspace 2>/dev/null || true\n\
+# Remove legacy SQLite files from pre-v8\n\
+rm -f /data/soul.db /data/soul.db-wal /data/soul.db-shm 2>/dev/null || true\n\
+# Remove brain checkpoints (stored in sled now)\n\
+rm -rf /data/brain_checkpoints 2>/dev/null || true\n\
+# Remove cargo registry cache from volume (save disk space)\n\
+rm -rf /data/.cargo 2>/dev/null || true\n\
+\n\
+# Disk pressure relief: if volume is >80%% full, nuke the sled DB.\n\
+# Agent will rebuild from scratch — better than being stuck in a crash loop.\n\
+USAGE=$(df /data 2>/dev/null | tail -1 | awk \047{gsub(\"%%\",\"\",$5); print $5}\047)\n\
+if [ -n "$USAGE" ] && [ "$USAGE" -gt 80 ] 2>/dev/null; then\n\
+  echo "DISK PRESSURE: ${USAGE}%% used — purging sled DB for fresh start"\n\
+  rm -rf /data/soul.sled 2>/dev/null || true\n\
+fi\n\
+\n\
+BIN=${X402_BINARY:-x402-node}\n\
+exec gosu app "$BIN" "$@"\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENV SPA_DIR=/app/spa
 ENV PORT=4023

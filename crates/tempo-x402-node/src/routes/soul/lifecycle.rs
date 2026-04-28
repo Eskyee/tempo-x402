@@ -59,7 +59,7 @@ pub(super) async fn soul_cleanup(state: web::Data<NodeState>) -> HttpResponse {
     // 3. Soul DB cleanup
     if let Some(db) = &state.soul_db {
         let _ = db.prune_old_data();
-        let _ = db.wal_checkpoint();
+        let _ = db.flush_and_compact();
         cleaned.insert("soul_db_pruned".to_string(), serde_json::json!(true));
     }
 

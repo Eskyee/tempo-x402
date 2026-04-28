@@ -1,8 +1,8 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 /// Extended Tier 2: Debugging — find and fix bugs from failing tests.
-pub(super) fn tier2_ext() -> Vec<ExercismProblem> {
+pub(super) fn tier2_ext() -> Vec<BenchmarkProblem> {
     vec![
         problem(
             "opus-bugfix-binary-search",

@@ -1,28 +1,26 @@
-//! External SWE benchmark integration: Exercism Rust exercises.
+//! Opus IQ Benchmark — embedded benchmark for measuring coding intelligence.
 //!
-//! Uses real Exercism Rust exercises (100+ problems with cargo test suites)
-//! as an external reference for coding ability measurement. Exercises are
-//! fetched from the exercism/rust GitHub repo, solved by the agent's LLM,
-//! validated by running `cargo test` in a temp project, and scores are
-//! tracked over time with difficulty weighting.
+//! Uses 182 custom problems from the `opus_bench/` module, designed by Claude Opus 4.6.
+//! Problems are solved by the agent's LLM, validated by running `cargo test` in a temp
+//! project, and scores are tracked over time with difficulty weighting.
 //!
-//! Replaces the previous HumanEval (Python) benchmark which was trivially
-//! easy for modern LLMs (100% pass@1 for Gemini 3.1 Flash).
-//!
-//! Difficulty tiers (weighted scoring):
-//! - Easy (1x): basic string/math exercises
-//! - Medium (2x): data structures, algorithms, trait implementations
-//! - Hard (3x): complex systems, concurrency, unsafe code
+//! Five difficulty tiers measuring distinct cognitive capabilities:
+//! - Tier 1 (1x): Multi-constraint Rust coding (generation)
+//! - Tier 2 (2x): Find + fix bugs from failing tests (debugging)
+//! - Tier 3 (3x): Infer algorithm from I/O examples only (induction)
+//! - Tier 4 (4x): Logic puzzles + constraint satisfaction (reasoning)
+//! - Tier 5 (5x): Exploit known LLM failure modes (adversarial)
+//! - Tier 6 (8x): Multi-step algorithms, precision-critical (brutal)
 
 use serde::{Deserialize, Serialize};
 
 use crate::db::SoulDatabase;
 use crate::llm::LlmClient;
 
-/// An Exercism Rust exercise fetched from GitHub.
+/// A benchmark problem (embedded from opus_bench).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExercismProblem {
-    /// Exercise slug, e.g. "hello-world", "binary-search"
+pub struct BenchmarkProblem {
+    /// Exercise slug, e.g. "opus-stack", "opus-fsm"
     pub slug: String,
     /// The exercise description / instructions (markdown).
     pub instructions: String,
@@ -30,9 +28,9 @@ pub struct ExercismProblem {
     pub test_code: String,
     /// The starter source file (src/lib.rs stub).
     pub starter_code: String,
-    /// Difficulty: "easy", "medium", "hard"
+    /// Difficulty: "tier1", "tier2", "tier3", "tier4", "tier5", "tier6"
     pub difficulty: String,
-    /// The actual Cargo.toml from Exercism (has correct dependencies).
+    /// Cargo.toml content (std-only for Opus problems, may have deps for others).
     #[serde(default)]
     pub cargo_toml: String,
 }
@@ -81,95 +79,17 @@ pub struct HistoricalScore {
 /// Difficulty weight for scoring.
 fn difficulty_weight(difficulty: &str) -> f64 {
     match difficulty {
-        "hard" => 3.0,
-        "medium" => 2.0,
         "tier1" => 1.0,
         "tier2" => 2.0,
         "tier3" => 3.0,
         "tier4" => 4.0,
         "tier5" => 5.0,
+        "tier6" => 8.0,
         _ => 1.0,
     }
 }
 
-/// Classify an exercise slug into a difficulty tier.
-pub fn classify_difficulty(slug: &str) -> &'static str {
-    // Hard exercises: complex algorithms, systems programming, concurrency
-    const HARD: &[&str] = &[
-        "forth",
-        "react",
-        "circular-buffer",
-        "doubly-linked-list",
-        "parallel-letter-frequency",
-        "macros",
-        "xorcism",
-        "grep",
-        "book-store",
-        "dominoes",
-        "rectangles",
-        "two-bucket",
-        "variable-length-quantity",
-        "custom-set",
-        "nucleotide-codons",
-        "rail-fence-cipher",
-        "crypto-square",
-        "wordy",
-        "decimal",
-        "bowling",
-    ];
-    // Medium exercises: data structures, trait impls, moderate algorithms
-    const MEDIUM: &[&str] = &[
-        "binary-search",
-        "binary-search-tree",
-        "clock",
-        "simple-linked-list",
-        "robot-simulator",
-        "roman-numerals",
-        "all-your-base",
-        "allergies",
-        "anagram",
-        "bracket-push",
-        "matching-brackets",
-        "grade-school",
-        "tournament",
-        "pig-latin",
-        "queen-attack",
-        "minesweeper",
-        "ocr-numbers",
-        "alphametics",
-        "sublist",
-        "spiral-matrix",
-        "palindrome-products",
-        "pascals-triangle",
-        "sieve",
-        "largest-series-product",
-        "luhn",
-        "isbn-verifier",
-        "diamond",
-        "say",
-        "phone-number",
-        "run-length-encoding",
-        "accumulate",
-        "protein-translation",
-        "affine-cipher",
-        "rotational-cipher",
-        "simple-cipher",
-        "dot-dsl",
-        "rpn-calculator",
-        "poker",
-    ];
-
-    if HARD.contains(&slug) {
-        "hard"
-    } else if MEDIUM.contains(&slug) {
-        "medium"
-    } else {
-        "easy"
-    }
-}
-
 /// Reference scores: modern Rust benchmarks (2026 estimates).
-/// These are approximate — Exercism Rust is our own benchmark.
 pub const REFERENCE_SCORES: &[(&str, f64)] = &[
     ("Gemini 3.1 Flash (self)", 0.0), // will be filled by actual runs
     ("Claude Sonnet 4", 85.0),
@@ -178,303 +98,11 @@ pub const REFERENCE_SCORES: &[(&str, f64)] = &[
     ("Gemini 3 Pro", 80.0),
 ];
 
-/// GitHub raw content base URL for exercism/rust.
-const EXERCISM_BASE: &str =
-    "https://raw.githubusercontent.com/exercism/rust/main/exercises/practice";
+/// Shared target directory for all benchmark compilations.
+/// Deps compile once, then each exercise only recompiles its own lib + tests.
+const BENCHMARK_TARGET_DIR: &str = "/tmp/bench_target";
 
-/// GitHub API URL for listing exercises.
-const EXERCISM_API: &str = "https://api.github.com/repos/exercism/rust/contents/exercises/practice";
-
-/// Fetch the list of available exercise slugs from the Exercism repo.
-async fn fetch_exercise_list() -> Result<Vec<String>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    let resp = client
-        .get(EXERCISM_API)
-        .header("User-Agent", "tempo-x402-soul/1.8")
-        .header("Accept", "application/vnd.github.v3+json")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to list exercises: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("GitHub API returned {}", resp.status()));
-    }
-
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse exercise list: {e}"))?;
-
-    let entries = body
-        .as_array()
-        .ok_or("Expected JSON array from GitHub API")?;
-
-    let slugs: Vec<String> = entries
-        .iter()
-        .filter_map(|entry| {
-            let name = entry.get("name")?.as_str()?;
-            let entry_type = entry.get("type")?.as_str()?;
-            if entry_type == "dir" {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if slugs.is_empty() {
-        return Err("No exercises found in exercism/rust repo".into());
-    }
-
-    tracing::info!(count = slugs.len(), "Found Exercism Rust exercises");
-    Ok(slugs)
-}
-
-/// Fetch a single exercise's files from GitHub.
-async fn fetch_exercise(slug: &str) -> Result<ExercismProblem, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    // Fetch instructions
-    let instructions_url = format!("{EXERCISM_BASE}/{slug}/.docs/instructions.md");
-    let instructions = client
-        .get(&instructions_url)
-        .header("User-Agent", "tempo-x402-soul/1.8")
-        .send()
-        .await
-        .ok()
-        .and_then(|r| {
-            if r.status().is_success() {
-                Some(r)
-            } else {
-                None
-            }
-        });
-    let instructions = match instructions {
-        Some(r) => r.text().await.unwrap_or_default(),
-        None => String::new(),
-    };
-
-    // Fetch test file — try tests/{slug}.rs first, then tests/*.rs
-    let test_slug = slug.replace('-', "_");
-    let test_url = format!("{EXERCISM_BASE}/{slug}/tests/{test_slug}.rs");
-    let test_code = client
-        .get(&test_url)
-        .header("User-Agent", "tempo-x402-soul/1.8")
-        .send()
-        .await
-        .ok()
-        .and_then(|r| {
-            if r.status().is_success() {
-                Some(r)
-            } else {
-                None
-            }
-        });
-    let test_code = match test_code {
-        Some(r) => r.text().await.unwrap_or_default(),
-        None => String::new(),
-    };
-
-    if test_code.is_empty() {
-        return Err(format!("No test file found for exercise '{slug}'"));
-    }
-
-    // Fetch starter code (src/lib.rs)
-    let starter_url = format!("{EXERCISM_BASE}/{slug}/src/lib.rs");
-    let starter_code = client
-        .get(&starter_url)
-        .header("User-Agent", "tempo-x402-soul/1.8")
-        .send()
-        .await
-        .ok()
-        .and_then(|r| {
-            if r.status().is_success() {
-                Some(r)
-            } else {
-                None
-            }
-        });
-    let starter_code = match starter_code {
-        Some(r) => r.text().await.unwrap_or_default(),
-        None => String::new(),
-    };
-
-    // Fetch actual Cargo.toml (has correct dependencies)
-    let cargo_toml_url = format!("{EXERCISM_BASE}/{slug}/Cargo.toml");
-    let cargo_toml = client
-        .get(&cargo_toml_url)
-        .header("User-Agent", "tempo-x402-soul/1.8")
-        .send()
-        .await
-        .ok()
-        .and_then(|r| {
-            if r.status().is_success() {
-                Some(r)
-            } else {
-                None
-            }
-        });
-    let cargo_toml = match cargo_toml {
-        Some(r) => r.text().await.unwrap_or_default(),
-        None => String::new(),
-    };
-
-    let difficulty = classify_difficulty(slug).to_string();
-
-    Ok(ExercismProblem {
-        slug: slug.to_string(),
-        instructions,
-        test_code,
-        starter_code,
-        difficulty,
-        cargo_toml,
-    })
-}
-
-/// Fetch all Exercism Rust problems (with caching).
-pub async fn fetch_problems() -> Result<Vec<ExercismProblem>, String> {
-    let slugs = fetch_exercise_list().await?;
-
-    let mut problems = Vec::new();
-    let mut fetch_errors = 0u32;
-
-    for slug in &slugs {
-        match fetch_exercise(slug).await {
-            Ok(problem) => problems.push(problem),
-            Err(e) => {
-                fetch_errors += 1;
-                tracing::debug!(slug = %slug, error = %e, "Skipping exercise");
-                if fetch_errors > 20 {
-                    // Too many failures — probably rate limited
-                    tracing::warn!(
-                        "Too many fetch failures, stopping at {} exercises",
-                        problems.len()
-                    );
-                    break;
-                }
-            }
-        }
-    }
-
-    if problems.is_empty() {
-        return Err("No exercises fetched successfully".into());
-    }
-
-    tracing::info!(
-        count = problems.len(),
-        errors = fetch_errors,
-        "Fetched Exercism Rust exercises"
-    );
-    Ok(problems)
-}
-
-/// Pick a random subset of N problems for a benchmark run.
-pub fn sample_problems(problems: &[ExercismProblem], n: usize) -> Vec<ExercismProblem> {
-    sample_problems_smart(problems, n, &std::collections::HashSet::new())
-}
-
-/// Smart sampling: prioritize unsolved problems, mix in some solved ones for regression testing.
-/// `solved_slugs` is the set of problems already solved by the collective.
-pub fn sample_problems_smart(
-    problems: &[ExercismProblem],
-    n: usize,
-    solved_slugs: &std::collections::HashSet<String>,
-) -> Vec<ExercismProblem> {
-    use std::collections::HashSet;
-
-    if problems.len() <= n {
-        return problems.to_vec();
-    }
-
-    // Split into unsolved and solved
-    let unsolved: Vec<&ExercismProblem> = problems
-        .iter()
-        .filter(|p| !solved_slugs.contains(&p.slug))
-        .collect();
-    let solved: Vec<&ExercismProblem> = problems
-        .iter()
-        .filter(|p| solved_slugs.contains(&p.slug))
-        .collect();
-
-    // Tier-weighted sampling: harder problems sampled more often.
-    // This pushes agents toward tier 3+ (induction, reasoning, adversarial)
-    // instead of grinding easy tier 1-2 problems.
-    //
-    // Weight by difficulty: tier1=1, tier2=2, tier3=4, tier4=6, tier5=8, tier6=10
-    // Higher tiers get sampled proportionally more, accelerating learning on hard problems.
-    let tier_weight = |difficulty: &str| -> usize {
-        match difficulty {
-            "tier1" => 1,
-            "tier2" => 2,
-            "tier3" => 4,
-            "tier4" => 6,
-            "tier5" => 8,
-            "tier6" => 10,
-            _ => 1,
-        }
-    };
-
-    // 70% unsolved (push the frontier), 30% solved (regression testing)
-    let unsolved_target = (n * 7 / 10).min(unsolved.len()).max(1);
-    let solved_target = n.saturating_sub(unsolved_target).min(solved.len());
-    let remaining = n.saturating_sub(unsolved_target + solved_target);
-
-    let seed = chrono::Utc::now().timestamp() as usize;
-    let mut selected = Vec::new();
-
-    // Build weighted index for unsolved problems
-    let mut weighted_unsolved: Vec<(usize, usize)> = Vec::new(); // (original_idx, cumulative_weight)
-    let mut cum_weight = 0usize;
-    for (idx, p) in unsolved.iter().enumerate() {
-        cum_weight += tier_weight(&p.difficulty);
-        weighted_unsolved.push((idx, cum_weight));
-    }
-
-    // Weighted random sampling from unsolved
-    let mut picked: HashSet<usize> = HashSet::new();
-    let mut rng = seed;
-    let max_attempts = unsolved_target * 10;
-    let mut attempts = 0;
-    while picked.len() < unsolved_target && !weighted_unsolved.is_empty() && attempts < max_attempts
-    {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let target = rng % cum_weight.max(1);
-        // Binary search for the weighted index
-        let idx = weighted_unsolved
-            .iter()
-            .position(|(_, w)| *w > target)
-            .unwrap_or(0);
-        let orig_idx = weighted_unsolved[idx].0;
-        if picked.insert(orig_idx) {
-            selected.push(unsolved[orig_idx].clone());
-        }
-        attempts += 1;
-    }
-
-    // Sample from solved (regression — uniform, no tier weighting)
-    let mut indices: HashSet<usize> = HashSet::new();
-    rng = seed.wrapping_add(12345);
-    while indices.len() < (solved_target + remaining) && !solved.is_empty() {
-        rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1)) % solved.len();
-        indices.insert(rng);
-    }
-    for idx in &indices {
-        selected.push(solved[*idx].clone());
-    }
-
-    selected
-}
-
-/// Generate a solution for an Exercism Rust problem using the LLM.
+/// Generate a solution for a benchmark problem using the LLM.
 /// If `peer_failures` is provided, they're injected as negative context —
 /// the LLM sees what was tried before and why it failed, making it more
 /// likely to find a different, working approach. This is the core mechanism
@@ -482,52 +110,40 @@ pub fn sample_problems_smart(
 pub async fn generate_solution(
     llm: &LlmClient,
     db: &SoulDatabase,
-    problem: &ExercismProblem,
+    problem: &BenchmarkProblem,
     peer_failures: &[SharedFailure],
 ) -> Result<String, String> {
-    // Phase 3 weaning: try local codegen model first (saves Gemini credits).
-    // Feed it real problem context, not just the slug.
+    // Phase 3 weaning: DISABLED during benchmark.
+    // The encoder-decoder generate() does 512 autoregressive forward passes
+    // through the 15M model. Each pass processes the full context via cross-
+    // attention. On CPU this takes 5-10 minutes PER PROBLEM, completely
+    // blocking the benchmark session. Enable once loss drops below 4.0
+    // and generation is fast enough (<10s per problem).
+    //
+    // The codegen model still TRAINS on benchmark solutions — it just
+    // doesn't try to generate during the benchmark session itself.
     {
-        let codegen_prompt = format!(
-            "// Rust solution for: {}\n// Instructions: {}\n// Tests:\n{}\n\n",
-            problem.slug,
-            problem.instructions.chars().take(500).collect::<String>(),
-            problem.test_code.chars().take(1000).collect::<String>(),
-        );
-        let attempts: u64 = db.get_state("codegen_benchmark_attempts").ok().flatten()
-            .and_then(|s| s.parse().ok()).unwrap_or(0);
-        let successes: u64 = db.get_state("codegen_benchmark_successes").ok().flatten()
-            .and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        match crate::codegen::generate(db, &codegen_prompt, 512) {
-            Some(local_code) if local_code.len() > 30 => {
-                let _ = db.set_state("codegen_benchmark_attempts", &(attempts + 1).to_string());
-                // Log every attempt — we need visibility into codegen quality
-                tracing::info!(
-                    slug = %problem.slug,
-                    chars = local_code.len(),
-                    has_fn = local_code.contains("fn "),
-                    total_attempts = attempts + 1,
-                    total_successes = successes,
-                    "Codegen: local model produced output (weaning attempt)"
-                );
-                // Use it if it looks like Rust (lowered bar — let cargo test be the judge)
-                if local_code.contains("fn ") || local_code.contains("pub ") || local_code.contains("struct ") {
-                    // Flag that this solution came from local codegen (for success tracking)
+        let codegen_loss: f32 = db
+            .get_state("codegen_loss_display")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(99.0);
+        if codegen_loss < 4.0 {
+            let codegen_prompt = format!(
+                "// Rust solution for: {}\n// Instructions: {}\n// Tests:\n{}\n\n",
+                problem.slug,
+                problem.instructions.chars().take(500).collect::<String>(),
+                problem.test_code.chars().take(1000).collect::<String>(),
+            );
+            // Only try with max 64 tokens (fast) — don't burn 512 tokens at ~1s each
+            match crate::codegen::generate(db, &codegen_prompt, 64) {
+                Some(local_code) if local_code.len() > 30 => {
                     let _ = db.set_state("codegen_last_used", "1");
+                    tracing::info!(slug = %problem.slug, chars = local_code.len(), "Codegen: attempting local solution");
                     return Ok(local_code);
                 }
-                tracing::info!(slug = %problem.slug, "Codegen: output rejected (no Rust patterns)");
-            }
-            Some(local_code) => {
-                tracing::debug!(
-                    slug = %problem.slug,
-                    chars = local_code.len(),
-                    "Codegen: output too short, falling back to Gemini"
-                );
-            }
-            None => {
-                tracing::debug!(slug = %problem.slug, "Codegen: model not ready or produced nothing");
+                _ => {}
             }
         }
     }
@@ -535,8 +151,24 @@ pub async fn generate_solution(
     // Extract accumulated lessons from past benchmark runs
     let benchmark_hints = load_benchmark_hints(db);
 
+    // Per-problem context: what specifically failed last time for THIS problem
+    let problem_context = {
+        let key = format!("problem_context_{}", problem.slug);
+        db.get_state(&key)
+            .ok()
+            .flatten()
+            .map(|ctx| {
+                format!(
+                    "\n## Previous Failure Analysis for '{}'\n{}\n\
+                     Use this knowledge to avoid the same mistakes.\n",
+                    problem.slug, ctx
+                )
+            })
+            .unwrap_or_default()
+    };
+
     let base_system = format!(
-        "You are a Rust coding expert solving Exercism exercises. \
+        "You are a Rust coding expert solving benchmark exercises. \
          Output ONLY valid Rust code for src/lib.rs — no markdown, no explanation, no ```rust blocks. \
          The code must compile and pass ALL tests.\n\n\
          ## CRITICAL Rules\n\
@@ -557,7 +189,7 @@ pub async fn generate_solution(
          - Off-by-one errors in ranges and slicing\n\
          - For exercises with `Display` trait: check if tests call `.to_string()` or use `format!`\n\
          - For exercises with custom errors: check if tests pattern-match on error variants\n\
-         {}", benchmark_hints);
+         {}{}", benchmark_hints, problem_context);
 
     let system = if peer_failures.is_empty() {
         base_system
@@ -570,10 +202,7 @@ pub async fn generate_solution(
         )
     };
 
-    let mut prompt = format!(
-        "Implement this Exercism Rust exercise: {}\n\n",
-        problem.slug
-    );
+    let mut prompt = format!("Implement this Rust exercise: {}\n\n", problem.slug);
 
     if !problem.instructions.is_empty() {
         // Truncate very long instructions
@@ -605,15 +234,13 @@ pub async fn generate_solution(
     }
 
     // Inject peer failure context — the core collaborative intelligence mechanism
-    let task_id = format!("exercism/{}", problem.slug);
+    let task_id = format!("opus/{}", problem.slug);
     let relevant_failures: Vec<&SharedFailure> = peer_failures
         .iter()
         .filter(|f| f.task_id == task_id)
         .collect();
     if !relevant_failures.is_empty() {
-        prompt.push_str(
-            "## FAILED PREVIOUS ATTEMPTS — study these carefully\n\n",
-        );
+        prompt.push_str("## FAILED PREVIOUS ATTEMPTS — study these carefully\n\n");
         for (i, failure) in relevant_failures.iter().enumerate().take(2) {
             let sol_preview: String = failure.failed_solution.chars().take(1500).collect();
             // Parse test output to extract specific failing tests and assertions
@@ -680,7 +307,7 @@ pub async fn review_solution(
     req: &ReviewRequest,
 ) -> Result<ReviewResponse, String> {
     let system = "You are a meticulous Rust code reviewer. Your job is to find bugs in a solution \
-        to an Exercism exercise. You are NOT the author — you are an independent reviewer. \
+        to a benchmark exercise. You are NOT the author — you are an independent reviewer. \
         Be adversarial: assume the code has bugs and look hard for them. \
         Check: type mismatches, off-by-one errors, missing edge cases, wrong algorithm, \
         incorrect trait implementations, panic-prone code, integer overflow.\n\n\
@@ -689,7 +316,7 @@ pub async fn review_solution(
         If you find NO bugs and the code looks correct, respond:\n\
         {\"bugs_found\": [], \"suggested_fix\": \"\", \"likely_passes\": true}";
 
-    let mut prompt = format!("Review this Exercism Rust solution for: {}\n\n", req.slug);
+    let mut prompt = format!("Review this Rust solution for: {}\n\n", req.slug);
 
     if !req.instructions.is_empty() {
         let instr: String = req.instructions.chars().take(2000).collect();
@@ -763,18 +390,14 @@ pub async fn request_peer_review(peer_url: &str, req: &ReviewRequest) -> Option<
     resp.json::<ReviewResponse>().await.ok()
 }
 
-/// Shared target directory for all benchmark compilations.
-/// Deps compile once, then each exercise only recompiles its own lib + tests.
-const BENCHMARK_TARGET_DIR: &str = "/tmp/exercism_bench_target";
-
 /// Validate a solution by creating a temp Cargo project and running `cargo test`.
 /// Returns (passed, error_output).
 pub async fn validate_solution(
-    problem: &ExercismProblem,
+    problem: &BenchmarkProblem,
     solution: &str,
     _workspace_root: &str,
 ) -> (bool, String) {
-    let test_dir = format!("/tmp/exercism_bench_{}", problem.slug);
+    let test_dir = format!("/tmp/bench_{}", problem.slug);
 
     // Create temp Cargo project
     let setup = async {
@@ -783,8 +406,7 @@ pub async fn validate_solution(
         tokio::fs::create_dir_all(format!("{test_dir}/src")).await?;
         tokio::fs::create_dir_all(format!("{test_dir}/tests")).await?;
 
-        // Write Cargo.toml — use the actual one from Exercism (has correct deps),
-        // fall back to minimal if not available
+        // Write Cargo.toml — use the provided one if available, fall back to minimal
         let cargo_toml = if !problem.cargo_toml.is_empty() {
             problem.cargo_toml.clone()
         } else {
@@ -816,13 +438,52 @@ pub async fn validate_solution(
 
     // Run cargo test with shared target dir (deps compile once across all exercises)
     let output = tokio::time::timeout(
+        // Use spawn_blocking with std::process::Command + explicit kill.
+        // tokio::process::Command + tokio::time::timeout does NOT reliably
+        // kill cargo test — the timeout fires but the process keeps running,
+        // blocking the entire thinking loop for 60+ minutes.
         std::time::Duration::from_secs(120),
-        tokio::process::Command::new("cargo")
-            .arg("test")
-            .arg("--manifest-path")
-            .arg(format!("{test_dir}/Cargo.toml"))
-            .env("CARGO_TARGET_DIR", BENCHMARK_TARGET_DIR)
-            .output(),
+        tokio::task::spawn_blocking({
+            let test_dir = test_dir.clone();
+            move || {
+                let child = std::process::Command::new("cargo")
+                    .arg("test")
+                    .arg("--manifest-path")
+                    .arg(format!("{test_dir}/Cargo.toml"))
+                    .env("CARGO_TARGET_DIR", BENCHMARK_TARGET_DIR)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()?;
+
+                // Wait with timeout — KILL the process if it takes too long.
+                // std::process::Child::wait() blocks, so use a watchdog thread.
+                let pid = child.id();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+                let killed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let killed2 = killed.clone();
+
+                // Watchdog: kill the process after 90s
+                std::thread::spawn(move || {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    std::thread::sleep(remaining);
+                    // Send SIGKILL via kill command (works on Linux)
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .output();
+                    killed2.store(true, std::sync::atomic::Ordering::Relaxed);
+                });
+
+                let output = child.wait_with_output();
+                if killed.load(std::sync::atomic::Ordering::Relaxed) {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "cargo test killed after 90s",
+                    ))
+                } else {
+                    output
+                }
+            }
+        }),
     )
     .await;
 
@@ -830,16 +491,14 @@ pub async fn validate_solution(
     let _ = tokio::fs::remove_dir_all(&test_dir).await;
 
     match output {
-        Ok(Ok(out)) => {
+        Ok(Ok(Ok(out))) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
             if out.status.success() {
                 (true, String::new())
             } else {
-                // Extract useful error info
                 let error = if stderr.contains("error[E") {
-                    // Compilation error — show the first few errors
                     stderr
                         .lines()
                         .filter(|l| l.contains("error") || l.contains("-->"))
@@ -847,7 +506,6 @@ pub async fn validate_solution(
                         .collect::<Vec<_>>()
                         .join("\n")
                 } else if stdout.contains("FAILED") {
-                    // Test failure
                     stdout.chars().take(500).collect()
                 } else {
                     format!(
@@ -859,12 +517,15 @@ pub async fn validate_solution(
                 (false, error)
             }
         }
-        Ok(Err(e)) => (false, format!("exec error: {e}")),
-        Err(_) => {
-            // Clean shared target dir on timeout to prevent cascade failures
-            let _ = tokio::fs::remove_dir_all(BENCHMARK_TARGET_DIR).await;
-            (false, "timeout (120s)".into())
+        Ok(Ok(Err(e))) => {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                (false, "cargo test killed after 90s".into())
+            } else {
+                (false, format!("exec error: {e}"))
+            }
         }
+        Ok(Err(_)) => (false, "spawn_blocking panicked".into()),
+        Err(_) => (false, "outer timeout (120s)".into()),
     }
 }
 
@@ -917,451 +578,10 @@ pub fn get_peer_url(db: &SoulDatabase) -> Option<String> {
     None
 }
 
-/// Run a benchmark session: fetch problems, solve N, validate, record results.
-/// Returns the weighted pass rate for this session.
-pub async fn run_benchmark_session(
-    llm: &LlmClient,
-    db: &SoulDatabase,
-    workspace_root: &str,
-    sample_size: usize,
-) -> Result<f64, String> {
-    tracing::info!(
-        sample_size = sample_size,
-        "Starting Exercism Rust benchmark session"
-    );
-
-    // Try to load cached problems, fetch if not cached.
-    // Invalidate cache if problems lack cargo_toml (old cache format).
-    let problems = match load_cached_problems(db) {
-        Some(p) if p.len() >= 20 && p.iter().any(|prob| !prob.cargo_toml.is_empty()) => p,
-        _ => {
-            let fetched = fetch_problems().await?;
-            cache_problems(db, &fetched);
-            fetched
-        }
-    };
-
-    // Build set of already-solved problems (own + collective) to prioritize unsolved
-    let solved_slugs: std::collections::HashSet<String> = db
-        .get_all_benchmark_runs()
-        .unwrap_or_default()
-        .iter()
-        .filter(|r| r.passed)
-        .map(|r| r.entry_point.clone())
-        .collect();
-    let sample = sample_problems_smart(&problems, sample_size, &solved_slugs);
-    tracing::info!(
-        total_problems = problems.len(),
-        solved = solved_slugs.len(),
-        sampled = sample.len(),
-        "Benchmark: smart sampling (80% unsolved, 20% regression)"
-    );
-    let mut total_weight = 0.0f64;
-    let mut earned_weight = 0.0f64;
-    let mut passed = 0u32;
-    let mut attempted = 0u32;
-    let mut rescued = 0u32; // solved BECAUSE of peer failure context
-    let mut review_improved = 0u32; // solved BECAUSE peer review caught bugs
-    let now = chrono::Utc::now().timestamp();
-
-    // Collect self-play training data for the brain
-    let mut brain_attempts: Vec<crate::brain::BenchmarkAttemptContext> = Vec::new();
-    let current_elo = crate::elo::load_rating(db) as f32;
-    let current_pass_at_1 = db
-        .get_state("benchmark_score")
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str::<BenchmarkScore>(&s).ok())
-        .map(|s| s.pass_at_1 as f32)
-        .unwrap_or(0.0);
-    let current_peer_count = load_peer_failures(db).len() as u32; // rough peer signal
-
-    // Load peer failures for collaborative solving
-    let peer_failures = load_peer_failures(db);
-    let peer_failure_task_ids: std::collections::HashSet<&str> =
-        peer_failures.iter().map(|f| f.task_id.as_str()).collect();
-
-    // Get peer URL for adversarial review (if any peer is live)
-    let peer_url = get_peer_url(db);
-
-    for problem in &sample {
-        attempted += 1;
-        let weight = difficulty_weight(&problem.difficulty);
-        total_weight += weight;
-        let task_id = format!("exercism/{}", problem.slug);
-        let has_peer_context = peer_failure_task_ids.contains(task_id.as_str());
-
-        // Load own past failures for this specific problem — avoid repeating mistakes
-        let own_failures: Vec<SharedFailure> = db
-            .get_all_benchmark_runs()
-            .unwrap_or_default()
-            .iter()
-            .filter(|r| !r.passed && r.task_id == task_id && !r.generated_solution.is_empty())
-            .take(2)
-            .map(|r| SharedFailure {
-                task_id: r.task_id.clone(),
-                entry_point: r.entry_point.clone(),
-                failed_solution: r.generated_solution.clone(),
-                error_output: r.error_output.clone(),
-                attempted_by: "self (previous attempt)".to_string(),
-            })
-            .collect();
-
-        // Combine own + peer failures for maximum context
-        let mut all_failures: Vec<SharedFailure> = own_failures;
-        all_failures.extend(
-            peer_failures
-                .iter()
-                .filter(|f| f.task_id == task_id)
-                .cloned(),
-        );
-
-        // Generate solution (with own + peer failure context + accumulated hints)
-        let solution = match generate_solution(llm, db, problem, &all_failures).await {
-            Ok(s) => s,
-            Err(e) => {
-                let is_api_error = e.contains("429")
-                    || e.contains("quota")
-                    || e.contains("rate limit")
-                    || e.contains("Too Many Requests")
-                    || e.contains("503")
-                    || e.contains("500");
-                if is_api_error {
-                    // API unavailable — don't count this as an attempt.
-                    // Poisoning the score with 0% when the LLM can't respond
-                    // teaches the brain that problems are unsolvable.
-                    attempted -= 1;
-                    total_weight -= weight;
-                    tracing::warn!(
-                        slug = %problem.slug,
-                        error = %e,
-                        "Benchmark: LLM API error — NOT counting as attempt"
-                    );
-                } else {
-                    tracing::warn!(
-                        slug = %problem.slug,
-                        difficulty = %problem.difficulty,
-                        error = %e,
-                        "Benchmark: failed to generate solution"
-                    );
-                    record_run(db, problem, false, "", &e, 0, &task_id);
-                }
-                continue;
-            }
-        };
-
-        // === ADVERSARIAL VERIFICATION ===
-        // Agent A generated the solution. Now agent B reviews it.
-        // If the reviewer finds bugs and provides a fix, use the fix.
-        // This breaks the correlation of errors — the reviewer uses a
-        // fundamentally different prompt (critic, not creator).
-        let mut used_review_fix = false;
-        let final_solution = if let Some(ref peer) = peer_url {
-            let review_req = ReviewRequest {
-                slug: problem.slug.clone(),
-                instructions: problem.instructions.chars().take(2000).collect(),
-                test_code: problem.test_code.clone(),
-                solution: solution.clone(),
-            };
-
-            match request_peer_review(peer, &review_req).await {
-                Some(review) if !review.likely_passes && !review.suggested_fix.is_empty() => {
-                    tracing::info!(
-                        slug = %problem.slug,
-                        bugs = review.bugs_found.len(),
-                        "Benchmark: peer review found bugs, using suggested fix"
-                    );
-                    used_review_fix = true;
-                    review.suggested_fix
-                }
-                Some(review) => {
-                    tracing::debug!(
-                        slug = %problem.slug,
-                        likely_passes = review.likely_passes,
-                        bugs = review.bugs_found.len(),
-                        "Benchmark: peer review complete"
-                    );
-                    solution.clone()
-                }
-                None => {
-                    tracing::debug!(
-                        slug = %problem.slug,
-                        "Benchmark: peer unreachable for review, using original solution"
-                    );
-                    solution.clone()
-                }
-            }
-        } else {
-            solution.clone()
-        };
-
-        // Validate via cargo test — with retry on failure (self-play)
-        let start = std::time::Instant::now();
-        let (mut success, mut error_output) =
-            validate_solution(problem, &final_solution, workspace_root).await;
-
-        // Self-play retry: if attempt fails, retry up to 3 times with accumulated error context.
-        // Each retry sees ALL previous failures for this problem, building understanding.
-        // This is how the swarm outperforms a single model call — iterative refinement.
-        let max_retries = 3;
-        let mut retry_count = 0;
-        let mut last_solution = final_solution.clone();
-        let mut retry_context = all_failures.clone();
-        while !success && !error_output.is_empty() && retry_count < max_retries {
-            retry_count += 1;
-            tracing::info!(
-                slug = %problem.slug,
-                retry = retry_count,
-                max_retries,
-                "Benchmark: attempt failed, retrying with error context (self-play)"
-            );
-            retry_context.push(SharedFailure {
-                task_id: task_id.clone(),
-                entry_point: problem.slug.clone(),
-                failed_solution: last_solution.clone(),
-                error_output: error_output.clone(),
-                attempted_by: format!("self (retry {})", retry_count),
-            });
-            if let Ok(retry_solution) = generate_solution(llm, db, problem, &retry_context).await {
-                let (retry_ok, retry_err) =
-                    validate_solution(problem, &retry_solution, workspace_root).await;
-                if retry_ok {
-                    tracing::info!(
-                        slug = %problem.slug,
-                        retry = retry_count,
-                        "Benchmark: PASS on retry {} (self-play worked!)",
-                        retry_count
-                    );
-                    // Self-play data amplification: save every passing solution variant
-                    crate::codegen::record_training_example(
-                        db, &retry_solution,
-                        &format!("selfplay:{}/r{}", problem.slug, retry_count),
-                    );
-                    success = true;
-                    error_output = String::new();
-                } else {
-                    error_output = retry_err;
-                    last_solution = retry_solution;
-                }
-            } else {
-                break; // LLM call failed, no point retrying
-            }
-        }
-
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-
-        if success {
-            passed += 1;
-            earned_weight += weight;
-
-            // Phase 3: accumulate training data for local code gen model.
-            // Store actual solution code — ground truth Rust that passed tests.
-            {
-                let count: u64 = db
-                    .get_state("codegen_training_count")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                let _ = db.set_state("codegen_training_count", &(count + 1).to_string());
-
-                // Append solution to capped array (max 1000, prune oldest)
-                let entry = serde_json::json!({
-                    "problem_id": problem.slug,
-                    "difficulty": problem.difficulty,
-                    "code": last_solution,
-                    "ts": chrono::Utc::now().timestamp(),
-                });
-                let mut solutions: Vec<serde_json::Value> = db
-                    .get_state("codegen_solutions")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                solutions.push(entry);
-                // Keep last 1000 solutions (prune oldest)
-                if solutions.len() > 1000 {
-                    solutions.drain(..solutions.len() - 1000);
-                }
-                if let Ok(json) = serde_json::to_string(&solutions) {
-                    let _ = db.set_state("codegen_solutions", &json);
-                }
-            }
-
-            if used_review_fix {
-                review_improved += 1;
-                tracing::info!(
-                    slug = %problem.slug,
-                    difficulty = %problem.difficulty,
-                    "Benchmark: PASS (IMPROVED by peer review — 2>1 proof)"
-                );
-            } else if has_peer_context {
-                rescued += 1;
-                tracing::info!(
-                    slug = %problem.slug,
-                    difficulty = %problem.difficulty,
-                    "Benchmark: PASS (RESCUED by peer failure context)"
-                );
-            } else {
-                tracing::info!(
-                    slug = %problem.slug,
-                    difficulty = %problem.difficulty,
-                    "Benchmark: PASS"
-                );
-            }
-        } else {
-            // If the review fix also failed, try the original (maybe reviewer made it worse)
-            if used_review_fix {
-                let (orig_success, orig_error) =
-                    validate_solution(problem, &solution, workspace_root).await;
-                if orig_success {
-                    passed += 1;
-                    earned_weight += weight;
-                    tracing::info!(
-                        slug = %problem.slug,
-                        "Benchmark: PASS (original — reviewer's fix was WRONG)"
-                    );
-                    record_run(db, problem, true, &solution, "", elapsed_ms, &task_id);
-                    continue;
-                }
-                tracing::info!(
-                    slug = %problem.slug,
-                    difficulty = %problem.difficulty,
-                    error = %orig_error.chars().take(100).collect::<String>(),
-                    "Benchmark: FAIL (both original and review fix failed)"
-                );
-            } else {
-                tracing::info!(
-                    slug = %problem.slug,
-                    difficulty = %problem.difficulty,
-                    error = %error_output.chars().take(100).collect::<String>(),
-                    has_peer_context = has_peer_context,
-                    "Benchmark: FAIL"
-                );
-            }
-        }
-
-        // Record brain self-play training data for each attempt
-        // First attempt
-        brain_attempts.push(crate::brain::BenchmarkAttemptContext {
-            difficulty: problem.difficulty.clone(),
-            problem_slug: problem.slug.clone(),
-            passed: success && retry_count == 0,
-            retry_number: 0,
-            had_peer_context: has_peer_context,
-            had_peer_review: used_review_fix,
-            compiled: success
-                || !error_output.contains("Compiling")
-                || error_output.contains("test"),
-            elo_rating: current_elo,
-            pass_at_1: current_pass_at_1,
-            peer_count: current_peer_count,
-        });
-        // Record each retry as a separate training example
-        for r in 0..retry_count {
-            brain_attempts.push(crate::brain::BenchmarkAttemptContext {
-                difficulty: problem.difficulty.clone(),
-                problem_slug: problem.slug.clone(),
-                passed: success && r + 1 == retry_count,
-                retry_number: r + 1,
-                had_peer_context: has_peer_context,
-                had_peer_review: used_review_fix,
-                compiled: true, // retries only happen after compilation
-                elo_rating: current_elo,
-                pass_at_1: current_pass_at_1,
-                peer_count: current_peer_count,
-            });
-        }
-
-        record_run(
-            db,
-            problem,
-            success,
-            &final_solution,
-            &error_output,
-            elapsed_ms,
-            &task_id,
-        );
-    }
-
-    // Guard: if no problems were actually attempted (all API errors), skip scoring.
-    // Recording 0% when the LLM is unavailable poisons ELO, brain weights, and IQ.
-    if attempted == 0 {
-        tracing::warn!(
-            "Benchmark: ALL problems skipped due to API errors — NOT updating score. \
-             Fix the LLM API key/quota and scores will resume."
-        );
-        return Ok(0.0);
-    }
-
-    // Weighted score: difficulty-adjusted pass rate
-    let weighted_score = if total_weight > 0.0 {
-        earned_weight / total_weight * 100.0
-    } else {
-        0.0
-    };
-
-    let raw_rate = if attempted > 0 {
-        passed as f64 / attempted as f64 * 100.0
-    } else {
-        0.0
-    };
-
-    // Store score
-    update_score(db, weighted_score, raw_rate, attempted, passed, now);
-
-    // Clean up shared target dir to reclaim disk space
-    let _ = tokio::fs::remove_dir_all(BENCHMARK_TARGET_DIR).await;
-
-    tracing::info!(
-        weighted = format!("{:.1}%", weighted_score),
-        raw = format!("{:.1}%", raw_rate),
-        passed = passed,
-        attempted = attempted,
-        rescued = rescued,
-        review_improved = review_improved,
-        peer_failures_available = peer_failures.len(),
-        has_review_peer = peer_url.is_some(),
-        "Exercism Rust benchmark session complete"
-    );
-
-    // Always record multi-agent contribution tracking (even if 0 — shows baseline)
-    {
-        let _ = db.set_state(
-            "benchmark_multiagent",
-            &serde_json::json!({
-                "rescued": rescued,
-                "review_improved": review_improved,
-                "total_passed": passed,
-                "total_attempted": attempted,
-                "solo_passed": passed - rescued - review_improved,
-                "multiagent_contribution_pct": if passed > 0 {
-                    (rescued + review_improved) as f64 / passed as f64 * 100.0
-                } else {
-                    0.0
-                },
-                "has_review_peer": peer_url.is_some(),
-                "peer_failures_available": peer_failures.len(),
-                "measured_at": now,
-            })
-            .to_string(),
-        );
-    }
-
-    // Update benchmark hints from failure analysis — improves future sessions
-    update_benchmark_hints(db);
-
-    // Train brain on self-play data — the AlphaZero loop
-    // Each benchmark attempt becomes a training signal for the brain
-    crate::brain::train_on_benchmark_selfplay(db, &brain_attempts);
-
-    Ok(weighted_score)
-}
-
 /// Record a single benchmark run.
 fn record_run(
     db: &SoulDatabase,
-    problem: &ExercismProblem,
+    problem: &BenchmarkProblem,
     passed: bool,
     solution: &str,
     error: &str,
@@ -1459,21 +679,6 @@ pub fn load_score(db: &SoulDatabase) -> Option<BenchmarkScore> {
         .and_then(|s| serde_json::from_str(&s).ok())
 }
 
-/// Cache fetched problems in soul_state (avoid re-fetching).
-fn cache_problems(db: &SoulDatabase, problems: &[ExercismProblem]) {
-    if let Ok(json) = serde_json::to_string(problems) {
-        let _ = db.set_state("exercism_problems_cache", &json);
-    }
-}
-
-/// Load cached problems.
-fn load_cached_problems(db: &SoulDatabase) -> Option<Vec<ExercismProblem>> {
-    db.get_state("exercism_problems_cache")
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str(&s).ok())
-}
-
 /// Strip markdown code blocks from LLM output.
 fn strip_code_blocks(s: &str) -> String {
     let s = s.trim();
@@ -1518,12 +723,12 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    // Don't benchmark in first 5 cycles — minimal warmup
-    if total_cycles < 5 {
+    // Don't benchmark in first 3 cycles — minimal warmup
+    if total_cycles < 3 {
         return false;
     }
 
-    // Check cooldown — don't run more than once per 15 minutes
+    // Check cooldown — don't run more than once per 5 minutes
     // The benchmark IS the training loop. Run it frequently.
     let last_benchmark: i64 = db
         .get_state("last_benchmark_at")
@@ -1532,8 +737,6 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let now = chrono::Utc::now().timestamp();
-    // 5-minute cooldown (was 15 min). Each run is ~2.5 min (15 problems × 10s).
-    // Benchmark is the core learning heartbeat — run it frequently.
     if now - last_benchmark < 300 {
         return false;
     }
@@ -1550,35 +753,17 @@ pub fn should_run_benchmark(db: &SoulDatabase, interval: u64) -> bool {
     total_cycles / interval > last_benchmark_cycle / interval
 }
 
-/// Run benchmark every 15 cycles — conserve Gemini credits while still measuring.
-/// Each run samples 15 problems × 1 Gemini call each = 15 API calls per session.
-pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 15;
+/// Run benchmark every 5 cycles — benchmarking IS the core training loop.
+/// Each run samples 15 problems x 1 Gemini call each = 15 API calls per session.
+pub const DEFAULT_BENCHMARK_INTERVAL: u64 = 5;
 /// Sample 15 problems per session (was 10) — broader coverage per run.
-pub const DEFAULT_SAMPLE_SIZE: usize = 15;
-
-/// Benchmark mode: Exercism (external, Rust exercises) or Opus (embedded, IQ-calibrated).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BenchmarkMode {
-    Exercism,
-    Opus,
-}
-
-impl BenchmarkMode {
-    pub fn from_env() -> Self {
-        let raw = std::env::var("SOUL_BENCHMARK_MODE").unwrap_or_default();
-        let trimmed = raw.trim().to_lowercase();
-        let mode = if trimmed == "opus" {
-            BenchmarkMode::Opus
-        } else {
-            BenchmarkMode::Exercism
-        };
-        tracing::info!(raw = %raw, mode = ?mode, "Benchmark mode selected");
-        mode
-    }
-}
+/// 10 problems per session. Was 15 but benchmark has a 10-min timeout.
+/// Each problem = Gemini call (~10s) + cargo test (~30s) + retry (~30s) = ~70s.
+/// 10 × 70s = ~700s = ~12 min. Tight but usually completes within timeout.
+pub const DEFAULT_SAMPLE_SIZE: usize = 10;
 
 /// Run a benchmark session using Opus IQ problems (embedded, no network).
-/// Same pipeline as Exercism: solve via LLM, validate via cargo test, record, train brain.
+/// Solve via LLM, validate via cargo test, record, train brain.
 pub async fn run_opus_benchmark_session(
     llm: &LlmClient,
     db: &SoulDatabase,
@@ -1589,6 +774,30 @@ pub async fn run_opus_benchmark_session(
         sample_size = sample_size,
         "Starting Opus IQ benchmark session"
     );
+
+    // Pre-flight: check disk space — cargo test needs ~500MB for compilation
+    // Clean any stale benchmark artifacts first
+    let _ = tokio::fs::remove_dir_all(BENCHMARK_TARGET_DIR).await;
+    let disk_ok = tokio::process::Command::new("df")
+        .args(["--output=pcent", "/tmp"])
+        .output()
+        .await
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let pct: u64 = s
+                .lines()
+                .last()
+                .unwrap_or("0")
+                .trim()
+                .trim_end_matches('%')
+                .parse()
+                .unwrap_or(0);
+            pct < 90
+        })
+        .unwrap_or(true); // if df fails, try anyway
+    if !disk_ok {
+        return Err("Disk usage above 90% — skipping benchmark to avoid hang".into());
+    }
 
     let problems = crate::opus_bench::load_embedded_problems();
     if problems.is_empty() {
@@ -1604,7 +813,7 @@ pub async fn run_opus_benchmark_session(
         .collect();
 
     // Count consecutive failures per problem (only for never-solved problems).
-    // Problems with 5+ consecutive failures are "stuck" — deprioritize them.
+    // Problems with 3+ consecutive failures are "stuck" — deprioritize them.
     let stuck_slugs: std::collections::HashSet<String> = {
         let mut fail_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -1623,7 +832,7 @@ pub async fn run_opus_benchmark_session(
         }
         fail_counts
             .into_iter()
-            .filter(|(_, count)| *count >= 5)
+            .filter(|(_, count)| *count >= 3) // 3 consecutive failures = stuck, move on
             .map(|(slug, _)| slug)
             .collect()
     };
@@ -1632,14 +841,14 @@ pub async fn run_opus_benchmark_session(
         tracing::info!(
             stuck = stuck_slugs.len(),
             slugs = %stuck_slugs.iter().cloned().collect::<Vec<_>>().join(", "),
-            "Opus: deprioritizing stuck problems (5+ consecutive failures, never solved)"
+            "Opus: deprioritizing stuck problems (3+ consecutive failures, never solved)"
         );
     }
 
     // Stratified sampling: guarantee at least 1 problem from EACH tier,
     // then fill remaining slots. Skip stuck problems (except 1 retry slot).
     let sample = {
-        let mut by_tier: std::collections::HashMap<String, Vec<&ExercismProblem>> =
+        let mut by_tier: std::collections::HashMap<String, Vec<&BenchmarkProblem>> =
             std::collections::HashMap::new();
         for p in &problems {
             by_tier.entry(p.difficulty.clone()).or_default().push(p);
@@ -1655,7 +864,7 @@ pub async fn run_opus_benchmark_session(
         for tier in &tiers {
             if let Some(tier_problems) = by_tier.get(tier) {
                 // Prefer non-stuck problems for tier guarantee
-                let non_stuck: Vec<&&ExercismProblem> = tier_problems
+                let non_stuck: Vec<&&BenchmarkProblem> = tier_problems
                     .iter()
                     .filter(|p| !stuck_slugs.contains(&p.slug))
                     .collect();
@@ -1665,17 +874,16 @@ pub async fn run_opus_benchmark_session(
                     non_stuck
                 };
                 if !pool.is_empty() {
-                    rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1))
-                        % pool.len();
+                    rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1)) % pool.len();
                     selected.push((*pool[rng]).clone());
                 }
             }
         }
 
-        // Phase 2: fill remaining slots from unsolved NON-STUCK problems, harder first
+        // Phase 2: fill remaining slots from unsolved NON-STUCK problems, easier first
         let selected_slugs: std::collections::HashSet<String> =
             selected.iter().map(|p| p.slug.clone()).collect();
-        let mut remaining: Vec<&ExercismProblem> = problems
+        let mut remaining: Vec<&BenchmarkProblem> = problems
             .iter()
             .filter(|p| {
                 !selected_slugs.contains(&p.slug)
@@ -1683,7 +891,8 @@ pub async fn run_opus_benchmark_session(
                     && !stuck_slugs.contains(&p.slug)
             })
             .collect();
-        remaining.sort_by(|a, b| b.difficulty.cmp(&a.difficulty));
+        // Sort easier problems first — solve the solvable ones to generate training data.
+        remaining.sort_by(|a, b| a.difficulty.cmp(&b.difficulty));
 
         let slots_left = sample_size.saturating_sub(selected.len() + 1); // reserve 1 for retry
         for p in remaining.iter().take(slots_left) {
@@ -1692,13 +901,13 @@ pub async fn run_opus_benchmark_session(
 
         // Phase 3: 1 retry slot for a stuck problem (occasional re-attempt)
         if !stuck_slugs.is_empty() {
-            let stuck_problems: Vec<&ExercismProblem> = problems
+            let stuck_problems: Vec<&BenchmarkProblem> = problems
                 .iter()
                 .filter(|p| stuck_slugs.contains(&p.slug))
                 .collect();
             if !stuck_problems.is_empty() {
-                rng = (rng.wrapping_mul(6364136223846793005).wrapping_add(1))
-                    % stuck_problems.len();
+                rng =
+                    (rng.wrapping_mul(6364136223846793005).wrapping_add(1)) % stuck_problems.len();
                 selected.push(stuck_problems[rng].clone());
             }
         }
@@ -1829,25 +1038,41 @@ pub async fn run_opus_benchmark_session(
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         // Check if codegen was used for this solution
-        let codegen_used = db.get_state("codegen_last_used").ok().flatten()
-            .map(|v| v == "1").unwrap_or(false);
+        let codegen_used = db
+            .get_state("codegen_last_used")
+            .ok()
+            .flatten()
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let _ = db.set_state("codegen_last_used", "0"); // Reset flag
 
         if success {
             passed += 1;
             earned_weight += weight;
 
-            // Phase 3: store passing solution for codegen training
-            crate::codegen::record_training_example(
+            // Phase 3: store passing solution WITH test code for encoder-decoder training.
+            // The test code is the CONTEXT (encoder input), the solution is the TARGET (decoder output).
+            crate::codegen::record_training_example_with_context(
                 db,
                 &last_solution,
                 &format!("opus/{}", problem.slug),
+                Some(&problem.test_code),
             );
+
+            // NOTE: Alternative solution generation REMOVED from benchmark session.
+            // It was adding ~33 minutes (2 alts × 11 solved × 90s each), making
+            // benchmark sessions take 60+ minutes and timing out. Training data
+            // comes from benchmark solutions + workspace + deps. If we need more
+            // diversity, run a separate data generation step outside the benchmark.
 
             // Track codegen success
             if codegen_used {
-                let s: u64 = db.get_state("codegen_benchmark_successes").ok().flatten()
-                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+                let s: u64 = db
+                    .get_state("codegen_benchmark_successes")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
                 let _ = db.set_state("codegen_benchmark_successes", &(s + 1).to_string());
                 tracing::info!(
                     slug = %problem.slug,
@@ -1867,10 +1092,30 @@ pub async fn run_opus_benchmark_session(
             );
         }
 
+        // Save per-problem failure context for next attempt (persistent across sessions)
+        if !success && !error_output.is_empty() {
+            let key = format!("problem_context_{}", problem.slug);
+            let failures = parse_test_failures(&error_output);
+            let ctx = if failures.is_empty() {
+                format!(
+                    "Last error ({}): {}",
+                    chrono::Utc::now().format("%Y-%m-%d"),
+                    error_output.chars().take(300).collect::<String>()
+                )
+            } else {
+                format!("Last attempt ({}) failed these tests:\n{}\nTry a different algorithm or approach.",
+                    chrono::Utc::now().format("%Y-%m-%d"), failures)
+            };
+            let _ = db.set_state(&key, &ctx);
+        } else if success {
+            // Clear failure context on success
+            let key = format!("problem_context_{}", problem.slug);
+            let _ = db.set_state(&key, "");
+        }
+
         // Brain training data
         brain_attempts.push(crate::brain::BenchmarkAttemptContext {
             difficulty: problem.difficulty.clone(),
-            problem_slug: problem.slug.clone(),
             passed: success && retry_count == 0,
             retry_number: 0,
             had_peer_context: !peer_failures.is_empty(),
@@ -1879,6 +1124,7 @@ pub async fn run_opus_benchmark_session(
             elo_rating: current_elo,
             pass_at_1: current_pass_at_1,
             peer_count: 0,
+            problem_slug: problem.slug.clone(),
         });
 
         record_run(
@@ -1890,6 +1136,10 @@ pub async fn run_opus_benchmark_session(
             elapsed_ms,
             &task_id,
         );
+
+        // DON'T clean shared target dir between problems — deps compile once,
+        // then each exercise only recompiles its own lib + tests (~5s vs ~5min).
+        // The target dir is cleaned at session start and end only.
     }
 
     // Guard: if no problems were actually attempted (all API errors), skip scoring.
@@ -1912,13 +1162,33 @@ pub async fn run_opus_benchmark_session(
         0.0
     };
 
-    // Store Opus-specific score
+    // Store Opus score (also as the primary benchmark score)
     update_opus_score(db, weighted_score, raw_rate, attempted, passed, now);
+    update_score(db, weighted_score, raw_rate, attempted, passed, now);
 
     // Compute IQ
     let iq = crate::opus_bench::weighted_score_to_iq(weighted_score);
 
     let _ = tokio::fs::remove_dir_all(BENCHMARK_TARGET_DIR).await;
+
+    // Codegen vs Gemini stats — THE metric for real learning
+    let codegen_attempts: u64 = db
+        .get_state("codegen_benchmark_attempts")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let codegen_successes: u64 = db
+        .get_state("codegen_benchmark_successes")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let codegen_rate = if codegen_attempts > 0 {
+        codegen_successes as f64 / codegen_attempts as f64 * 100.0
+    } else {
+        0.0
+    };
 
     tracing::info!(
         weighted = format!("{:.1}%", weighted_score),
@@ -1926,11 +1196,18 @@ pub async fn run_opus_benchmark_session(
         iq = format!("{:.0}", iq),
         passed = passed,
         attempted = attempted,
+        codegen_attempts = codegen_attempts,
+        codegen_successes = codegen_successes,
+        codegen_rate = format!("{:.1}%", codegen_rate),
         "Opus IQ benchmark session complete"
     );
 
-    // Store IQ for prompt injection
+    // Store IQ and codegen rate for prompt injection
     let _ = db.set_state("opus_iq", &format!("{:.0}", iq));
+    let _ = db.set_state("codegen_solve_rate", &format!("{:.1}", codegen_rate));
+
+    // Update benchmark hints from failure analysis — improves future sessions
+    update_benchmark_hints(db);
 
     // Train brain on self-play data
     crate::brain::train_on_benchmark_selfplay(db, &brain_attempts);
@@ -1938,7 +1215,7 @@ pub async fn run_opus_benchmark_session(
     Ok(weighted_score)
 }
 
-/// Update Opus benchmark score (separate from Exercism score).
+/// Update Opus benchmark score (separate key for Opus-specific tracking).
 fn update_opus_score(
     db: &SoulDatabase,
     weighted_score: f64,
@@ -2003,49 +1280,11 @@ pub fn opus_summary_for_prompt(db: &SoulDatabase) -> String {
     )];
 
     lines.push(
-        "5 tiers: Generation(1×), Debugging(2×), Induction(3×), Reasoning(4×), Adversarial(5×). \
+        "5 tiers: Generation(1x), Debugging(2x), Induction(3x), Reasoning(4x), Adversarial(5x). \
          Designed by Claude Opus 4.6. Higher tiers worth more."
             .into(),
     );
 
-    if score.history.len() >= 2 {
-        let prev = &score.history[score.history.len() - 1];
-        let delta = score.pass_at_1 - prev.pass_at_1;
-        let direction = if delta > 0.5 {
-            "IMPROVING"
-        } else if delta < -0.5 {
-            "DECLINING"
-        } else {
-            "STABLE"
-        };
-        lines.push(format!(
-            "Trend: {} ({:+.1}% from last session)",
-            direction, delta
-        ));
-    }
-
-    lines.join("\n")
-}
-
-/// Format benchmark score for prompt injection.
-pub fn benchmark_summary_for_prompt(db: &SoulDatabase) -> String {
-    let score = match load_score(db) {
-        Some(s) => s,
-        None => return String::new(),
-    };
-
-    let mut lines = vec![format!(
-        "# Exercism Rust Benchmark: {:.1}% weighted ({:.1}% raw, {}/{} problems)",
-        score.pass_at_1, score.raw_pass_rate, score.problems_passed, score.problems_attempted
-    )];
-
-    lines.push(
-        "Exercises are real Exercism Rust problems validated via `cargo test`. \
-         Weighted score accounts for difficulty (easy=1x, medium=2x, hard=3x)."
-            .into(),
-    );
-
-    // Show trend
     if score.history.len() >= 2 {
         let prev = &score.history[score.history.len() - 1];
         let delta = score.pass_at_1 - prev.pass_at_1;
@@ -2236,11 +1475,11 @@ pub async fn import_solutions(
     let already_imported: std::collections::HashSet<String> =
         existing.iter().map(|s| s.task_id.clone()).collect();
 
-    // Load cached problems for test validation
-    let problems = load_cached_problems(db).unwrap_or_default();
-    let problem_map: std::collections::HashMap<String, &ExercismProblem> = problems
+    // Load embedded problems for test validation
+    let problems = crate::opus_bench::load_embedded_problems();
+    let problem_map: std::collections::HashMap<String, &BenchmarkProblem> = problems
         .iter()
-        .map(|p| (format!("exercism/{}", p.slug), p))
+        .map(|p| (format!("opus/{}", p.slug), p))
         .collect();
 
     for sol in peer_solutions {
@@ -2285,12 +1524,10 @@ pub async fn import_solutions(
 }
 
 /// Compute the collective score: our solutions + verified peer solutions.
-/// Uses the total exercise count from cache.
+/// Uses the total problem count from the embedded problem set.
 pub fn collective_score(db: &SoulDatabase) -> (f64, u32, u32) {
     let all_solutions = export_solutions(db);
-    let total_problems = load_cached_problems(db)
-        .map(|p| p.len() as u32)
-        .unwrap_or(100); // estimate if no cache
+    let total_problems = crate::opus_bench::load_embedded_problems().len() as u32;
 
     let unique_solved: std::collections::HashSet<&str> =
         all_solutions.iter().map(|s| s.task_id.as_str()).collect();
@@ -2305,9 +1542,6 @@ pub fn collective_score(db: &SoulDatabase) -> (f64, u32, u32) {
     (pass_at_1, solved, total_problems)
 }
 
-/// Extract accumulated lessons from past benchmark failures.
-/// Analyzes error patterns across all runs and generates hints for the LLM.
-/// Stored in soul_state as "benchmark_hints" and updated after each session.
 /// Parse cargo test output to extract specific failing test names and assertion messages.
 /// Returns a focused summary like "- test foo FAILED: left=3, right=5"
 fn parse_test_failures(output: &str) -> String {

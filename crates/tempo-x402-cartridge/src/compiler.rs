@@ -5,8 +5,14 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CartridgeError;
 
-/// Maximum compilation time.
-const COMPILE_TIMEOUT_SECS: u64 = 120;
+/// Maximum compilation time (first compile downloads deps, needs more time).
+const COMPILE_TIMEOUT_SECS: u64 = 600;
+
+/// Shared target directory for backend cartridges — caches compiled deps across cartridges.
+const BACKEND_TARGET_DIR: &str = "/tmp/cartridge-build-shared";
+
+/// Shared target directory for frontend cartridges — caches compiled deps across cartridges.
+const FRONTEND_TARGET_DIR: &str = "/tmp/cartridge-frontend-build-shared";
 
 /// Compile a cartridge from its source directory.
 ///
@@ -29,37 +35,35 @@ pub async fn compile_cartridge(
     // Ensure output directory exists
     tokio::fs::create_dir_all(output_dir).await?;
 
-    // Ensure wasm32-wasip1 target is installed (might not be at runtime)
+    // Ensure wasm32-unknown-unknown target is installed (might not be at runtime)
     let target_check = tokio::process::Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
         .await;
     let has_wasip1 = target_check
         .as_ref()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-wasip1"))
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
         .unwrap_or(false);
     if !has_wasip1 {
-        tracing::info!("Installing wasm32-wasip1 target for cartridge compilation");
+        tracing::info!("Installing wasm32-unknown-unknown target for cartridge compilation");
         let _ = tokio::process::Command::new("rustup")
-            .args(["target", "add", "wasm32-wasip1"])
+            .args(["target", "add", "wasm32-unknown-unknown"])
             .output()
             .await;
     }
 
-    // Use /tmp for build target to avoid bloating persistent volume
-    let target_dir = format!(
-        "/tmp/cartridge-build-{}",
-        source_dir.file_name().unwrap_or_default().to_string_lossy()
-    );
+    // Shared target dir — caches compiled deps (leptos, serde, etc.) across all cartridges.
+    // First compilation downloads + builds deps (~2-5 min), subsequent ones reuse cached artifacts.
+    let target_dir = BACKEND_TARGET_DIR.to_string();
 
-    // Build with wasm32-wasip1 target
+    // Build with wasm32-unknown-unknown target
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(COMPILE_TIMEOUT_SECS),
         tokio::process::Command::new("cargo")
             .args([
                 "build",
                 "--target",
-                "wasm32-wasip1",
+                "wasm32-unknown-unknown",
                 "--release",
                 "--manifest-path",
             ])
@@ -80,41 +84,57 @@ pub async fn compile_cartridge(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Truncate long error output
-        let truncated = if stderr.len() > 4096 {
-            format!("{}...(truncated)", &stderr[..4096])
+        let truncated = if stderr.len() > 8192 {
+            format!("{}...(truncated)", &stderr[..8192])
         } else {
             stderr.to_string()
         };
         return Err(CartridgeError::CompilationFailed(truncated));
     }
 
-    // Find the compiled .wasm binary in the target directory
-    let release_dir_path = format!("{}/wasm32-wasip1/release", target_dir);
-    let pattern = format!("{}/*.wasm", release_dir_path);
-
+    // Find the compiled .wasm binary by crate name (slug with hyphens -> underscores)
+    let release_dir_path = format!("{}/wasm32-unknown-unknown/release", target_dir);
+    let slug = source_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .replace('-', "_");
+    let expected_wasm = format!("{}.wasm", slug);
     let release_dir = std::path::PathBuf::from(&release_dir_path);
     let mut wasm_path = None;
     if let Ok(mut entries) = tokio::fs::read_dir(&release_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if path.extension().map(|e| e == "wasm").unwrap_or(false)
-                && !path.to_string_lossy().contains(".d")
-            {
-                // Copy to output_dir/{name}.wasm
-                let name = path.file_name().unwrap();
-                let dest = output_dir.join(name);
+            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if fname == expected_wasm {
+                let dest = output_dir.join(&fname);
                 tokio::fs::copy(&path, &dest).await?;
                 wasm_path = Some(dest);
                 break;
             }
         }
     }
-
-    // Clean up build directory to save disk space
-    let _ = tokio::fs::remove_dir_all(&target_dir).await;
+    // Fallback: if exact name not found, pick first .wasm that isn't .d
+    if wasm_path.is_none() {
+        if let Ok(mut entries) = tokio::fs::read_dir(&release_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().map(|e| e == "wasm").unwrap_or(false)
+                    && !path.to_string_lossy().contains(".d")
+                {
+                    let name = path.file_name().unwrap();
+                    let dest = output_dir.join(name);
+                    tokio::fs::copy(&path, &dest).await?;
+                    wasm_path = Some(dest);
+                    break;
+                }
+            }
+        }
+    }
+    // NOTE: Do NOT delete shared target dir — it caches compiled deps for future cartridges.
 
     wasm_path.ok_or_else(|| {
-        CartridgeError::CompilationFailed(format!("no .wasm binary found in {}", pattern))
+        CartridgeError::CompilationFailed(format!("no .wasm binary found in {}/wasm32-unknown-unknown/release", target_dir))
     })
 }
 
@@ -154,6 +174,12 @@ pub fn default_lib_rs(slug: &str) -> String {
 //! The host calls `x402_handle` with a JSON request.
 //! Call `x402_response` to set the HTTP response.
 
+#![no_std]
+#![no_main]
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
+
 // Import host functions from the x402 namespace.
 // The #[link] attribute ensures WASM imports come from "x402" module, not "env".
 #[link(wasm_import_module = "x402")]
@@ -163,6 +189,8 @@ extern "C" {
     fn kv_get(key_ptr: *const u8, key_len: i32) -> i64;
     fn kv_set(key_ptr: *const u8, key_len: i32, val_ptr: *const u8, val_len: i32) -> i32;
     fn payment_info() -> i64;
+    /// Call another cartridge by slug. Returns packed (ptr << 32 | len) with JSON response, or 0 on error.
+    fn call(slug_ptr: *const u8, slug_len: i32, req_ptr: *const u8, req_len: i32) -> i64;
 }
 
 /// Helper: send a response back to the host.
@@ -209,10 +237,11 @@ pub extern "C" fn x402_handle(request_ptr: *const u8, request_len: i32) {
 }
 
 /// Optional: allocator for host-to-guest memory transfers.
+static mut SCRATCH: [u8; 131072] = [0u8; 131072]; // 128KB scratch
+
 #[no_mangle]
 pub extern "C" fn x402_alloc(size: i32) -> *mut u8 {
-    let layout = core::alloc::Layout::from_size_align(size as usize, 1).unwrap();
-    unsafe { std::alloc::alloc(layout) }
+    unsafe { SCRATCH.as_mut_ptr() }
 }
 "#;
     template.replace("__SLUG__", slug)
@@ -229,6 +258,12 @@ pub fn default_interactive_lib_rs(slug: &str) -> String {
 //! This cartridge renders to a framebuffer. The host calls x402_tick()
 //! every frame, reads pixels via x402_get_framebuffer(), and blits to canvas.
 //! Arrow keys are forwarded via x402_key_down/x402_key_up.
+
+#![no_std]
+#![no_main]
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
 
 const WIDTH: usize = 320;
 const HEIGHT: usize = 240;
@@ -367,10 +402,11 @@ pub extern "C" fn x402_get_height() -> i32 {
     unsafe { H as i32 }
 }
 
+static mut SCRATCH: [u8; 131072] = [0u8; 131072]; // 128KB scratch
+
 #[no_mangle]
 pub extern "C" fn x402_alloc(size: i32) -> *mut u8 {
-    let layout = core::alloc::Layout::from_size_align(size as usize, 1).unwrap();
-    unsafe { std::alloc::alloc(layout) }
+    unsafe { SCRATCH.as_mut_ptr() }
 }
 "##;
     template.replace("__SLUG__", slug)
@@ -417,10 +453,9 @@ pub async fn compile_frontend_cartridge(
             .await;
     }
 
-    let target_dir = format!(
-        "/tmp/cartridge-frontend-build-{}",
-        source_dir.file_name().unwrap_or_default().to_string_lossy()
-    );
+    // Shared target dir — caches compiled deps across all frontend cartridges.
+    // First compilation downloads + builds ~100 crates (~3-8 min), subsequent ones are fast.
+    let target_dir = FRONTEND_TARGET_DIR.to_string();
 
     // Step 1: cargo build
     let output = tokio::time::timeout(
@@ -449,25 +484,44 @@ pub async fn compile_frontend_cartridge(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let truncated = if stderr.len() > 4096 {
-            format!("{}...(truncated)", &stderr[..4096])
+        let truncated = if stderr.len() > 8192 {
+            format!("{}...(truncated)", &stderr[..8192])
         } else {
             stderr.to_string()
         };
         return Err(CartridgeError::CompilationFailed(truncated));
     }
 
-    // Find the .wasm binary
+    // Find the .wasm binary by crate name (shared target dir may have multiple)
     let release_dir = format!("{}/wasm32-unknown-unknown/release", target_dir);
+    let slug = source_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .replace('-', "_");
+    let expected_wasm = format!("{}.wasm", slug);
     let mut wasm_file = None;
     if let Ok(mut entries) = tokio::fs::read_dir(&release_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if path.extension().map(|e| e == "wasm").unwrap_or(false)
-                && !path.to_string_lossy().contains(".d")
-            {
+            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if fname == expected_wasm {
                 wasm_file = Some(path);
                 break;
+            }
+        }
+    }
+    // Fallback: pick first .wasm
+    if wasm_file.is_none() {
+        if let Ok(mut entries) = tokio::fs::read_dir(&release_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().map(|e| e == "wasm").unwrap_or(false)
+                    && !path.to_string_lossy().contains(".d")
+                {
+                    wasm_file = Some(path);
+                    break;
+                }
             }
         }
     }
@@ -483,35 +537,92 @@ pub async fn compile_frontend_cartridge(
     let pkg_dir = output_dir.join("pkg");
     tokio::fs::create_dir_all(&pkg_dir).await?;
 
+    // Find wasm-bindgen — might be in PATH or in trunk's tools directory
+    let wasm_bindgen_bin = find_wasm_bindgen().unwrap_or_else(|| "wasm-bindgen".to_string());
+    tracing::info!(bin = %wasm_bindgen_bin, "Frontend: running wasm-bindgen");
+
     let bindgen_output = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        tokio::process::Command::new("wasm-bindgen")
-            .args([
-                "--target",
-                "web",
-                "--out-dir",
-            ])
+        tokio::process::Command::new(&wasm_bindgen_bin)
+            .args(["--target", "web", "--out-dir"])
             .arg(pkg_dir.to_string_lossy().as_ref())
             .arg(wasm_path.to_string_lossy().as_ref())
             .output(),
     )
     .await
     .map_err(|_| CartridgeError::CompilationFailed("wasm-bindgen timed out".to_string()))?
-    .map_err(|e| {
-        CartridgeError::CompilationFailed(format!("wasm-bindgen failed to start: {e}"))
-    })?;
+    .map_err(|e| CartridgeError::CompilationFailed(format!("wasm-bindgen failed to start: {e}")))?;
+
+    let bindgen_stderr = String::from_utf8_lossy(&bindgen_output.stderr).to_string();
+    let bindgen_stdout = String::from_utf8_lossy(&bindgen_output.stdout).to_string();
 
     if !bindgen_output.status.success() {
-        let stderr = String::from_utf8_lossy(&bindgen_output.stderr);
         return Err(CartridgeError::CompilationFailed(format!(
-            "wasm-bindgen failed: {stderr}"
+            "wasm-bindgen failed: {bindgen_stderr}"
         )));
     }
 
-    // Clean up cargo build directory
-    let _ = tokio::fs::remove_dir_all(&target_dir).await;
+    // Log any warnings from wasm-bindgen
+    if !bindgen_stderr.is_empty() {
+        tracing::warn!(stderr = %bindgen_stderr, "wasm-bindgen warnings");
+    }
+
+    // Verify pkg directory actually has files
+    let mut pkg_files = 0u32;
+    if let Ok(mut entries) = tokio::fs::read_dir(&pkg_dir).await {
+        while let Ok(Some(_)) = entries.next_entry().await {
+            pkg_files += 1;
+        }
+    }
+    if pkg_files == 0 {
+        return Err(CartridgeError::CompilationFailed(format!(
+            "wasm-bindgen produced no output files in {}\nstdout: {bindgen_stdout}\nstderr: {bindgen_stderr}",
+            pkg_dir.display()
+        )));
+    }
+    tracing::info!(files = pkg_files, dir = %pkg_dir.display(), "Frontend: wasm-bindgen output verified");
+
+    // NOTE: Do NOT delete shared target dir — it caches compiled deps for future cartridges.
 
     Ok(pkg_dir)
+}
+
+/// Find wasm-bindgen binary — prefer trunk's version (matches build), then PATH.
+fn find_wasm_bindgen() -> Option<String> {
+    // Search trunk's tools directory FIRST — this version matches the
+    // wasm-bindgen crate version used during the app build, avoiding
+    // version mismatches that cause silent failures.
+    let trunk_dir = std::path::Path::new("/root/.trunk/tools");
+    if let Ok(entries) = std::fs::read_dir(trunk_dir) {
+        for entry in entries.flatten() {
+            let bin = entry.path().join("wasm-bindgen");
+            if bin.exists() {
+                return Some(bin.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Common install locations
+    for path in &[
+        "/usr/local/cargo/bin/wasm-bindgen",
+        "/root/.cargo/bin/wasm-bindgen",
+    ] {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    // Fall back to PATH
+    if std::process::Command::new("wasm-bindgen")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return Some("wasm-bindgen".to_string());
+    }
+
+    None
 }
 
 /// Detect if a cartridge source is a frontend cartridge by checking Cargo.toml.
@@ -539,7 +650,9 @@ crate-type = ["cdylib"]
 [dependencies]
 leptos = {{ version = "0.6", features = ["csr"] }}
 wasm-bindgen = "=0.2.108"
-web-sys = {{ version = "0.3", features = ["Document", "Element", "HtmlElement", "Window"] }}
+web-sys = {{ version = "0.3", features = ["Document", "Element", "HtmlElement", "HtmlInputElement", "Window", "Event", "EventTarget", "KeyboardEvent", "MouseEvent", "Storage"] }}
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
 console_error_panic_hook = "0.1"
 
 [profile.release]

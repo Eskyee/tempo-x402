@@ -1,11 +1,11 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 // ══════════════════════════════════════════════════════════════════════
 // TIER 1: GENERATION — Multi-constraint Rust coding
 // ══════════════════════════════════════════════════════════════════════
 
-pub(super) fn tier1_generation() -> Vec<ExercismProblem> {
+pub(super) fn tier1_generation() -> Vec<BenchmarkProblem> {
     vec![
         // ── 1.1: Ring Buffer ─────────────────────────────────────────
         problem(

@@ -54,12 +54,14 @@
 pub mod acceleration;
 pub mod autonomy;
 pub mod benchmark;
+pub mod bloch;
 pub mod brain;
 pub mod capability;
 pub mod chat;
 pub mod code_quality;
 pub mod codegen;
 pub mod coding;
+pub mod cognitive_cartridge;
 pub mod collective;
 pub mod colony;
 pub mod computer_use;
@@ -94,15 +96,17 @@ pub mod prompts;
 pub mod synthesis;
 pub mod temporal;
 pub mod thinking;
-pub mod toon;
 pub mod tool_decl;
 pub mod tool_registry;
 pub mod tools;
+pub mod toon;
+pub mod unified_training;
 pub mod validation;
 pub mod world_model;
 
-pub use chat::{handle_chat, ChatReply};
+pub use chat::{handle_chat, handle_chat_stream, ChatReply};
 pub use config::SoulConfig;
+pub use thinking::ChatEvent;
 pub use db::{ChatMessage, ChatSession, Nudge, SoulDatabase};
 pub use error::SoulError;
 pub use events::{compute_health, emit_event, EventFilter, EventRefs, HealthSummary, SoulEvent};
@@ -159,7 +163,8 @@ impl Soul {
             loop {
                 alive_for_task.store(true, Ordering::Relaxed);
                 let alive_for_loop = alive_for_task.clone();
-                let mut loop_instance = ThinkingLoop::new(config.clone(), db.clone(), observer.clone());
+                let mut loop_instance =
+                    ThinkingLoop::new(config.clone(), db.clone(), observer.clone());
                 if let Some(ref engine) = cartridge_engine {
                     loop_instance.set_cartridge_engine(engine.clone());
                 }

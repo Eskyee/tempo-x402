@@ -4,13 +4,21 @@
 //! linear memory. This is deliberately simple so Flash Lite can generate
 //! correct cartridge code.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use wasmtime::{Caller, Linker};
 
-use crate::engine::CartridgeState;
+use crate::engine::{CartridgeEngine, CartridgeState};
 use crate::error::CartridgeError;
+use crate::manifest::CartridgeRequest;
 
 /// Register all host functions on the linker.
-pub fn register_host_functions(linker: &mut Linker<CartridgeState>) -> Result<(), CartridgeError> {
+/// If `engine` is provided, x402_call is registered enabling cartridge-calls-cartridge.
+pub fn register_host_functions(
+    linker: &mut Linker<CartridgeState>,
+    engine: Option<Arc<CartridgeEngine>>,
+) -> Result<(), CartridgeError> {
     // x402_log(level: i32, msg_ptr: i32, msg_len: i32)
     linker
         .func_wrap(
@@ -114,6 +122,119 @@ pub fn register_host_functions(linker: &mut Linker<CartridgeState>) -> Result<()
         )
         .map_err(|e| CartridgeError::Abi(format!("failed to register response: {e}")))?;
 
+    // ── x402_call: cartridge-calls-cartridge (composition primitive) ──
+    // Only registered when engine Arc is available (top-level execute_with_composition).
+    if let Some(engine_arc) = engine {
+        let engine_for_x402 = Arc::clone(&engine_arc);
+        linker
+            .func_wrap(
+                "x402",
+                "call",
+                move |mut caller: Caller<'_, CartridgeState>,
+                      slug_ptr: i32,
+                      slug_len: i32,
+                      req_ptr: i32,
+                      req_len: i32|
+                      -> i64 {
+                    let slug = match read_string(&mut caller, slug_ptr, slug_len) {
+                        Some(s) => s,
+                        None => return 0,
+                    };
+                    let req_json = match read_string(&mut caller, req_ptr, req_len) {
+                        Some(s) => s,
+                        None => return 0,
+                    };
+
+                    let depth = caller.data().call_depth;
+
+                    // Parse request JSON or construct a simple GET
+                    let request = serde_json::from_str::<CartridgeRequest>(&req_json)
+                        .unwrap_or_else(|_| CartridgeRequest {
+                            method: "GET".to_string(),
+                            path: "/".to_string(),
+                            body: req_json,
+                            headers: HashMap::new(),
+                            payment: None,
+                        });
+
+                    // Execute child cartridge with isolated KV, incremented depth
+                    let child_timeout = 10u64; // max 10s per child call
+                    match engine_for_x402.execute_with_depth(
+                        &slug,
+                        &request,
+                        HashMap::new(),
+                        child_timeout,
+                        depth + 1,
+                        Some(Arc::clone(&engine_for_x402)),
+                    ) {
+                        Ok((result, _kv)) => {
+                            let response_json =
+                                serde_json::to_string(&result).unwrap_or_default();
+                            write_bytes_to_guest(&mut caller, response_json.as_bytes())
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                slug = slug,
+                                depth = depth + 1,
+                                error = %e,
+                                "x402_call failed"
+                            );
+                            0
+                        }
+                    }
+                },
+            )
+            .map_err(|e| CartridgeError::Abi(format!("failed to register call: {e}")))?;
+
+        // env namespace alias
+        let engine_for_env = engine_arc;
+        linker
+            .func_wrap(
+                "env",
+                "x402_call",
+                move |mut caller: Caller<'_, CartridgeState>,
+                      slug_ptr: i32,
+                      slug_len: i32,
+                      req_ptr: i32,
+                      req_len: i32|
+                      -> i64 {
+                    let slug = match read_string(&mut caller, slug_ptr, slug_len) {
+                        Some(s) => s,
+                        None => return 0,
+                    };
+                    let req_json = match read_string(&mut caller, req_ptr, req_len) {
+                        Some(s) => s,
+                        None => return 0,
+                    };
+                    let depth = caller.data().call_depth;
+                    let request = serde_json::from_str::<CartridgeRequest>(&req_json)
+                        .unwrap_or_else(|_| CartridgeRequest {
+                            method: "GET".to_string(),
+                            path: "/".to_string(),
+                            body: req_json,
+                            headers: HashMap::new(),
+                            payment: None,
+                        });
+                    match engine_for_env.execute_with_depth(
+                        &slug,
+                        &request,
+                        HashMap::new(),
+                        10,
+                        depth + 1,
+                        Some(Arc::clone(&engine_for_env)),
+                    ) {
+                        Ok((result, _kv)) => {
+                            let response_json =
+                                serde_json::to_string(&result).unwrap_or_default();
+                            write_bytes_to_guest(&mut caller, response_json.as_bytes())
+                        }
+                        Err(_) => 0,
+                    }
+                },
+            )
+            .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_call: {e}")))?;
+    }
+
     // ── Backward-compat aliases: "env" namespace with x402_ prefix ──
     // Cartridges compiled without #[link(wasm_import_module = "x402")]
     // import from "env" with x402_ prefixed names. Register both so old
@@ -210,7 +331,46 @@ pub fn register_host_functions(linker: &mut Linker<CartridgeState>) -> Result<()
                 write_bytes_to_guest(&mut caller, json.as_bytes())
             },
         )
-        .map_err(|e| CartridgeError::Abi(format!("failed to register env::x402_payment_info: {e}")))?;
+        .map_err(|e| {
+            CartridgeError::Abi(format!("failed to register env::x402_payment_info: {e}"))
+        })?;
+
+    // ── env::malloc / env::free — safety net for cartridges that use std::alloc ──
+    // wasm32-unknown-unknown + no_std emits env::malloc/env::free imports when
+    // code calls std::alloc::alloc(). Provide a bump allocator so old cartridges
+    // don't fail at instantiation.
+    linker
+        .func_wrap(
+            "env",
+            "malloc",
+            |mut caller: Caller<'_, CartridgeState>, size: i32| -> i32 {
+                let memory = match caller.get_export("memory") {
+                    Some(wasmtime::Extern::Memory(m)) => m,
+                    _ => return 0,
+                };
+                let current_pages = memory.size(&caller);
+                let current_bytes = current_pages * 65536;
+                // Allocate at the end of current memory, grow if needed
+                let aligned_size = ((size as u64 + 15) / 16) * 16;
+                let alloc_ptr = current_bytes;
+                let needed = alloc_ptr + aligned_size;
+                let needed_pages = (needed + 65535) / 65536;
+                if needed_pages > current_pages {
+                    let grow = needed_pages - current_pages;
+                    if memory.grow(&mut caller, grow).is_err() {
+                        return 0;
+                    }
+                }
+                alloc_ptr as i32
+            },
+        )
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::malloc: {e}")))?;
+
+    linker
+        .func_wrap("env", "free", |_caller: Caller<'_, CartridgeState>, _ptr: i32| {
+            // No-op — bump allocator, memory freed when Store drops
+        })
+        .map_err(|e| CartridgeError::Abi(format!("failed to register env::free: {e}")))?;
 
     Ok(())
 }
@@ -253,7 +413,7 @@ fn write_bytes_to_guest(caller: &mut Caller<'_, CartridgeState>, bytes: &[u8]) -
         // Fallback: use a scratch area. Not ideal but works for simple cartridges.
         let current_size = memory.data_size(&*caller);
         let needed = current_size + bytes.len();
-        let pages_needed = ((needed + 65535) / 65536) - (current_size / 65536);
+        let pages_needed = needed.div_ceil(65536) - (current_size / 65536);
         if pages_needed > 0 {
             let _ = memory.grow(&mut *caller, pages_needed as u64);
         }

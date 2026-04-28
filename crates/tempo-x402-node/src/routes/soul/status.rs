@@ -246,8 +246,6 @@ pub(super) async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
         capability_profile,
         plan_outcomes,
         benchmark: {
-            let mode = x402_soul::benchmark::BenchmarkMode::from_env();
-            let exercism_score = x402_soul::benchmark::load_score(soul_db);
             let opus_score = soul_db.get_state("opus_benchmark_score")
                 .ok().flatten()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
@@ -257,37 +255,16 @@ pub(super) async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             let (collective_pass, collective_solved, collective_total) =
                 x402_soul::benchmark::collective_score(soul_db);
 
-            // Show whichever benchmark is active, with both available
-            let active_score = match mode {
-                x402_soul::benchmark::BenchmarkMode::Opus => {
-                    opus_score.clone().or_else(|| exercism_score.as_ref().map(|s| serde_json::json!({
-                        "pass_at_1": s.pass_at_1,
-                        "problems_attempted": s.problems_attempted,
-                    })))
-                }
-                x402_soul::benchmark::BenchmarkMode::Exercism => {
-                    exercism_score.as_ref().map(|s| serde_json::json!({
-                        "pass_at_1": s.pass_at_1,
-                        "problems_attempted": s.problems_attempted,
-                    }))
-                }
-            };
+            let active_score = opus_score.clone();
 
             Some(serde_json::json!({
-                "mode": format!("{:?}", mode),
+                "mode": "Opus",
                 "pass_at_1": active_score.as_ref()
                     .and_then(|s| s.get("pass_at_1")).and_then(|v| v.as_f64()).unwrap_or(0.0),
                 "problems_attempted": active_score.as_ref()
                     .and_then(|s| s.get("problems_attempted")).and_then(|v| v.as_u64()).unwrap_or(0),
                 "opus_iq": opus_iq,
                 "opus": opus_score,
-                "exercism": exercism_score.map(|s| serde_json::json!({
-                    "pass_at_1": s.pass_at_1,
-                    "problems_attempted": s.problems_attempted,
-                    "problems_passed": s.problems_passed,
-                    "measured_at": s.measured_at,
-                    "history": s.history,
-                })),
                 "elo_rating": elo,
                 "elo_display": x402_soul::elo::rating_display(soul_db),
                 "elo_history": elo_history,
@@ -557,6 +534,20 @@ pub(super) async fn soul_status(state: web::Data<NodeState>) -> HttpResponse {
             // Expose psi/colony data under both "role" and "colony" for convenience
             x402_soul::colony::load_status(soul_db)
                 .and_then(|s| serde_json::to_value(&s).ok())
+        },
+        bloch: {
+            Some(x402_soul::bloch::status(soul_db))
+        },
+        unified_model: {
+            Some(x402_soul::unified_training::status(soul_db))
+        },
+        cognitive_cartridges: {
+            if let Some(ref engine) = state.cartridge_engine {
+                let orch = x402_soul::cognitive_cartridge::CognitiveOrchestrator::new(Some(engine.clone()));
+                Some(x402_soul::cognitive_cartridge::status(&orch))
+            } else {
+                None
+            }
         },
     })
 }
@@ -1175,8 +1166,7 @@ pub(super) async fn soul_event_stream(state: web::Data<NodeState>) -> HttpRespon
     };
 
     // Use a channel-based stream (no futures crate needed)
-    let (tx, rx) =
-        tokio::sync::mpsc::channel::<Result<actix_web::web::Bytes, std::io::Error>>(32);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<actix_web::web::Bytes, std::io::Error>>(32);
 
     tokio::spawn(async move {
         let mut last_ts = chrono::Utc::now().timestamp();

@@ -1,8 +1,8 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
 /// Extended Tier 3: Induction — infer the algorithm from input/output examples only.
-pub(super) fn tier3_ext() -> Vec<ExercismProblem> {
+pub(super) fn tier3_ext() -> Vec<BenchmarkProblem> {
     vec![
         problem(
             "opus-mystery-transform",

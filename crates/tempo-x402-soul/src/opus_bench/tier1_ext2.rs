@@ -1,7 +1,7 @@
 use super::problem;
-use crate::benchmark::ExercismProblem;
+use crate::benchmark::BenchmarkProblem;
 
-pub(super) fn tier1_ext2() -> Vec<ExercismProblem> {
+pub(super) fn tier1_ext2() -> Vec<BenchmarkProblem> {
     vec![
         problem("opus-stack", "tier1",
             "Implement a stack with push, pop, peek, and min operations. min() must be O(1).",

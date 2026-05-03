@@ -1141,8 +1141,14 @@ fn load_benchmark_training_data(db: &SoulDatabase) -> Vec<TrainingExample> {
     // Convert recent benchmark runs to attempt contexts
     let mut attempts = Vec::new();
     for run in runs.iter().take(50) {
-        // Determine difficulty from slug
-        let difficulty = crate::benchmark::classify_difficulty(&run.entry_point).to_string();
+        // Determine difficulty from slug (classify_difficulty was removed — use heuristic)
+        let difficulty = if run.entry_point.contains("easy") || run.entry_point.contains("simple") {
+            "easy".to_string()
+        } else if run.entry_point.contains("hard") || run.entry_point.contains("complex") {
+            "hard".to_string()
+        } else {
+            "medium".to_string()
+        };
 
         attempts.push(BenchmarkAttemptContext {
             difficulty,

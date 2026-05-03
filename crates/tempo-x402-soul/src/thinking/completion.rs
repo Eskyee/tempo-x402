@@ -458,6 +458,9 @@ impl ThinkingLoop {
                     }
                 };
 
+                // Auto-fix: insert read_file before edit_code if missing
+                validation::auto_fix_read_before_edit(&mut new_steps);
+
                 // Auto-fix: insert CargoCheck before Commit if missing
                 validation::auto_fix_cargo_check(&mut new_steps);
 

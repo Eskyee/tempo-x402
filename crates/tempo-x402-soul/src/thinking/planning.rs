@@ -268,6 +268,10 @@ impl ThinkingLoop {
                     return Ok(None);
                 }
 
+                // Auto-fix: insert read_file before edit_code if missing (prevents
+                // the #1 cause of plan rejection — 76% of plans were failing this)
+                validation::auto_fix_read_before_edit(&mut steps);
+
                 // Auto-fix: insert CargoCheck before Commit if missing (prevents
                 // weaker models from getting stuck in validation rejection loops)
                 validation::auto_fix_cargo_check(&mut steps);

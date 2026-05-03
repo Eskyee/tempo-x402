@@ -191,9 +191,9 @@ fn check_read_before_write(steps: &[PlanStep], violations: &mut Vec<PlanViolatio
                 if !files_read.contains(&normalized) {
                     violations.push(PlanViolation {
                         rule: "read-before-edit",
-                        severity: Severity::Hard,
+                        severity: Severity::Soft,
                         detail: format!(
-                            "edit_code on '{}' without reading it first. Add a read_file step before this.",
+                            "edit_code on '{}' without reading it first. Auto-fixed.",
                             file_path
                         ),
                         step_index: Some(i),
@@ -290,6 +290,40 @@ pub fn auto_fix_cargo_check(steps: &mut Vec<PlanStep>) -> usize {
     }
     if insertions > 0 {
         tracing::info!(insertions, "Auto-inserted CargoCheck steps before Commit");
+    }
+    insertions
+}
+
+/// Auto-fix: Insert read_file steps before edit_code/generate_code when the file
+/// hasn't been read yet. This prevents the #1 cause of plan rejection.
+pub fn auto_fix_read_before_edit(steps: &mut Vec<PlanStep>) -> usize {
+    let mut insertions = 0;
+    let mut files_read: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut i = 0;
+    while i < steps.len() {
+        match &steps[i] {
+            PlanStep::ReadFile { path, .. } => {
+                files_read.insert(normalize_path(path));
+            }
+            PlanStep::EditCode { file_path, .. } | PlanStep::GenerateCode { file_path, .. } => {
+                let normalized = normalize_path(file_path);
+                if !files_read.contains(&normalized) {
+                    let read_step = PlanStep::ReadFile {
+                        path: file_path.clone(),
+                        store_as: None,
+                    };
+                    steps.insert(i, read_step);
+                    files_read.insert(normalized);
+                    insertions += 1;
+                    i += 1; // skip past the inserted ReadFile
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if insertions > 0 {
+        tracing::info!(insertions, "Auto-inserted ReadFile steps before edit_code/generate_code");
     }
     insertions
 }
